@@ -1,5 +1,105 @@
-"""API key router placeholders."""
+"""API key management routes."""
 
-from fastapi import APIRouter
+from __future__ import annotations
+
+from datetime import UTC
+from typing import Annotated
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, Query
+from fastapi.responses import JSONResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.dependencies import get_database_session
+from app.schemas.api_key import APIKeyCreateRequest, APIKeyCreateResponse, APIKeyListItem
+from app.services.api_key_service import APIKeyService, APIKeyServiceError, get_api_key_service
 
 router = APIRouter(prefix="/auth/apikeys", tags=["apikeys"])
+
+
+def _error_response(status_code: int, detail: str, code: str) -> JSONResponse:
+    """Build standardized API error response payload."""
+    return JSONResponse(status_code=status_code, content={"detail": detail, "code": code})
+
+
+@router.post("", response_model=APIKeyCreateResponse)
+async def create_api_key(
+    payload: APIKeyCreateRequest,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    api_key_service: Annotated[APIKeyService, Depends(get_api_key_service)],
+) -> APIKeyCreateResponse | JSONResponse:
+    """Create API key and return raw key exactly once."""
+    try:
+        created = await api_key_service.create_key(
+            db_session=db_session,
+            service=payload.service,
+            scope=payload.scope,
+            user_id=payload.user_id,
+            expires_at=payload.expires_at,
+        )
+    except APIKeyServiceError as exc:
+        return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
+
+    return APIKeyCreateResponse(
+        key_id=created.key_id,
+        api_key=created.api_key,
+        key_prefix=created.key_prefix,
+        service=created.service,
+        scope=created.scope,
+        user_id=created.user_id,
+        expires_at=created.expires_at,
+        created_at=created.created_at,
+    )
+
+
+@router.get("", response_model=list[APIKeyListItem])
+async def list_api_keys(
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    api_key_service: Annotated[APIKeyService, Depends(get_api_key_service)],
+    user_id: Annotated[UUID | None, Query()] = None,
+    service: Annotated[str | None, Query()] = None,
+) -> list[APIKeyListItem]:
+    """List API keys without exposing raw key material."""
+    keys = await api_key_service.list_keys(
+        db_session=db_session,
+        user_id=user_id,
+        service=service,
+    )
+    return [
+        APIKeyListItem(
+            key_id=row.id,
+            key_prefix=row.key_prefix,
+            service=row.service,
+            scope=row.scope,
+            user_id=row.user_id,
+            expires_at=row.expires_at,
+            revoked_at=row.revoked_at,
+            created_at=row.created_at,
+        )
+        for row in keys
+    ]
+
+
+@router.post("/{key_id}/revoke")
+async def revoke_api_key(
+    key_id: UUID,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    api_key_service: Annotated[APIKeyService, Depends(get_api_key_service)],
+) -> JSONResponse:
+    """Revoke API key by key ID."""
+    try:
+        revoked = await api_key_service.revoke_key(db_session=db_session, key_id=key_id)
+    except APIKeyServiceError as exc:
+        return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
+
+    return JSONResponse(
+        status_code=200,
+        content={
+            "detail": "API key revoked.",
+            "code": "revoked_api_key",
+            "key_id": str(revoked.id),
+            "revoked_at": (
+                revoked.revoked_at.astimezone(UTC).isoformat() if revoked.revoked_at else None
+            ),
+        },
+    )
