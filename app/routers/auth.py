@@ -12,8 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.jwt import JWTService, TokenValidationError, get_jwt_service
 from app.core.sessions import SessionService, SessionStateError, get_session_service
 from app.dependencies import get_database_session
+from app.schemas.api_key import APIKeyIntrospectRequest
 from app.schemas.token import LogoutRequest, RefreshTokenRequest, TokenPairResponse
 from app.schemas.user import LoginRequest
+from app.services.api_key_service import APIKeyService, get_api_key_service
 from app.services.token_service import TokenService, get_token_service
 from app.services.user_service import UserService
 
@@ -170,7 +172,7 @@ async def refresh_token(
     )
 
 
-@router.post("/auth/logout")
+@router.post("/auth/logout", response_model=None)
 async def logout(
     payload: LogoutRequest,
     request: Request,
@@ -228,3 +230,25 @@ async def jwks(
 ) -> dict[str, list[dict[str, str]]]:
     """Return public JWKS for RS256 token verification."""
     return jwt_service.jwks()
+
+
+@router.post("/auth/introspect")
+async def introspect_api_key(
+    payload: APIKeyIntrospectRequest,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    api_key_service: Annotated[APIKeyService, Depends(get_api_key_service)],
+) -> JSONResponse:
+    """Introspect opaque API key and return SDK contract payload."""
+    result = await api_key_service.introspect(db_session=db_session, raw_key=payload.api_key)
+    if not result.valid:
+        return JSONResponse(status_code=200, content={"valid": False, "code": result.code})
+    return JSONResponse(
+        status_code=200,
+        content={
+            "valid": True,
+            "user_id": result.user_id,
+            "scopes": result.scopes or [],
+            "key_id": result.key_id,
+            "expires_at": result.expires_at,
+        },
+    )
