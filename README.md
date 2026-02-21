@@ -1,6 +1,13 @@
 # authSDK
 This AuthSDK functions as a SDK that supports integration with multiple services.
 
+## Step 14 Assets
+
+- Load tests (Locust): `loadtests/locustfile.py`
+- Load-test setup and runbook: `loadtests/README.md`
+- Load-test user seeder: `loadtests/seed_load_user.py`
+- Security review checklist report: `docs/security-review-step14.md`
+
 ## GitHub CI/CD
 
 ### Workflows
