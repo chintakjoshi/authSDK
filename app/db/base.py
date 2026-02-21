@@ -39,7 +39,7 @@ class TimestampTenantMixin:
 
 def import_model_modules() -> None:
     """Import ORM modules so metadata includes all mapped tables."""
-    from app.models import api_key, session, user  # noqa: F401
+    from app.models import api_key, session, signing_key, user  # noqa: F401
 
 
 import_model_modules()

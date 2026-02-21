@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from dataclasses import dataclass
 from functools import lru_cache
@@ -52,6 +53,28 @@ class OAuthService:
         self._token_service = token_service
         self._session_service = session_service
         self._state_ttl_seconds = 600
+
+    def _issue_token_pair(
+        self,
+        db_session: AsyncSession,
+        user_id: str,
+        email: str,
+        scopes: list[str],
+    ):
+        """Issue token pair while tolerating legacy test doubles."""
+        issue_method = self._token_service.issue_token_pair
+        try:
+            signature = inspect.signature(issue_method)
+        except (TypeError, ValueError):
+            signature = None
+        if signature and "db_session" in signature.parameters:
+            return issue_method(
+                db_session=db_session,
+                user_id=user_id,
+                email=email,
+                scopes=scopes,
+            )
+        return issue_method(user_id=user_id, email=email, scopes=scopes)
 
     async def build_google_login_url(self, redirect_uri: str | None) -> str:
         """Create Google login URL and persist one-time state in Redis."""
@@ -118,11 +141,13 @@ class OAuthService:
             provider_user_id=provider_user_id,
             email=email,
         )
-        token_pair = self._token_service.issue_token_pair(
+        issued_pair = self._issue_token_pair(
+            db_session=db_session,
             user_id=str(user.id),
             email=user.email,
             scopes=[],
         )
+        token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
         await self._session_service.create_login_session(
             db_session=db_session,
             user_id=user.id,

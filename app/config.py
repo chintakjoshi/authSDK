@@ -91,6 +91,13 @@ class RateLimitSettings(BaseModel):
     token_requests_per_minute: int = Field(default=30, ge=1)
 
 
+class SigningKeySettings(BaseModel):
+    """Signing-key rotation and encryption settings."""
+
+    rotation_overlap_seconds: int = Field(default=900, ge=0)
+    encryption_key: SecretStr | None = None
+
+
 class Settings(BaseSettings):
     """Root application settings loaded from environment variables."""
 
@@ -108,6 +115,7 @@ class Settings(BaseSettings):
     oauth: OAuthSettings
     saml: SAMLSettings
     rate_limit: RateLimitSettings
+    signing_keys: SigningKeySettings = SigningKeySettings()
 
 
 def _standard_log_fields(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, Any]:

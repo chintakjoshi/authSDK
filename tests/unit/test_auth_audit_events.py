@@ -13,6 +13,7 @@ from httpx import ASGITransport, AsyncClient
 
 from app.core.jwt import get_jwt_service
 from app.core.sessions import get_session_service
+from app.core.signing_keys import get_signing_key_service
 from app.dependencies import get_database_session
 from app.routers.auth import get_user_service, router
 from app.services.api_key_service import APIKeyIntrospectionResult, get_api_key_service
@@ -101,15 +102,30 @@ class _SessionServiceStub:
 class _JWTServiceStub:
     """JWT service stub for logout token verification path."""
 
-    def verify_token(self, token: str, expected_type: str) -> dict[str, Any]:
+    def verify_token(
+        self,
+        token: str,
+        expected_type: str,
+        public_keys_by_kid: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """Return deterministic claims payload."""
         del token
         assert expected_type == "access"
+        del public_keys_by_kid
         return {
             "jti": str(uuid4()),
             "exp": int((datetime.now(UTC) + timedelta(minutes=5)).timestamp()),
             "sub": "user-refresh",
         }
+
+
+class _SigningKeyServiceStub:
+    """Signing key service stub for logout verification dependency."""
+
+    async def get_verification_public_keys(self, db_session: Any) -> dict[str, str]:
+        """Return one deterministic verification key mapping."""
+        del db_session
+        return {"kid-1": "public-key"}
 
 
 class _APIKeyServiceStub:
@@ -171,6 +187,7 @@ async def test_auth_routes_emit_required_step13_audit_events() -> None:
     app.dependency_overrides[get_token_service] = _TokenServiceStub
     app.dependency_overrides[get_session_service] = _SessionServiceStub
     app.dependency_overrides[get_jwt_service] = _JWTServiceStub
+    app.dependency_overrides[get_signing_key_service] = _SigningKeyServiceStub
     app.dependency_overrides[get_api_key_service] = _APIKeyServiceStub
     app.dependency_overrides[get_audit_service] = lambda: audit_stub
 
