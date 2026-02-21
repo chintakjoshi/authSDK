@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -10,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.jwt import JWTService, TokenValidationError, get_jwt_service
 from app.core.sessions import SessionService, SessionStateError, get_session_service
+from app.core.signing_keys import SigningKeyService, get_signing_key_service
 from app.dependencies import get_database_session
 from app.schemas.api_key import APIKeyIntrospectRequest
 from app.schemas.token import LogoutRequest, RefreshTokenRequest, TokenPairResponse
@@ -53,6 +55,29 @@ def _extract_bearer_token(request: Request) -> str | None:
     return cleaned or None
 
 
+def _issue_token_pair(
+    token_service: TokenService,
+    db_session: AsyncSession,
+    user_id: str,
+    email: str | None = None,
+    scopes: list[str] | None = None,
+):
+    """Issue token pair while supporting legacy test doubles without db_session arg."""
+    issue_method = token_service.issue_token_pair
+    try:
+        signature = inspect.signature(issue_method)
+    except (TypeError, ValueError):
+        signature = None
+    if signature and "db_session" in signature.parameters:
+        return issue_method(
+            db_session=db_session,
+            user_id=user_id,
+            email=email,
+            scopes=scopes,
+        )
+    return issue_method(user_id=user_id, email=email, scopes=scopes)
+
+
 @router.post("/auth/login", response_model=TokenPairResponse)
 async def login(
     payload: LoginRequest,
@@ -89,7 +114,14 @@ async def login(
             code="invalid_credentials",
         )
 
-    token_pair = token_service.issue_token_pair(user_id=str(user.id), email=user.email, scopes=[])
+    issued_pair = _issue_token_pair(
+        token_service=token_service,
+        db_session=db_session,
+        user_id=str(user.id),
+        email=user.email,
+        scopes=[],
+    )
+    token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
     try:
         await session_service.create_login_session(
             db_session=db_session,
@@ -149,11 +181,27 @@ async def refresh_token(
     )
     client_ip = _extract_client_ip(request)
     try:
-        token_pair = await session_service.rotate_refresh_session(
+
+        async def _issue_pair(
+            user_id: str,
+            email: str | None = None,
+            scopes: list[str] | None = None,
+        ):
+            issued = _issue_token_pair(
+                token_service=token_service,
+                db_session=db_session,
+                user_id=user_id,
+                email=email,
+                scopes=scopes,
+            )
+            return await issued if inspect.isawaitable(issued) else issued
+
+        rotated = await session_service.rotate_refresh_session(
             db_session=db_session,
             raw_refresh_token=payload.refresh_token,
-            token_issuer=token_service.issue_token_pair,
+            token_issuer=_issue_pair,
         )
+        token_pair = await rotated if inspect.isawaitable(rotated) else rotated
     except SessionStateError as exc:
         audit_service.log_token_refresh(
             provider="password",
@@ -189,6 +237,7 @@ async def logout(
     request: Request,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     jwt_service: Annotated[JWTService, Depends(get_jwt_service)],
+    signing_key_service: Annotated[SigningKeyService, Depends(get_signing_key_service)],
     session_service: Annotated[SessionService, Depends(get_session_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> Response | JSONResponse:
@@ -211,7 +260,12 @@ async def logout(
         return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
 
     try:
-        claims = jwt_service.verify_token(access_token, expected_type="access")
+        verification_keys = await signing_key_service.get_verification_public_keys(db_session)
+        claims = jwt_service.verify_token(
+            access_token,
+            expected_type="access",
+            public_keys_by_kid=verification_keys,
+        )
     except TokenValidationError as exc:
         audit_service.log_logout(
             provider="password",
@@ -252,10 +306,11 @@ async def logout(
 
 @router.get("/.well-known/jwks.json")
 async def jwks(
-    jwt_service: Annotated[JWTService, Depends(get_jwt_service)],
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    signing_key_service: Annotated[SigningKeyService, Depends(get_signing_key_service)],
 ) -> dict[str, list[dict[str, str]]]:
     """Return public JWKS for RS256 token verification."""
-    return jwt_service.jwks()
+    return await signing_key_service.get_jwks_payload(db_session)
 
 
 @router.post("/auth/introspect")

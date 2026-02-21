@@ -168,17 +168,15 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _select_key(jwks: dict[str, Any], kid: str | None) -> dict[str, str]:
-        """Select JWK by kid or use single-key fallback."""
+        """Select JWK by required kid value."""
         keys = jwks.get("keys", [])
         if not isinstance(keys, list) or not keys:
             raise JWTVerificationError("Invalid token.", "invalid_token")
-        if kid:
-            for key in keys:
-                if isinstance(key, dict) and key.get("kid") == kid:
-                    return {str(name): str(value) for name, value in key.items()}
+        if not kid:
             raise JWTVerificationError("Invalid token.", "invalid_token")
-        if len(keys) == 1 and isinstance(keys[0], dict):
-            return {str(name): str(value) for name, value in keys[0].items()}
+        for key in keys:
+            if isinstance(key, dict) and key.get("kid") == kid:
+                return {str(name): str(value) for name, value in key.items()}
         raise JWTVerificationError("Invalid token.", "invalid_token")
 
 

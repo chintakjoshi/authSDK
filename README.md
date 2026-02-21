@@ -24,6 +24,20 @@ Full step-by-step guide: `DEVELOPMENT.md`.
 
 The service is exposed at `http://localhost:8000`.
 
+## Signing Key Rotation CLI
+
+Rotate RS256 signing keys:
+
+```bash
+python -m app.cli rotate-signing-key
+```
+
+Optional overlap override:
+
+```bash
+python -m app.cli rotate-signing-key --overlap-seconds 900
+```
+
 ## GitHub CI/CD
 
 ### Workflows

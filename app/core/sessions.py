@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 import json
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -55,7 +57,7 @@ class TokenIssuer(Protocol):
         user_id: str,
         email: str | None = None,
         scopes: list[str] | None = None,
-    ) -> TokenPairLike: ...
+    ) -> TokenPairLike | Awaitable[TokenPairLike]: ...
 
 
 class SessionService:
@@ -119,11 +121,12 @@ class SessionService:
                 raise SessionStateError("Session expired.", "session_expired", 401)
 
             payload = await self._get_session_payload(session_id=session_row.session_id)
-            token_pair = token_issuer(
+            issued_pair = token_issuer(
                 str(session_row.user_id),
                 email=payload.email,
                 scopes=payload.scopes,
             )
+            token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
             session_row.hashed_refresh_token = self._hash_token(token_pair.refresh_token)
             session_row.expires_at = now + timedelta(seconds=self._refresh_token_ttl_seconds)
             await db_session.flush()

@@ -47,6 +47,7 @@ def _clear_dependency_caches() -> None:
     from app.core.oauth import get_google_oauth_client
     from app.core.saml import get_saml_core
     from app.core.sessions import get_redis_client, get_session_service
+    from app.core.signing_keys import get_signing_key_service
     from app.db.session import get_engine, get_session_factory
     from app.middleware.rate_limit import get_rate_limit_redis_client
     from app.services.api_key_service import get_api_key_service
@@ -63,6 +64,7 @@ def _clear_dependency_caches() -> None:
     get_session_service.cache_clear()
     get_google_oauth_client.cache_clear()
     get_saml_core.cache_clear()
+    get_signing_key_service.cache_clear()
     get_token_service.cache_clear()
     get_api_key_service.cache_clear()
     get_oauth_service.cache_clear()
@@ -251,6 +253,7 @@ async def reset_state(
     from app.db.session import get_session_factory
     from app.models.api_key import APIKey
     from app.models.session import Session
+    from app.models.signing_key import SigningKey
     from app.models.user import User, UserIdentity
 
     await _dispose_async_singletons()
@@ -260,6 +263,7 @@ async def reset_state(
     async with session_factory() as session:
         await session.execute(delete(UserIdentity))
         await session.execute(delete(Session))
+        await session.execute(delete(SigningKey))
         await session.execute(delete(APIKey))
         await session.execute(delete(User))
         await session.commit()
