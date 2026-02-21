@@ -15,7 +15,7 @@ dependencies = [
   "asyncpg==0.31.0",
   "authlib==1.6.8",
   "bcrypt==4.2.1",
-  "cachetools==5.5.2",
+  "cachetools==7.0.1",
   "fastapi==0.115.6",
   "httpx==0.28.1",
   "opentelemetry-api==1.29.0",
