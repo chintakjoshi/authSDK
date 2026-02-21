@@ -1,0 +1,93 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: auth_service
+      POSTGRES_USER: postgres
+      POSTGRES_HOST_AUTH_METHOD: trust
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d auth_service"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "6379:6379"
+    networks:
+      - backend
+
+  auth-service:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: auth-service:local
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      APP__ENVIRONMENT: development
+      APP__SERVICE: auth-service
+      APP__HOST: 0.0.0.0
+      APP__PORT: "8000"
+      APP__LOG_LEVEL: INFO
+      DATABASE__URL: postgresql+asyncpg://postgres@postgres:5432/auth_service
+      REDIS__URL: redis://redis:6379/0
+      JWT__ALGORITHM: RS256
+      JWT__ACCESS_TOKEN_TTL_SECONDS: "900"
+      JWT__REFRESH_TOKEN_TTL_SECONDS: "604800"
+      OAUTH__GOOGLE_CLIENT_ID: local-google-client-id
+      OAUTH__GOOGLE_CLIENT_SECRET: local-google-client-secret
+      OAUTH__GOOGLE_REDIRECT_URI: http://localhost:8000/auth/oauth/google/callback
+      OAUTH__REDIRECT_URI_ALLOWLIST: '["http://localhost:8000/auth/oauth/google/callback"]'
+      SAML__SP_ENTITY_ID: local-sp-entity
+      SAML__SP_ACS_URL: http://localhost:8000/auth/saml/callback
+      SAML__SP_X509_CERT: local-sp-cert
+      SAML__SP_PRIVATE_KEY: local-sp-private-key
+      SAML__IDP_ENTITY_ID: local-idp-entity
+      SAML__IDP_SSO_URL: https://idp.example.com/sso
+      SAML__IDP_X509_CERT: local-idp-cert
+      RATE_LIMIT__DEFAULT_REQUESTS_PER_MINUTE: "120"
+      RATE_LIMIT__LOGIN_REQUESTS_PER_MINUTE: "10"
+      RATE_LIMIT__TOKEN_REQUESTS_PER_MINUTE: "30"
+    command: >
+      /bin/sh -c '
+      if [ -z "$$JWT__PRIVATE_KEY_PEM" ] || [ -z "$$JWT__PUBLIC_KEY_PEM" ]; then
+        openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/private.pem &&
+        openssl rsa -pubout -in /tmp/private.pem -out /tmp/public.pem &&
+        export JWT__PRIVATE_KEY_PEM="$$(cat /tmp/private.pem)" &&
+        export JWT__PUBLIC_KEY_PEM="$$(cat /tmp/public.pem)";
+      fi;
+      alembic upgrade head &&
+      uvicorn app.main:app --host 0.0.0.0 --port 8000
+      '
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    ports:
+      - "8000:8000"
+    networks:
+      - backend
+
+volumes:
+  postgres_data:
+
+networks:
+  backend:
