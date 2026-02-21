@@ -24,13 +24,6 @@ Full step-by-step guide: `DEVELOPMENT.md`.
 
 The service is exposed at `http://localhost:8000`.
 
-## Step 14 Assets
-
-- Load tests (Locust): `loadtests/locustfile.py`
-- Load-test setup and runbook: `loadtests/README.md`
-- Load-test user seeder: `loadtests/seed_load_user.py`
-- Security review checklist report: `docs/security-review-step14.md`
-
 ## GitHub CI/CD
 
 ### Workflows

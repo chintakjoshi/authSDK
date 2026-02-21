@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -13,6 +14,11 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from app.db.base import Base
 
 config = context.config
+
+# In containerized environments, prefer runtime DB URL over alembic.ini default.
+runtime_db_url = os.environ.get("DATABASE__URL") or os.environ.get("DATABASE_URL")
+if runtime_db_url:
+    config.set_main_option("sqlalchemy.url", runtime_db_url)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

@@ -11,8 +11,7 @@ architectural decision.
 This is a production-level FastAPI authentication microservice that issues
 and validates tokens for multiple consuming services. It supports
 OAuth2/OIDC (Google), SAML 2.0, JWT (stateless, RS256), API Keys, and
-hybrid sessions (JWT + Redis). It is deployed on Kubernetes with Postgres
-and Redis as backing services. A companion SDK package is shipped
+hybrid sessions (JWT + Redis). A companion SDK package is shipped
 separately for consuming services to integrate with.
 
 This is v1. Do not add MFA, RBAC, admin API, webhooks, or consent
@@ -74,7 +73,7 @@ management unless explicitly asked.
 - All cookies must be set with `Secure=True`, `HttpOnly=True`,
   `SameSite=Strict`.
 - Never put secrets in code, comments, or committed files. All secrets come
-  from environment variables or mounted Kubernetes Secrets.
+  from environment variables.
 
 ---
 
@@ -388,21 +387,16 @@ On failure:
 
 ---
 
-## Docker and Kubernetes Rules
+## Docker and Rules
 
 - The Dockerfile must be multi-stage. Final image must be based on
   `python:3.11-slim`.
 - The app must run as a non-root user inside the container.
 - Never bake secrets, `.env` files, or credentials into the Docker image.
-- Kubernetes manifests must include: `Deployment` (min 3 replicas),
-  `HorizontalPodAutoscaler` (target 70% CPU), `PodDisruptionBudget`
-  (minAvailable: 2), `NetworkPolicy`, `Service`, `Ingress`.
 - Liveness probe: `GET /health/live`. Readiness probe: `GET /health/ready`
   (checks Postgres and Redis connectivity).
 - Resource requests and limits must be set on every container. Never leave
   them unset.
-- All Kubernetes Secrets must be managed via External Secrets Operator.
-  Never commit raw secret values to the repo.
 
 ---
 
