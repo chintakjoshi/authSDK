@@ -48,6 +48,7 @@ def _clear_dependency_caches() -> None:
     from app.core.saml import get_saml_core
     from app.core.sessions import get_redis_client, get_session_service
     from app.db.session import get_engine, get_session_factory
+    from app.middleware.rate_limit import get_rate_limit_redis_client
     from app.services.api_key_service import get_api_key_service
     from app.services.oauth_service import get_oauth_service
     from app.services.saml_service import get_saml_service
@@ -58,6 +59,7 @@ def _clear_dependency_caches() -> None:
     get_session_factory.cache_clear()
     get_jwt_service.cache_clear()
     get_redis_client.cache_clear()
+    get_rate_limit_redis_client.cache_clear()
     get_session_service.cache_clear()
     get_google_oauth_client.cache_clear()
     get_saml_core.cache_clear()
@@ -65,6 +67,39 @@ def _clear_dependency_caches() -> None:
     get_api_key_service.cache_clear()
     get_oauth_service.cache_clear()
     get_saml_service.cache_clear()
+
+
+async def _close_async_client(client: Any) -> None:
+    """Close async client instances regardless of redis-py close API version."""
+    close = getattr(client, "aclose", None)
+    if callable(close):
+        await close()
+        return
+
+    close = getattr(client, "close", None)
+    if callable(close):
+        result = close()
+        if hasattr(result, "__await__"):
+            await result
+
+
+async def _dispose_async_singletons() -> None:
+    """Dispose loop-bound async resources before changing event loops."""
+    from app.core.sessions import get_redis_client
+    from app.db.session import dispose_engine, get_engine
+    from app.middleware.rate_limit import get_rate_limit_redis_client
+
+    redis_client = get_redis_client() if get_redis_client.cache_info().currsize else None
+    rate_limit_client = (
+        get_rate_limit_redis_client() if get_rate_limit_redis_client.cache_info().currsize else None
+    )
+
+    if redis_client is not None:
+        await _close_async_client(redis_client)
+    if rate_limit_client is not None and rate_limit_client is not redis_client:
+        await _close_async_client(rate_limit_client)
+    if get_engine.cache_info().currsize:
+        await dispose_engine()
 
 
 def _redis_connection_url(redis: RedisContainer) -> str:
@@ -186,9 +221,12 @@ def integration_env() -> Iterator[dict[str, str]]:
 
 
 @pytest.fixture(scope="function")
-async def db_session_factory(integration_env: dict[str, str]) -> async_sessionmaker[AsyncSession]:
+async def db_session_factory(
+    integration_env: dict[str, str],
+    reset_state: None,
+) -> async_sessionmaker[AsyncSession]:
     """Expose async session factory bound to integration Postgres."""
-    del integration_env
+    del integration_env, reset_state
     from app.db.session import get_session_factory
 
     return get_session_factory()
@@ -206,13 +244,17 @@ async def db_session(
 @pytest.fixture(scope="function", autouse=True)
 async def reset_state(
     integration_env: dict[str, str],
-    db_session_factory: async_sessionmaker[AsyncSession],
 ) -> Iterator[None]:
-    """Truncate DB tables and flush Redis before each integration test."""
+    """Truncate DB tables and flush Redis; isolate async singletons per event loop."""
     del integration_env
     from app.core.sessions import get_redis_client
+    from app.db.session import get_session_factory
 
-    async with db_session_factory() as session:
+    await _dispose_async_singletons()
+    _clear_dependency_caches()
+
+    session_factory = get_session_factory()
+    async with session_factory() as session:
         await session.execute(
             text(
                 "TRUNCATE TABLE user_identities, sessions, api_keys, users RESTART IDENTITY CASCADE"
@@ -222,7 +264,11 @@ async def reset_state(
 
     redis_client = get_redis_client()
     await redis_client.flushdb()
-    yield
+    try:
+        yield
+    finally:
+        await _dispose_async_singletons()
+        _clear_dependency_caches()
 
 
 @pytest.fixture(scope="function")
