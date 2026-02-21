@@ -27,7 +27,7 @@ dependencies = [
   "python-jose[cryptography]==3.5.0",
   "python3-saml==1.16.0",
   "redis==7.2.0",
-  "sqlalchemy==2.0.36",
+  "sqlalchemy==2.0.46",
   "starlette==0.41.3",
   "structlog==25.5.0",
   "uvicorn[standard]==0.34.0",
