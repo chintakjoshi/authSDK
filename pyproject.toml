@@ -22,7 +22,7 @@ dependencies = [
   "opentelemetry-sdk==1.29.0",
   "passlib[bcrypt]==1.7.4",
   "prometheus-fastapi-instrumentator==7.0.2",
-  "pydantic==2.10.4",
+  "pydantic==2.12.5",
   "pydantic-settings==2.7.1",
   "python-jose[cryptography]==3.5.0",
   "python3-saml==1.16.0",
