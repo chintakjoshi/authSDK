@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "auth-service"
+version = "0.1.0"
+description = "Authentication microservice and SDK scaffold."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Auth Service Team" }]
+dependencies = [
+  "alembic==1.14.1",
+  "asyncpg==0.30.0",
+  "authlib==1.4.1",
+  "bcrypt==4.2.1",
+  "cachetools==5.5.2",
+  "fastapi==0.115.6",
+  "httpx==0.28.1",
+  "opentelemetry-api==1.29.0",
+  "opentelemetry-sdk==1.29.0",
+  "passlib[bcrypt]==1.7.4",
+  "prometheus-fastapi-instrumentator==7.0.2",
+  "pydantic==2.10.4",
+  "pydantic-settings==2.7.1",
+  "python-jose[cryptography]==3.3.0",
+  "python3-saml==1.16.0",
+  "redis==5.2.1",
+  "sqlalchemy==2.0.36",
+  "starlette==0.41.3",
+  "structlog==24.4.0",
+  "uvicorn[standard]==0.34.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "black==24.10.0",
+  "pytest==8.3.4",
+  "pytest-asyncio==0.25.2",
+  "pytest-cov==6.0.0",
+  "ruff==0.8.4",
+  "testcontainers[postgres,redis]==4.9.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app", "sdk"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
