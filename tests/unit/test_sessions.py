@@ -146,7 +146,7 @@ async def test_rotate_refresh_session_updates_hash_and_ttl() -> None:
     token_pair = await service.rotate_refresh_session(
         db_session=db_session,  # type: ignore[arg-type]
         raw_refresh_token="old-refresh-token",
-        token_issuer=lambda _user_id: TokenPair(
+        token_issuer=lambda _user_id, email=None, scopes=None: TokenPair(
             access_token="new-access-token", refresh_token="new-refresh-token"
         ),
     )
@@ -180,7 +180,7 @@ async def test_rotate_refresh_session_fails_closed_when_redis_unavailable() -> N
         await service.rotate_refresh_session(
             db_session=db_session,  # type: ignore[arg-type]
             raw_refresh_token="old-refresh-token",
-            token_issuer=lambda _user_id: TokenPair(
+            token_issuer=lambda _user_id, email=None, scopes=None: TokenPair(
                 access_token="new-access-token", refresh_token="new-refresh-token"
             ),
         )

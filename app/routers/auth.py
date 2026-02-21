@@ -89,7 +89,7 @@ async def login(
             code="invalid_credentials",
         )
 
-    token_pair = token_service.issue_token_pair(user_id=str(user.id))
+    token_pair = token_service.issue_token_pair(user_id=str(user.id), email=user.email, scopes=[])
     try:
         await session_service.create_login_session(
             db_session=db_session,

@@ -81,8 +81,14 @@ class _RedisStub:
 class _TokenServiceStub:
     """Stub token service."""
 
-    def issue_token_pair(self, user_id: str) -> TokenPair:
+    def issue_token_pair(
+        self,
+        user_id: str,
+        email: str | None = None,
+        scopes: list[str] | None = None,
+    ) -> TokenPair:
         """Return deterministic token pair."""
+        del user_id, email, scopes
         return TokenPair(access_token="access-token", refresh_token="refresh-token")
 
 
