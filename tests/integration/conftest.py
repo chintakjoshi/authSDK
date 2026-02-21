@@ -67,6 +67,20 @@ def _clear_dependency_caches() -> None:
     get_saml_service.cache_clear()
 
 
+def _redis_connection_url(redis: RedisContainer) -> str:
+    """Return a redis:// URL across testcontainers versions."""
+    get_url = getattr(redis, "get_connection_url", None)
+    if callable(get_url):
+        redis_url = get_url()
+    else:
+        host = redis.get_container_host_ip()
+        port = redis.get_exposed_port(6379)
+        redis_url = f"redis://{host}:{port}"
+    if not redis_url.endswith("/0"):
+        redis_url = f"{redis_url}/0"
+    return redis_url
+
+
 def _set_env_values(env_values: dict[str, str]) -> tuple[dict[str, str], Callable[[], None]]:
     """Apply env vars and return a restore callback."""
     original: dict[str, str] = {}
@@ -109,9 +123,7 @@ def integration_env() -> Iterator[dict[str, str]]:
 
     postgres_sync_url = postgres.get_connection_url()
     database_url = postgres_sync_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-    redis_url = redis.get_connection_url()
-    if not redis_url.endswith("/0"):
-        redis_url = f"{redis_url}/0"
+    redis_url = _redis_connection_url(redis)
 
     env_values = {
         "APP__ENVIRONMENT": "development",
