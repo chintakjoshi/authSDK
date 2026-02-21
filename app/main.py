@@ -3,6 +3,7 @@
 from fastapi import FastAPI
 
 from app.config import configure_structlog, get_settings
+from app.error_handlers import register_exception_handlers
 from app.middleware.correlation_id import CorrelationIdMiddleware
 from app.middleware.logging import LoggingMiddleware
 from app.middleware.metrics import MetricsMiddleware, build_metrics_endpoint
@@ -18,6 +19,8 @@ def create_app() -> FastAPI:
     configure_structlog(settings)
 
     app = FastAPI(title=settings.app.service)
+    register_exception_handlers(app, environment=settings.app.environment)
+
     app.add_middleware(TracingMiddleware)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(LoggingMiddleware)
@@ -25,7 +28,9 @@ def create_app() -> FastAPI:
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
 
-    app.add_api_route("/metrics", build_metrics_endpoint(), methods=["GET"], include_in_schema=False)
+    app.add_api_route(
+        "/metrics", build_metrics_endpoint(), methods=["GET"], include_in_schema=False
+    )
     app.include_router(auth.router)
     app.include_router(oauth.router)
     app.include_router(saml.router)
