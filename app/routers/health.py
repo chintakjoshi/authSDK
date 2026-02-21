@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from redis.exceptions import RedisError
-from sqlalchemy import text
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.sessions import get_redis_client
@@ -19,7 +19,7 @@ async def check_postgres_ready() -> bool:
     """Return True when Postgres accepts a lightweight query."""
     try:
         async with get_engine().connect() as connection:
-            await connection.execute(text("SELECT 1"))
+            await connection.execute(select(1))
         return True
     except (SQLAlchemyError, Exception):
         return False

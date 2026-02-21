@@ -13,7 +13,7 @@ from alembic import command
 from alembic.config import Config
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from sqlalchemy import text
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from testcontainers.postgres import PostgresContainer
 from testcontainers.redis import RedisContainer
@@ -162,7 +162,7 @@ def integration_env() -> Iterator[dict[str, str]]:
         postgres.start()
         redis.start()
     except DockerException as exc:
-        if os.getenv("CI", "").lower() in {"1", "true", "yes"}:
+        if os.environ.get("CI", "").lower() in {"1", "true", "yes"}:
             pytest.fail(
                 f"Docker daemon unavailable in CI for testcontainers-backed integration tests: {exc}"
             )
@@ -245,21 +245,23 @@ async def db_session(
 async def reset_state(
     integration_env: dict[str, str],
 ) -> Iterator[None]:
-    """Truncate DB tables and flush Redis; isolate async singletons per event loop."""
+    """Clear DB tables and flush Redis; isolate async singletons per event loop."""
     del integration_env
     from app.core.sessions import get_redis_client
     from app.db.session import get_session_factory
+    from app.models.api_key import APIKey
+    from app.models.session import Session
+    from app.models.user import User, UserIdentity
 
     await _dispose_async_singletons()
     _clear_dependency_caches()
 
     session_factory = get_session_factory()
     async with session_factory() as session:
-        await session.execute(
-            text(
-                "TRUNCATE TABLE user_identities, sessions, api_keys, users RESTART IDENTITY CASCADE"
-            )
-        )
+        await session.execute(delete(UserIdentity))
+        await session.execute(delete(Session))
+        await session.execute(delete(APIKey))
+        await session.execute(delete(User))
         await session.commit()
 
     redis_client = get_redis_client()
