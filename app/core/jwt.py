@@ -43,6 +43,7 @@ class JWTService:
         subject: str,
         token_type: TokenType,
         expires_in_seconds: int,
+        additional_claims: dict[str, Any] | None = None,
     ) -> str:
         """Issue a signed JWT with required claims."""
         issued_at = datetime.now(UTC)
@@ -54,6 +55,11 @@ class JWTService:
             "sub": subject,
             "type": token_type,
         }
+        if additional_claims:
+            for key, value in additional_claims.items():
+                if key in payload:
+                    continue
+                payload[key] = value
         return jwt.encode(
             payload,
             self._private_key_pem,

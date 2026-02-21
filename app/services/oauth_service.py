@@ -118,7 +118,11 @@ class OAuthService:
             provider_user_id=provider_user_id,
             email=email,
         )
-        token_pair = self._token_service.issue_token_pair(user_id=str(user.id))
+        token_pair = self._token_service.issue_token_pair(
+            user_id=str(user.id),
+            email=user.email,
+            scopes=[],
+        )
         await self._session_service.create_login_session(
             db_session=db_session,
             user_id=user.id,

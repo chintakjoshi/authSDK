@@ -40,30 +40,30 @@ services:
       redis:
         condition: service_healthy
     environment:
-      APP__ENVIRONMENT: development
-      APP__SERVICE: auth-service
-      APP__HOST: 0.0.0.0
-      APP__PORT: "8000"
-      APP__LOG_LEVEL: INFO
-      DATABASE__URL: postgresql+asyncpg://postgres@postgres:5432/auth_service
-      REDIS__URL: redis://redis:6379/0
-      JWT__ALGORITHM: RS256
-      JWT__ACCESS_TOKEN_TTL_SECONDS: "900"
-      JWT__REFRESH_TOKEN_TTL_SECONDS: "604800"
-      OAUTH__GOOGLE_CLIENT_ID: local-google-client-id
-      OAUTH__GOOGLE_CLIENT_SECRET: local-google-client-secret
-      OAUTH__GOOGLE_REDIRECT_URI: http://localhost:8000/auth/oauth/google/callback
-      OAUTH__REDIRECT_URI_ALLOWLIST: '["http://localhost:8000/auth/oauth/google/callback"]'
-      SAML__SP_ENTITY_ID: local-sp-entity
-      SAML__SP_ACS_URL: http://localhost:8000/auth/saml/callback
-      SAML__SP_X509_CERT: local-sp-cert
-      SAML__SP_PRIVATE_KEY: local-sp-private-key
-      SAML__IDP_ENTITY_ID: local-idp-entity
-      SAML__IDP_SSO_URL: https://idp.example.com/sso
-      SAML__IDP_X509_CERT: local-idp-cert
-      RATE_LIMIT__DEFAULT_REQUESTS_PER_MINUTE: "120"
-      RATE_LIMIT__LOGIN_REQUESTS_PER_MINUTE: "10"
-      RATE_LIMIT__TOKEN_REQUESTS_PER_MINUTE: "30"
+      APP__ENVIRONMENT: ${APP__ENVIRONMENT:-development}
+      APP__SERVICE: ${APP__SERVICE:-auth-service}
+      APP__HOST: ${APP__HOST:-0.0.0.0}
+      APP__PORT: "${APP__PORT:-8000}"
+      APP__LOG_LEVEL: ${APP__LOG_LEVEL:-INFO}
+      DATABASE__URL: ${DATABASE__URL:-postgresql+asyncpg://postgres@postgres:5432/auth_service}
+      REDIS__URL: ${REDIS__URL:-redis://redis:6379/0}
+      JWT__ALGORITHM: ${JWT__ALGORITHM:-RS256}
+      JWT__ACCESS_TOKEN_TTL_SECONDS: "${JWT__ACCESS_TOKEN_TTL_SECONDS:-900}"
+      JWT__REFRESH_TOKEN_TTL_SECONDS: "${JWT__REFRESH_TOKEN_TTL_SECONDS:-604800}"
+      OAUTH__GOOGLE_CLIENT_ID: ${OAUTH__GOOGLE_CLIENT_ID:-local-google-client-id}
+      OAUTH__GOOGLE_CLIENT_SECRET: ${OAUTH__GOOGLE_CLIENT_SECRET:-local-google-client-secret}
+      OAUTH__GOOGLE_REDIRECT_URI: ${OAUTH__GOOGLE_REDIRECT_URI:-http://localhost:8000/auth/oauth/google/callback}
+      OAUTH__REDIRECT_URI_ALLOWLIST: '${OAUTH__REDIRECT_URI_ALLOWLIST:-["http://localhost:8000/auth/oauth/google/callback"]}'
+      SAML__SP_ENTITY_ID: ${SAML__SP_ENTITY_ID:-local-sp-entity}
+      SAML__SP_ACS_URL: ${SAML__SP_ACS_URL:-http://localhost:8000/auth/saml/callback}
+      SAML__SP_X509_CERT: ${SAML__SP_X509_CERT:-local-sp-cert}
+      SAML__SP_PRIVATE_KEY: ${SAML__SP_PRIVATE_KEY:-local-sp-private-key}
+      SAML__IDP_ENTITY_ID: ${SAML__IDP_ENTITY_ID:-local-idp-entity}
+      SAML__IDP_SSO_URL: ${SAML__IDP_SSO_URL:-https://idp.example.com/sso}
+      SAML__IDP_X509_CERT: ${SAML__IDP_X509_CERT:-local-idp-cert}
+      RATE_LIMIT__DEFAULT_REQUESTS_PER_MINUTE: "${RATE_LIMIT__DEFAULT_REQUESTS_PER_MINUTE:-120}"
+      RATE_LIMIT__LOGIN_REQUESTS_PER_MINUTE: "${RATE_LIMIT__LOGIN_REQUESTS_PER_MINUTE:-10}"
+      RATE_LIMIT__TOKEN_REQUESTS_PER_MINUTE: "${RATE_LIMIT__TOKEN_REQUESTS_PER_MINUTE:-30}"
     command: >
       /bin/sh -c '
       if [ -z "$$JWT__PRIVATE_KEY_PEM" ] || [ -z "$$JWT__PUBLIC_KEY_PEM" ]; then

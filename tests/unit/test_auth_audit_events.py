@@ -47,8 +47,14 @@ class _TokenServiceStub:
     def __init__(self) -> None:
         self._counter = 0
 
-    def issue_token_pair(self, user_id: str) -> TokenPair:
+    def issue_token_pair(
+        self,
+        user_id: str,
+        email: str | None = None,
+        scopes: list[str] | None = None,
+    ) -> TokenPair:
         """Return synthetic token pair with stable format."""
+        del email, scopes
         self._counter += 1
         return TokenPair(
             access_token=f"access-token-{self._counter}-{user_id}",

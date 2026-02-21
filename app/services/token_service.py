@@ -30,12 +30,23 @@ class TokenService:
         self._access_token_ttl_seconds = access_token_ttl_seconds
         self._refresh_token_ttl_seconds = refresh_token_ttl_seconds
 
-    def issue_token_pair(self, user_id: str) -> TokenPair:
-        """Issue access and refresh tokens for a user ID."""
+    def issue_token_pair(
+        self,
+        user_id: str,
+        email: str | None = None,
+        scopes: list[str] | None = None,
+    ) -> TokenPair:
+        """Issue access and refresh tokens for a user identity."""
+        access_claims: dict[str, object] = {}
+        if email is not None:
+            access_claims["email"] = email
+        if scopes is not None:
+            access_claims["scopes"] = scopes
         access_token = self._jwt_service.issue_token(
             subject=user_id,
             token_type="access",
             expires_in_seconds=self._access_token_ttl_seconds,
+            additional_claims=access_claims,
         )
         refresh_token = self._jwt_service.issue_token(
             subject=user_id,

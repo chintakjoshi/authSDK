@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
@@ -46,6 +45,17 @@ class TokenPairLike(Protocol):
 
     access_token: str
     refresh_token: str
+
+
+class TokenIssuer(Protocol):
+    """Protocol for token issuer callbacks used during refresh rotation."""
+
+    def __call__(
+        self,
+        user_id: str,
+        email: str | None = None,
+        scopes: list[str] | None = None,
+    ) -> TokenPairLike: ...
 
 
 class SessionService:
@@ -91,7 +101,7 @@ class SessionService:
         self,
         db_session: AsyncSession,
         raw_refresh_token: str,
-        token_issuer: Callable[[str], TokenPairLike],
+        token_issuer: TokenIssuer,
     ) -> TokenPairLike:
         """Rotate refresh token and return a new access/refresh pair."""
         incoming_hash = self._hash_token(raw_refresh_token)
@@ -109,7 +119,11 @@ class SessionService:
                 raise SessionStateError("Session expired.", "session_expired", 401)
 
             payload = await self._get_session_payload(session_id=session_row.session_id)
-            token_pair = token_issuer(str(session_row.user_id))
+            token_pair = token_issuer(
+                str(session_row.user_id),
+                email=payload.email,
+                scopes=payload.scopes,
+            )
             session_row.hashed_refresh_token = self._hash_token(token_pair.refresh_token)
             session_row.expires_at = now + timedelta(seconds=self._refresh_token_ttl_seconds)
             await db_session.flush()

@@ -6,6 +6,8 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
+from app.core.jwt import get_jwt_service
+
 
 @pytest.mark.asyncio
 async def test_auth_login_refresh_logout_happy_path(
@@ -28,6 +30,12 @@ async def test_auth_login_refresh_logout_happy_path(
         login_payload = login_response.json()
         assert login_payload["access_token"]
         assert login_payload["refresh_token"]
+        jwt_service = get_jwt_service()
+        login_access_claims = jwt_service.verify_token(
+            login_payload["access_token"], expected_type="access"
+        )
+        assert login_access_claims["email"] == "alice@example.com"
+        assert login_access_claims["scopes"] == []
 
         refresh_response = await client.post(
             "/auth/token",
@@ -36,6 +44,11 @@ async def test_auth_login_refresh_logout_happy_path(
         assert refresh_response.status_code == 200
         refresh_payload = refresh_response.json()
         assert refresh_payload["refresh_token"] != login_payload["refresh_token"]
+        refresh_access_claims = jwt_service.verify_token(
+            refresh_payload["access_token"], expected_type="access"
+        )
+        assert refresh_access_claims["email"] == "alice@example.com"
+        assert refresh_access_claims["scopes"] == []
 
         logout_response = await client.post(
             "/auth/logout",

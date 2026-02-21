@@ -1,36 +1,28 @@
 # authSDK
-This AuthSDK functions as a SDK that supports integration with multiple services.
 
-## Local Docker Development
+Authentication service + SDK workspace for local development, testing, and load
+validation.
 
-This repository is configured for local development with Docker only.
-Kubernetes manifests and deploy workflow have been removed.
+## Local Docker Quick Start
 
-### Start the stack
+1. Copy environment template:
+```bash
+cp .env-sample .env
+```
 
+2. Start stack:
 ```bash
 docker compose -f docker/docker-compose.yml up --build
 ```
 
-### Run in background
-
+3. Verify health:
 ```bash
-docker compose -f docker/docker-compose.yml up -d --build
+curl http://localhost:8000/health/ready
 ```
 
-### Stop and clean up
+Full step-by-step guide: `DEVELOPMENT.md`.
 
-```bash
-docker compose -f docker/docker-compose.yml down
-```
-
-### Recreate from scratch (including Postgres data)
-
-```bash
-docker compose -f docker/docker-compose.yml down -v
-```
-
-The service is available at `http://localhost:8000`.
+The service is exposed at `http://localhost:8000`.
 
 ## Step 14 Assets
 
