@@ -1,6 +1,37 @@
 # authSDK
 This AuthSDK functions as a SDK that supports integration with multiple services.
 
+## Local Docker Development
+
+This repository is configured for local development with Docker only.
+Kubernetes manifests and deploy workflow have been removed.
+
+### Start the stack
+
+```bash
+docker compose -f docker/docker-compose.yml up --build
+```
+
+### Run in background
+
+```bash
+docker compose -f docker/docker-compose.yml up -d --build
+```
+
+### Stop and clean up
+
+```bash
+docker compose -f docker/docker-compose.yml down
+```
+
+### Recreate from scratch (including Postgres data)
+
+```bash
+docker compose -f docker/docker-compose.yml down -v
+```
+
+The service is available at `http://localhost:8000`.
+
 ## Step 14 Assets
 
 - Load tests (Locust): `loadtests/locustfile.py`
@@ -30,17 +61,6 @@ This AuthSDK functions as a SDK that supports integration with multiple services
     - `ghcr.io/<owner>/auth-service:<tag>`
     - `ghcr.io/<owner>/auth-service:sha-<commit-sha>`
   - If `docker/Dockerfile` is still empty, it exits with a warning and skips image publishing.
-
-- `Deploy` (`.github/workflows/deploy.yml`)
-  - Manual dispatch workflow for `staging` or `production`.
-  - Applies manifests from `k8s/` to the selected namespace.
-  - If manifests are still empty, it exits with a warning and skips deployment.
-
-### Required Secrets
-
-- `KUBE_CONFIG_B64` (for deploy workflow)
-  - Base64-encoded kubeconfig contents.
-  - Add as repository or environment secret in GitHub.
 
 ### Optional Release Input
 
