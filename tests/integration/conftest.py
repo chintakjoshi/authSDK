@@ -13,11 +13,12 @@ from alembic import command
 from alembic.config import Config
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from docker.errors import DockerException
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from testcontainers.postgres import PostgresContainer
 from testcontainers.redis import RedisContainer
+
+from docker.errors import DockerException
 
 
 def _generate_rsa_keypair() -> tuple[str, str]:
