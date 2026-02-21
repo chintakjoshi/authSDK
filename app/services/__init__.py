@@ -1,1 +1,1 @@
-"""Package initializer."""
+"""Service package initializer."""
