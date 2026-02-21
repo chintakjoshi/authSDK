@@ -81,6 +81,20 @@ def _redis_connection_url(redis: RedisContainer) -> str:
     return redis_url
 
 
+def _postgres_async_url(postgres: PostgresContainer) -> str:
+    """Return a postgresql+asyncpg URL across testcontainers versions."""
+    try:
+        # testcontainers>=4 supports explicitly disabling default psycopg2 driver.
+        postgres_url = postgres.get_connection_url(driver=None)
+    except TypeError:
+        postgres_url = postgres.get_connection_url()
+
+    if postgres_url.startswith("postgresql+"):
+        postgres_url = "postgresql://" + postgres_url.split("://", 1)[1]
+
+    return postgres_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+
+
 def _set_env_values(env_values: dict[str, str]) -> tuple[dict[str, str], Callable[[], None]]:
     """Apply env vars and return a restore callback."""
     original: dict[str, str] = {}
@@ -121,8 +135,7 @@ def integration_env() -> Iterator[dict[str, str]]:
 
     private_pem, public_pem = _generate_rsa_keypair()
 
-    postgres_sync_url = postgres.get_connection_url()
-    database_url = postgres_sync_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    database_url = _postgres_async_url(postgres)
     redis_url = _redis_connection_url(redis)
 
     env_values = {
