@@ -67,7 +67,9 @@ def test_verify_token_rejects_expired(jwt_service: JWTService) -> None:
 def test_verify_token_rejects_tampered_token(jwt_service: JWTService) -> None:
     """Tampered token fails signature validation."""
     token = jwt_service.issue_token(subject="user-123", token_type="access", expires_in_seconds=60)
-    tampered = token[:-1] + ("a" if token[-1] != "a" else "b")
+    header, payload, signature = token.split(".")
+    tampered_payload = ("a" if payload[0] != "a" else "b") + payload[1:]
+    tampered = ".".join([header, tampered_payload, signature])
 
     with pytest.raises(TokenValidationError) as exc_info:
         jwt_service.verify_token(tampered, expected_type="access")
