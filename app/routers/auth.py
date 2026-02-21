@@ -226,7 +226,7 @@ async def logout(
 
 @router.get("/.well-known/jwks.json")
 async def jwks(
-    jwt_service: Annotated[JWTService, Depends(get_jwt_service)]
+    jwt_service: Annotated[JWTService, Depends(get_jwt_service)],
 ) -> dict[str, list[dict[str, str]]]:
     """Return public JWKS for RS256 token verification."""
     return jwt_service.jwks()

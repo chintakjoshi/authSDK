@@ -117,5 +117,8 @@ jobs:
       - name: Alembic online migration
         run: python -m alembic upgrade head
 
-      - name: Build package
+      - name: Build service package
         run: python -m build
+
+      - name: Build SDK package
+        run: python -m build sdk
