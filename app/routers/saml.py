@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Annotated
 from urllib.parse import parse_qs
 
-import structlog
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,10 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.saml import build_saml_request_data
 from app.dependencies import get_database_session
 from app.schemas.token import TokenPairResponse
+from app.services.audit_service import AuditService, get_audit_service
 from app.services.saml_service import SamlService, SamlServiceError, get_saml_service
 
 router = APIRouter(prefix="/auth/saml", tags=["saml"])
-logger = structlog.get_logger(__name__)
 
 
 def _error_response(status_code: int, detail: str, code: str) -> JSONResponse:
@@ -52,10 +51,15 @@ async def _post_form_to_dict(request: Request) -> dict[str, str]:
 async def saml_login(
     request: Request,
     saml_service: Annotated[SamlService, Depends(get_saml_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
     relay_state: Annotated[str | None, Query()] = None,
 ) -> Response:
     """Initiate SAML authentication request."""
-    correlation_id = request.headers.get("x-correlation-id", "unknown")
+    correlation_id = getattr(
+        request.state,
+        "correlation_id",
+        request.headers.get("x-correlation-id", "unknown"),
+    )
     client_ip = _extract_client_ip(request)
     request_data = build_saml_request_data(request=request, get_data=_query_to_dict(request))
     try:
@@ -63,17 +67,20 @@ async def saml_login(
             request_data=request_data, relay_state=relay_state
         )
     except SamlServiceError as exc:
-        logger.warning(
-            "saml_login_start",
-            correlation_id=correlation_id,
-            event_type="login_attempt",
-            user_id=None,
+        audit_service.log_login_attempt(
             provider="saml",
             ip_address=client_ip,
+            correlation_id=correlation_id,
             success=False,
             error_code=exc.code,
         )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
+    audit_service.log_login_attempt(
+        provider="saml",
+        ip_address=client_ip,
+        correlation_id=correlation_id,
+        success=True,
+    )
     return RedirectResponse(url=redirect_url, status_code=302)
 
 
@@ -82,9 +89,14 @@ async def saml_callback(
     request: Request,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     saml_service: Annotated[SamlService, Depends(get_saml_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> TokenPairResponse | JSONResponse:
     """Handle SAML response callback and issue tokens."""
-    correlation_id = request.headers.get("x-correlation-id", "unknown")
+    correlation_id = getattr(
+        request.state,
+        "correlation_id",
+        request.headers.get("x-correlation-id", "unknown"),
+    )
     client_ip = _extract_client_ip(request)
     get_data = _query_to_dict(request)
     post_data = await _post_form_to_dict(request) if request.method.upper() == "POST" else {}
@@ -95,25 +107,25 @@ async def saml_callback(
             request_data=request_data,
         )
     except SamlServiceError as exc:
-        logger.warning(
-            "saml_callback",
-            correlation_id=correlation_id,
-            event_type="login_attempt",
-            user_id=None,
+        audit_service.log_login_attempt(
             provider="saml",
             ip_address=client_ip,
+            correlation_id=correlation_id,
             success=False,
             error_code=exc.code,
         )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
 
-    logger.info(
-        "saml_callback",
-        correlation_id=correlation_id,
-        event_type="login_attempt",
-        user_id=None,
+    audit_service.log_login_attempt(
         provider="saml",
         ip_address=client_ip,
+        correlation_id=correlation_id,
+        success=True,
+    )
+    audit_service.log_token_issuance(
+        provider="saml",
+        ip_address=client_ip,
+        correlation_id=correlation_id,
         success=True,
     )
     return TokenPairResponse(
