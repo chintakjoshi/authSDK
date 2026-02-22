@@ -59,6 +59,7 @@ class OAuthService:
         db_session: AsyncSession,
         user_id: str,
         email: str,
+        role: str,
         scopes: list[str],
     ):
         """Issue token pair while tolerating legacy test doubles."""
@@ -68,13 +69,19 @@ class OAuthService:
         except (TypeError, ValueError):
             signature = None
         if signature and "db_session" in signature.parameters:
-            return issue_method(
-                db_session=db_session,
-                user_id=user_id,
-                email=email,
-                scopes=scopes,
-            )
-        return issue_method(user_id=user_id, email=email, scopes=scopes)
+            kwargs: dict[str, object] = {
+                "db_session": db_session,
+                "user_id": user_id,
+                "email": email,
+                "scopes": scopes,
+            }
+            if "role" in signature.parameters:
+                kwargs["role"] = role
+            return issue_method(**kwargs)
+        kwargs = {"user_id": user_id, "email": email, "scopes": scopes}
+        if signature and "role" in signature.parameters:
+            kwargs["role"] = role
+        return issue_method(**kwargs)
 
     async def build_google_login_url(self, redirect_uri: str | None) -> str:
         """Create Google login URL and persist one-time state in Redis."""
@@ -145,6 +152,7 @@ class OAuthService:
             db_session=db_session,
             user_id=str(user.id),
             email=user.email,
+            role=user.role,
             scopes=[],
         )
         token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
@@ -152,6 +160,7 @@ class OAuthService:
             db_session=db_session,
             user_id=user.id,
             email=user.email,
+            role=user.role,
             scopes=[],
             raw_refresh_token=token_pair.refresh_token,
         )
@@ -175,7 +184,7 @@ class OAuthService:
         if identity is None:
             user = await self._get_user_by_email(db_session=db_session, email=email)
             if user is None:
-                user = User(email=email, password_hash=None, is_active=True)
+                user = User(email=email, password_hash=None, is_active=True, role="user")
                 db_session.add(user)
                 await db_session.flush()
             identity = UserIdentity(
@@ -190,7 +199,7 @@ class OAuthService:
 
         user = await self._get_user_by_id(db_session=db_session, user_id=identity.user_id)
         if user is None:
-            user = User(email=email, password_hash=None, is_active=True)
+            user = User(email=email, password_hash=None, is_active=True, role="user")
             db_session.add(user)
             await db_session.flush()
             identity.user_id = user.id

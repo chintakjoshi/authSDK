@@ -103,6 +103,7 @@ async def test_create_login_session_stores_hashed_token_and_redis_payload() -> N
         db_session=db_session,  # type: ignore[arg-type]
         user_id=user_id,
         email="user@example.com",
+        role="user",
         scopes=["read:all"],
         raw_refresh_token="refresh-token-raw-value",
     )
@@ -127,7 +128,7 @@ async def test_rotate_refresh_session_updates_hash_and_ttl() -> None:
     service = SessionService(redis_client=redis, refresh_token_ttl_seconds=900)
     row = _session_row(raw_refresh_token="old-refresh-token")
     redis.values[f"session:{row.session_id}"] = (
-        '{"user_id":"u1","email":"user@example.com","scopes":[],"issued_at":"now"}'
+        '{"user_id":"u1","email":"user@example.com","role":"admin","scopes":[],"issued_at":"now"}'
     )
     redis.ttls[f"session:{row.session_id}"] = 30
 
@@ -146,7 +147,7 @@ async def test_rotate_refresh_session_updates_hash_and_ttl() -> None:
     token_pair = await service.rotate_refresh_session(
         db_session=db_session,  # type: ignore[arg-type]
         raw_refresh_token="old-refresh-token",
-        token_issuer=lambda _user_id, email=None, scopes=None: TokenPair(
+        token_issuer=lambda _user_id, email=None, role=None, scopes=None: TokenPair(
             access_token="new-access-token", refresh_token="new-refresh-token"
         ),
     )
@@ -180,7 +181,7 @@ async def test_rotate_refresh_session_fails_closed_when_redis_unavailable() -> N
         await service.rotate_refresh_session(
             db_session=db_session,  # type: ignore[arg-type]
             raw_refresh_token="old-refresh-token",
-            token_issuer=lambda _user_id, email=None, scopes=None: TokenPair(
+            token_issuer=lambda _user_id, email=None, role=None, scopes=None: TokenPair(
                 access_token="new-access-token", refresh_token="new-refresh-token"
             ),
         )
@@ -198,7 +199,7 @@ async def test_revoke_session_deletes_redis_key_and_blocklists_jti() -> None:
     service = SessionService(redis_client=redis, refresh_token_ttl_seconds=900)
     row = _session_row(raw_refresh_token="logout-refresh-token")
     redis.values[f"session:{row.session_id}"] = (
-        '{"user_id":"u1","email":"user@example.com","scopes":[],"issued_at":"now"}'
+        '{"user_id":"u1","email":"user@example.com","role":"user","scopes":[],"issued_at":"now"}'
     )
     redis.ttls[f"session:{row.session_id}"] = 300
 
