@@ -32,7 +32,9 @@ class User(Base, TimestampTenantMixin):
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    role: Mapped[str] = mapped_column(String(16), nullable=False, default="user", server_default="user")
+    role: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="user", server_default="user"
+    )
 
     identities: Mapped[list[UserIdentity]] = relationship(back_populates="user")
     sessions: Mapped[list[Session]] = relationship(back_populates="user")

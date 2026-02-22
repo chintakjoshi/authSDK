@@ -126,9 +126,13 @@ class UserService:
 
     async def count_active_admins(self, db_session: AsyncSession) -> int:
         """Return the count of non-deleted admin users."""
-        statement = select(func.count()).select_from(User).where(
-            User.role == "admin",
-            User.deleted_at.is_(None),
+        statement = (
+            select(func.count())
+            .select_from(User)
+            .where(
+                User.role == "admin",
+                User.deleted_at.is_(None),
+            )
         )
         result = await db_session.execute(statement)
         return int(result.scalar_one())
