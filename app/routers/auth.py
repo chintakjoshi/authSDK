@@ -34,15 +34,6 @@ def _error_response(status_code: int, detail: str, code: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"detail": detail, "code": code})
 
 
-def _extract_client_ip(request: Request) -> str:
-    """Extract client IP using forwarding headers when present."""
-    forwarded_for = request.headers.get("x-forwarded-for", "").strip()
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    client = request.client
-    return client.host if client else "unknown"
-
-
 def _extract_bearer_token(request: Request) -> str | None:
     """Extract bearer token from Authorization header."""
     authorization = request.headers.get("authorization", "").strip()
@@ -89,24 +80,20 @@ async def login(
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> TokenPairResponse | JSONResponse:
     """Authenticate email/password credentials and issue JWT pair."""
-    correlation_id = getattr(
-        request.state,
-        "correlation_id",
-        request.headers.get("x-correlation-id", "unknown"),
-    )
-    client_ip = _extract_client_ip(request)
     user = await user_service.authenticate_user(
         db_session=db_session,
         email=payload.email,
         password=payload.password,
     )
     if user is None:
-        audit_service.log_login_attempt(
-            provider="password",
-            ip_address=client_ip,
-            correlation_id=correlation_id,
+        await audit_service.record(
+            db=db_session,
+            event_type="user.login.failure",
+            actor_type="user",
             success=False,
-            user_identifier=payload.email,
+            request=request,
+            failure_reason="invalid_credentials",
+            metadata={"provider": "password"},
         )
         return _error_response(
             status_code=401,
@@ -123,7 +110,7 @@ async def login(
     )
     token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
     try:
-        await session_service.create_login_session(
+        session_id = await session_service.create_login_session(
             db_session=db_session,
             user_id=user.id,
             email=user.email,
@@ -131,32 +118,46 @@ async def login(
             raw_refresh_token=token_pair.refresh_token,
         )
     except SessionStateError as exc:
-        audit_service.log_login_attempt(
-            provider="password",
-            ip_address=client_ip,
-            correlation_id=correlation_id,
+        await audit_service.record(
+            db=db_session,
+            event_type="user.login.failure",
+            actor_type="user",
             success=False,
-            user_id=str(user.id),
-            user_identifier=user.email,
-            error_code=exc.code,
+            request=request,
+            actor_id=str(user.id),
+            failure_reason=exc.code,
+            metadata={"provider": "password"},
         )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
 
-    audit_service.log_login_attempt(
-        provider="password",
-        ip_address=client_ip,
-        correlation_id=correlation_id,
+    await audit_service.record(
+        db=db_session,
+        event_type="user.login.success",
+        actor_type="user",
         success=True,
-        user_id=str(user.id),
-        user_identifier=user.email,
+        request=request,
+        actor_id=str(user.id),
+        metadata={"provider": "password"},
     )
-    audit_service.log_token_issuance(
-        provider="password",
-        ip_address=client_ip,
-        correlation_id=correlation_id,
+    await audit_service.record(
+        db=db_session,
+        event_type="session.created",
+        actor_type="user",
         success=True,
-        user_id=str(user.id),
-        user_identifier=user.email,
+        request=request,
+        actor_id=str(user.id),
+        target_id=str(session_id),
+        target_type="session",
+        metadata={"provider": "password"},
+    )
+    await audit_service.record(
+        db=db_session,
+        event_type="token.issued",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=str(user.id),
+        metadata={"provider": "password", "token_kind": "access_refresh_pair"},
     )
     return TokenPairResponse(
         access_token=token_pair.access_token,
@@ -174,12 +175,6 @@ async def refresh_token(
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> TokenPairResponse | JSONResponse:
     """Rotate refresh token and issue a new token pair."""
-    correlation_id = getattr(
-        request.state,
-        "correlation_id",
-        request.headers.get("x-correlation-id", "unknown"),
-    )
-    client_ip = _extract_client_ip(request)
     try:
 
         async def _issue_pair(
@@ -203,27 +198,32 @@ async def refresh_token(
         )
         token_pair = await rotated if inspect.isawaitable(rotated) else rotated
     except SessionStateError as exc:
-        audit_service.log_token_refresh(
-            provider="password",
-            ip_address=client_ip,
-            correlation_id=correlation_id,
+        await audit_service.record(
+            db=db_session,
+            event_type="token.refreshed",
+            actor_type="user",
             success=False,
-            user_id=None,
-            error_code=exc.code,
+            request=request,
+            failure_reason=exc.code,
+            metadata={"provider": "password"},
         )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
 
-    audit_service.log_token_refresh(
-        provider="password",
-        ip_address=client_ip,
-        correlation_id=correlation_id,
+    await audit_service.record(
+        db=db_session,
+        event_type="token.refreshed",
+        actor_type="user",
         success=True,
+        request=request,
+        metadata={"provider": "password"},
     )
-    audit_service.log_token_issuance(
-        provider="password",
-        ip_address=client_ip,
-        correlation_id=correlation_id,
+    await audit_service.record(
+        db=db_session,
+        event_type="token.issued",
+        actor_type="user",
         success=True,
+        request=request,
+        metadata={"provider": "password", "token_kind": "access_refresh_pair"},
     )
     return TokenPairResponse(
         access_token=token_pair.access_token,
@@ -242,20 +242,16 @@ async def logout(
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> Response | JSONResponse:
     """Revoke session and blocklist current access token JTI."""
-    correlation_id = getattr(
-        request.state,
-        "correlation_id",
-        request.headers.get("x-correlation-id", "unknown"),
-    )
-    client_ip = _extract_client_ip(request)
     access_token = _extract_bearer_token(request)
     if access_token is None:
-        audit_service.log_logout(
-            provider="password",
-            ip_address=client_ip,
-            correlation_id=correlation_id,
+        await audit_service.record(
+            db=db_session,
+            event_type="user.logout",
+            actor_type="user",
             success=False,
-            error_code="invalid_token",
+            request=request,
+            failure_reason="invalid_token",
+            metadata={"provider": "password"},
         )
         return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
 
@@ -267,12 +263,14 @@ async def logout(
             public_keys_by_kid=verification_keys,
         )
     except TokenValidationError as exc:
-        audit_service.log_logout(
-            provider="password",
-            ip_address=client_ip,
-            correlation_id=correlation_id,
+        await audit_service.record(
+            db=db_session,
+            event_type="user.logout",
+            actor_type="user",
             success=False,
-            error_code=exc.code,
+            request=request,
+            failure_reason=exc.code,
+            metadata={"provider": "password"},
         )
         return _error_response(status_code=401, detail=exc.detail, code=exc.code)
 
@@ -284,22 +282,26 @@ async def logout(
             access_expiration_epoch=int(claims["exp"]),
         )
     except SessionStateError as exc:
-        audit_service.log_logout(
-            provider="password",
-            ip_address=client_ip,
-            correlation_id=correlation_id,
+        await audit_service.record(
+            db=db_session,
+            event_type="user.logout",
+            actor_type="user",
             success=False,
-            user_id=str(claims.get("sub", "")),
-            error_code=exc.code,
+            request=request,
+            actor_id=str(claims.get("sub", "")),
+            failure_reason=exc.code,
+            metadata={"provider": "password"},
         )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
 
-    audit_service.log_logout(
-        provider="password",
-        ip_address=client_ip,
-        correlation_id=correlation_id,
+    await audit_service.record(
+        db=db_session,
+        event_type="user.logout",
+        actor_type="user",
         success=True,
-        user_id=str(claims.get("sub", "")),
+        request=request,
+        actor_id=str(claims.get("sub", "")),
+        metadata={"provider": "password"},
     )
     return Response(status_code=204)
 
@@ -322,27 +324,27 @@ async def introspect_api_key(
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> JSONResponse:
     """Introspect opaque API key and return SDK contract payload."""
-    correlation_id = getattr(
-        request.state,
-        "correlation_id",
-        request.headers.get("x-correlation-id", "unknown"),
-    )
-    client_ip = _extract_client_ip(request)
     result = await api_key_service.introspect(db_session=db_session, raw_key=payload.api_key)
     if not result.valid:
-        audit_service.log_api_key_usage(
-            ip_address=client_ip,
-            correlation_id=correlation_id,
+        await audit_service.record(
+            db=db_session,
+            event_type="api_key.used",
+            actor_type="service",
             success=False,
-            error_code=result.code,
+            request=request,
+            failure_reason=result.code,
+            target_type="api_key",
         )
         return JSONResponse(status_code=200, content={"valid": False, "code": result.code})
-    audit_service.log_api_key_usage(
-        ip_address=client_ip,
-        correlation_id=correlation_id,
+    await audit_service.record(
+        db=db_session,
+        event_type="api_key.used",
+        actor_type="service",
         success=True,
-        user_id=result.user_id,
-        key_id=result.key_id,
+        request=request,
+        actor_id=result.user_id,
+        target_id=result.key_id,
+        target_type="api_key",
     )
     return JSONResponse(
         status_code=200,

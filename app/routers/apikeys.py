@@ -23,15 +23,6 @@ def _error_response(status_code: int, detail: str, code: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"detail": detail, "code": code})
 
 
-def _extract_client_ip(request: Request) -> str:
-    """Extract client IP using forwarding headers when present."""
-    forwarded_for = request.headers.get("x-forwarded-for", "").strip()
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    client = request.client
-    return client.host if client else "unknown"
-
-
 @router.post("", response_model=APIKeyCreateResponse)
 async def create_api_key(
     request: Request,
@@ -41,12 +32,6 @@ async def create_api_key(
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> APIKeyCreateResponse | JSONResponse:
     """Create API key and return raw key exactly once."""
-    correlation_id = getattr(
-        request.state,
-        "correlation_id",
-        request.headers.get("x-correlation-id", "unknown"),
-    )
-    client_ip = _extract_client_ip(request)
     try:
         created = await api_key_service.create_key(
             db_session=db_session,
@@ -56,30 +41,29 @@ async def create_api_key(
             expires_at=payload.expires_at,
         )
     except APIKeyServiceError as exc:
-        audit_service.emit_auth_event(
-            event_type="api_key_create",
-            provider="api_key",
-            ip_address=client_ip,
-            correlation_id=correlation_id,
+        await audit_service.record(
+            db=db_session,
+            event_type="api_key.created",
+            actor_type="user" if payload.user_id else "system",
             success=False,
-            user_id=str(payload.user_id) if payload.user_id else None,
-            service=payload.service,
-            scope=payload.scope,
-            error_code=exc.code,
+            request=request,
+            actor_id=str(payload.user_id) if payload.user_id else None,
+            target_type="api_key",
+            failure_reason=exc.code,
+            metadata={"service": payload.service, "scope": payload.scope},
         )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
 
-    audit_service.emit_auth_event(
-        event_type="api_key_create",
-        provider="api_key",
-        ip_address=client_ip,
-        correlation_id=correlation_id,
+    await audit_service.record(
+        db=db_session,
+        event_type="api_key.created",
+        actor_type="user" if created.user_id else "system",
         success=True,
-        user_id=str(created.user_id) if created.user_id else None,
-        key_id=str(created.key_id),
-        key_prefix=created.key_prefix,
-        service=created.service,
-        scope=created.scope,
+        request=request,
+        actor_id=str(created.user_id) if created.user_id else None,
+        target_id=str(created.key_id),
+        target_type="api_key",
+        metadata={"service": created.service, "scope": created.scope},
     )
     return APIKeyCreateResponse(
         key_id=created.key_id,
@@ -103,26 +87,20 @@ async def list_api_keys(
     service: Annotated[str | None, Query()] = None,
 ) -> list[APIKeyListItem]:
     """List API keys without exposing raw key material."""
-    correlation_id = getattr(
-        request.state,
-        "correlation_id",
-        request.headers.get("x-correlation-id", "unknown"),
-    )
-    client_ip = _extract_client_ip(request)
     keys = await api_key_service.list_keys(
         db_session=db_session,
         user_id=user_id,
         service=service,
     )
-    audit_service.emit_auth_event(
-        event_type="api_key_list",
-        provider="api_key",
-        ip_address=client_ip,
-        correlation_id=correlation_id,
+    await audit_service.record(
+        db=db_session,
+        event_type="api_key.used",
+        actor_type="user" if user_id else "system",
         success=True,
-        user_id=str(user_id) if user_id else None,
-        service=service,
-        result_count=len(keys),
+        request=request,
+        actor_id=str(user_id) if user_id else None,
+        target_type="api_key_collection",
+        metadata={"operation": "list", "service": service, "result_count": len(keys)},
     )
     return [
         APIKeyListItem(
@@ -148,37 +126,31 @@ async def revoke_api_key(
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> JSONResponse:
     """Revoke API key by key ID."""
-    correlation_id = getattr(
-        request.state,
-        "correlation_id",
-        request.headers.get("x-correlation-id", "unknown"),
-    )
-    client_ip = _extract_client_ip(request)
     try:
         revoked = await api_key_service.revoke_key(db_session=db_session, key_id=key_id)
     except APIKeyServiceError as exc:
-        audit_service.emit_auth_event(
-            event_type="api_key_revoke",
-            provider="api_key",
-            ip_address=client_ip,
-            correlation_id=correlation_id,
+        await audit_service.record(
+            db=db_session,
+            event_type="api_key.revoked",
+            actor_type="system",
             success=False,
-            key_id=str(key_id),
-            error_code=exc.code,
+            request=request,
+            target_id=str(key_id),
+            target_type="api_key",
+            failure_reason=exc.code,
         )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
 
-    audit_service.emit_auth_event(
-        event_type="api_key_revoke",
-        provider="api_key",
-        ip_address=client_ip,
-        correlation_id=correlation_id,
+    await audit_service.record(
+        db=db_session,
+        event_type="api_key.revoked",
+        actor_type="user" if revoked.user_id else "system",
         success=True,
-        user_id=str(revoked.user_id) if revoked.user_id else None,
-        key_id=str(revoked.id),
-        key_prefix=revoked.key_prefix,
-        service=revoked.service,
-        scope=revoked.scope,
+        request=request,
+        actor_id=str(revoked.user_id) if revoked.user_id else None,
+        target_id=str(revoked.id),
+        target_type="api_key",
+        metadata={"service": revoked.service, "scope": revoked.scope},
     )
     return JSONResponse(
         status_code=200,
