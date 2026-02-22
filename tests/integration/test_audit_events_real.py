@@ -170,7 +170,9 @@ async def test_auth_router_persists_success_and_failure_audit_events(
         )
         assert logout.status_code == 204
 
-        invalid_introspect = await client.post("/auth/introspect", json={"api_key": "sk_missing_key"})
+        invalid_introspect = await client.post(
+            "/auth/introspect", json={"api_key": "sk_missing_key"}
+        )
         assert invalid_introspect.status_code == 200
         assert invalid_introspect.json()["valid"] is False
 
@@ -297,7 +299,9 @@ async def test_saml_routes_persist_expected_audit_events(app_factory, db_session
 
 
 @pytest.mark.asyncio
-async def test_apikey_routes_persist_success_and_failure_audit_events(app_factory, db_session) -> None:
+async def test_apikey_routes_persist_success_and_failure_audit_events(
+    app_factory, db_session
+) -> None:
     """API key create/list/revoke paths persist expected created/used/revoked audit rows."""
     app: FastAPI = app_factory()
     missing_key_id = str(uuid4())

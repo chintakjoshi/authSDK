@@ -87,7 +87,9 @@ async def test_require_role_returns_403_for_insufficient_role() -> None:
     async def admin_only(user=admin_dependency):  # type: ignore[no-untyped-def]
         return {"user": user}
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
         response = await client.get("/admin", headers={"authorization": f"Bearer {token}"})
 
     await auth_http_client.aclose()
@@ -122,7 +124,9 @@ async def test_require_role_allows_admin_role() -> None:
     async def admin_only(user=admin_dependency):  # type: ignore[no-untyped-def]
         return {"user": user}
 
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
         response = await client.get("/admin", headers={"authorization": f"Bearer {token}"})
 
     await auth_http_client.aclose()

@@ -26,7 +26,9 @@ async def test_require_role_allows_matching_role() -> None:
     app = _build_app(
         {"type": "user", "user_id": "u-1", "email": "a@example.com", "role": "admin", "scopes": []}
     )
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
         response = await client.get("/admin")
 
     assert response.status_code == 200
@@ -38,7 +40,9 @@ async def test_require_role_rejects_non_matching_role() -> None:
     app = _build_app(
         {"type": "user", "user_id": "u-1", "email": "a@example.com", "role": "user", "scopes": []}
     )
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
         response = await client.get("/admin")
 
     assert response.status_code == 403
