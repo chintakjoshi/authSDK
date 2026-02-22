@@ -43,6 +43,7 @@ class SamlService:
         user_id: str,
         email: str,
         role: str,
+        email_verified: bool,
         scopes: list[str],
     ):
         """Issue token pair while tolerating legacy test doubles."""
@@ -60,10 +61,14 @@ class SamlService:
             }
             if "role" in signature.parameters:
                 kwargs["role"] = role
+            if "email_verified" in signature.parameters:
+                kwargs["email_verified"] = email_verified
             return issue_method(**kwargs)
         kwargs = {"user_id": user_id, "email": email, "scopes": scopes}
         if signature and "role" in signature.parameters:
             kwargs["role"] = role
+        if signature and "email_verified" in signature.parameters:
+            kwargs["email_verified"] = email_verified
         return issue_method(**kwargs)
 
     def create_login_url(self, request_data: dict[str, str], relay_state: str | None) -> str:
@@ -94,6 +99,7 @@ class SamlService:
             user_id=str(user.id),
             email=user.email,
             role=user.role,
+            email_verified=user.email_verified,
             scopes=[],
         )
         token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
@@ -102,6 +108,7 @@ class SamlService:
             user_id=user.id,
             email=user.email,
             role=user.role,
+            email_verified=user.email_verified,
             scopes=[],
             raw_refresh_token=token_pair.refresh_token,
         )

@@ -104,6 +104,7 @@ async def test_create_login_session_stores_hashed_token_and_redis_payload() -> N
         user_id=user_id,
         email="user@example.com",
         role="user",
+        email_verified=False,
         scopes=["read:all"],
         raw_refresh_token="refresh-token-raw-value",
     )

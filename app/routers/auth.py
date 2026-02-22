@@ -52,6 +52,7 @@ def _issue_token_pair(
     user_id: str,
     email: str | None = None,
     role: str | None = None,
+    email_verified: bool | None = None,
     scopes: list[str] | None = None,
 ):
     """Issue token pair while supporting legacy test doubles without db_session arg."""
@@ -69,10 +70,14 @@ def _issue_token_pair(
         }
         if role is not None and "role" in signature.parameters:
             kwargs["role"] = role
+        if email_verified is not None and "email_verified" in signature.parameters:
+            kwargs["email_verified"] = email_verified
         return issue_method(**kwargs)
     kwargs: dict[str, object] = {"user_id": user_id, "email": email, "scopes": scopes}
     if signature and role is not None and "role" in signature.parameters:
         kwargs["role"] = role
+    if signature and email_verified is not None and "email_verified" in signature.parameters:
+        kwargs["email_verified"] = email_verified
     return issue_method(**kwargs)
 
 
@@ -114,6 +119,7 @@ async def login(
         user_id=str(user.id),
         email=user.email,
         role=getattr(user, "role", "user"),
+        email_verified=bool(getattr(user, "email_verified", False)),
         scopes=[],
     )
     token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
@@ -123,6 +129,7 @@ async def login(
             user_id=user.id,
             email=user.email,
             role=getattr(user, "role", "user"),
+            email_verified=bool(getattr(user, "email_verified", False)),
             scopes=[],
             raw_refresh_token=token_pair.refresh_token,
         )
@@ -190,6 +197,7 @@ async def refresh_token(
             user_id: str,
             email: str | None = None,
             role: str | None = None,
+            email_verified: bool | None = None,
             scopes: list[str] | None = None,
         ):
             issued = _issue_token_pair(
@@ -198,6 +206,7 @@ async def refresh_token(
                 user_id=user_id,
                 email=email,
                 role=role,
+                email_verified=email_verified,
                 scopes=scopes,
             )
             return await issued if inspect.isawaitable(issued) else issued

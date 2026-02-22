@@ -63,7 +63,7 @@ Behavior:
 
 ## `request.state.user` shape
 
-- JWT/user identity: `{ "type": "user", "user_id": str, "email": str, "role": "admin"|"user"|"service", "scopes": list[str] }`
+- JWT/user identity: `{ "type": "user", "user_id": str, "email": str, "email_verified": bool, "role": "admin"|"user"|"service", "scopes": list[str] }`
 - API key identity: `{ "type": "api_key", "key_id": str, "service": str, "scopes": list[str], "email": None }`
 
 ## Role Dependency

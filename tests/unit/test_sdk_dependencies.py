@@ -24,7 +24,14 @@ def _build_app(user_payload: dict[str, object]) -> FastAPI:
 async def test_require_role_allows_matching_role() -> None:
     """Role dependency allows requests when role matches allowed set."""
     app = _build_app(
-        {"type": "user", "user_id": "u-1", "email": "a@example.com", "role": "admin", "scopes": []}
+        {
+            "type": "user",
+            "user_id": "u-1",
+            "email": "a@example.com",
+            "email_verified": True,
+            "role": "admin",
+            "scopes": [],
+        }
     )
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
@@ -38,7 +45,14 @@ async def test_require_role_allows_matching_role() -> None:
 async def test_require_role_rejects_non_matching_role() -> None:
     """Role dependency rejects requests when role is outside allowed set."""
     app = _build_app(
-        {"type": "user", "user_id": "u-1", "email": "a@example.com", "role": "user", "scopes": []}
+        {
+            "type": "user",
+            "user_id": "u-1",
+            "email": "a@example.com",
+            "email_verified": True,
+            "role": "user",
+            "scopes": [],
+        }
     )
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"

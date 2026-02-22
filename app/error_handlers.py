@@ -21,6 +21,8 @@ VALID_ERROR_CODES = {
     "saml_assertion_invalid",
     "oauth_state_mismatch",
     "session_expired",
+    "already_verified",
+    "invalid_verify_token",
 }
 
 _DEFAULT_ERROR_CODE_BY_STATUS: dict[int, str] = {

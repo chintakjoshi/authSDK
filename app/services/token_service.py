@@ -41,11 +41,12 @@ class TokenService:
         user_id: str,
         email: str | None = None,
         role: str = "user",
+        email_verified: bool = False,
         scopes: list[str] | None = None,
     ) -> TokenPair:
         """Issue access and refresh tokens for a user identity."""
         active_key = await self._signing_key_service.get_active_signing_key(db_session)
-        access_claims: dict[str, object] = {"role": role}
+        access_claims: dict[str, object] = {"role": role, "email_verified": email_verified}
         if email is not None:
             access_claims["email"] = email
         if scopes is not None:
