@@ -151,23 +151,9 @@ class _AuditServiceStub:
     def __init__(self) -> None:
         self.events: list[dict[str, Any]] = []
 
-    def _record(self, event_type: str, success: bool, **kwargs: Any) -> None:
-        self.events.append({"event_type": event_type, "success": success, **kwargs})
-
-    def log_login_attempt(self, success: bool, **kwargs: Any) -> None:
-        self._record(event_type="login_attempt", success=success, **kwargs)
-
-    def log_token_issuance(self, success: bool, **kwargs: Any) -> None:
-        self._record(event_type="token_issuance", success=success, **kwargs)
-
-    def log_token_refresh(self, success: bool, **kwargs: Any) -> None:
-        self._record(event_type="token_refresh", success=success, **kwargs)
-
-    def log_logout(self, success: bool, **kwargs: Any) -> None:
-        self._record(event_type="logout", success=success, **kwargs)
-
-    def log_api_key_usage(self, success: bool, **kwargs: Any) -> None:
-        self._record(event_type="api_key_usage", success=success, **kwargs)
+    async def record(self, **kwargs: Any) -> None:
+        event = {key: value for key, value in kwargs.items() if key != "db"}
+        self.events.append(event)
 
 
 async def _fake_db_dependency() -> Any:
@@ -227,11 +213,12 @@ async def test_auth_routes_emit_required_step13_audit_events() -> None:
         assert introspect.json()["valid"] is True
 
     event_types = [event["event_type"] for event in audit_stub.events]
-    assert "login_attempt" in event_types
-    assert "token_issuance" in event_types
-    assert "token_refresh" in event_types
-    assert "logout" in event_types
-    assert "api_key_usage" in event_types
+    assert "user.login.success" in event_types
+    assert "session.created" in event_types
+    assert "token.issued" in event_types
+    assert "token.refreshed" in event_types
+    assert "user.logout" in event_types
+    assert "api_key.used" in event_types
 
     serialized = str(audit_stub.events)
     assert "Password123!" not in serialized

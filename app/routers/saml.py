@@ -23,15 +23,6 @@ def _error_response(status_code: int, detail: str, code: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"detail": detail, "code": code})
 
 
-def _extract_client_ip(request: Request) -> str:
-    """Extract client IP using forwarding headers when present."""
-    forwarded_for = request.headers.get("x-forwarded-for", "").strip()
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    client = request.client
-    return client.host if client else "unknown"
-
-
 def _query_to_dict(request: Request) -> dict[str, str]:
     """Convert query params to plain string dict."""
     return {key: value for key, value in request.query_params.items()}
@@ -50,36 +41,35 @@ async def _post_form_to_dict(request: Request) -> dict[str, str]:
 @router.get("/login", response_model=None)
 async def saml_login(
     request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
     saml_service: Annotated[SamlService, Depends(get_saml_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
     relay_state: Annotated[str | None, Query()] = None,
 ) -> Response:
     """Initiate SAML authentication request."""
-    correlation_id = getattr(
-        request.state,
-        "correlation_id",
-        request.headers.get("x-correlation-id", "unknown"),
-    )
-    client_ip = _extract_client_ip(request)
     request_data = build_saml_request_data(request=request, get_data=_query_to_dict(request))
     try:
         redirect_url = saml_service.create_login_url(
             request_data=request_data, relay_state=relay_state
         )
     except SamlServiceError as exc:
-        audit_service.log_login_attempt(
-            provider="saml",
-            ip_address=client_ip,
-            correlation_id=correlation_id,
+        await audit_service.record(
+            db=db_session,
+            event_type="user.login.failure",
+            actor_type="user",
             success=False,
-            error_code=exc.code,
+            request=request,
+            failure_reason=exc.code,
+            metadata={"provider": "saml", "phase": "start"},
         )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
-    audit_service.log_login_attempt(
-        provider="saml",
-        ip_address=client_ip,
-        correlation_id=correlation_id,
+    await audit_service.record(
+        db=db_session,
+        event_type="user.login.success",
+        actor_type="user",
         success=True,
+        request=request,
+        metadata={"provider": "saml", "phase": "start"},
     )
     return RedirectResponse(url=redirect_url, status_code=302)
 
@@ -92,12 +82,6 @@ async def saml_callback(
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> TokenPairResponse | JSONResponse:
     """Handle SAML response callback and issue tokens."""
-    correlation_id = getattr(
-        request.state,
-        "correlation_id",
-        request.headers.get("x-correlation-id", "unknown"),
-    )
-    client_ip = _extract_client_ip(request)
     get_data = _query_to_dict(request)
     post_data = await _post_form_to_dict(request) if request.method.upper() == "POST" else {}
     request_data = build_saml_request_data(request=request, get_data=get_data, post_data=post_data)
@@ -107,26 +91,40 @@ async def saml_callback(
             request_data=request_data,
         )
     except SamlServiceError as exc:
-        audit_service.log_login_attempt(
-            provider="saml",
-            ip_address=client_ip,
-            correlation_id=correlation_id,
+        await audit_service.record(
+            db=db_session,
+            event_type="user.login.failure",
+            actor_type="user",
             success=False,
-            error_code=exc.code,
+            request=request,
+            failure_reason=exc.code,
+            metadata={"provider": "saml", "phase": "callback"},
         )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
 
-    audit_service.log_login_attempt(
-        provider="saml",
-        ip_address=client_ip,
-        correlation_id=correlation_id,
+    await audit_service.record(
+        db=db_session,
+        event_type="user.login.success",
+        actor_type="user",
         success=True,
+        request=request,
+        metadata={"provider": "saml", "phase": "callback"},
     )
-    audit_service.log_token_issuance(
-        provider="saml",
-        ip_address=client_ip,
-        correlation_id=correlation_id,
+    await audit_service.record(
+        db=db_session,
+        event_type="session.created",
+        actor_type="user",
         success=True,
+        request=request,
+        metadata={"provider": "saml"},
+    )
+    await audit_service.record(
+        db=db_session,
+        event_type="token.issued",
+        actor_type="user",
+        success=True,
+        request=request,
+        metadata={"provider": "saml", "token_kind": "access_refresh_pair"},
     )
     return TokenPairResponse(
         access_token=token_pair.access_token,

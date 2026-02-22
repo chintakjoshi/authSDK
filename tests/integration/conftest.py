@@ -252,6 +252,7 @@ async def reset_state(
     from app.core.sessions import get_redis_client
     from app.db.session import get_session_factory
     from app.models.api_key import APIKey
+    from app.models.audit_event import AuditEvent
     from app.models.session import Session
     from app.models.signing_key import SigningKey
     from app.models.user import User, UserIdentity
@@ -262,6 +263,7 @@ async def reset_state(
     session_factory = get_session_factory()
     async with session_factory() as session:
         await session.execute(delete(UserIdentity))
+        await session.execute(delete(AuditEvent))
         await session.execute(delete(Session))
         await session.execute(delete(SigningKey))
         await session.execute(delete(APIKey))

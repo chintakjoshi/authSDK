@@ -21,46 +21,36 @@ def _error_response(status_code: int, detail: str, code: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"detail": detail, "code": code})
 
 
-def _extract_client_ip(request: Request) -> str:
-    """Extract client IP using forwarding headers when present."""
-    forwarded_for = request.headers.get("x-forwarded-for", "").strip()
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    client = request.client
-    return client.host if client else "unknown"
-
-
 @router.get("/google/login")
 async def google_login(
     request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
     oauth_service: Annotated[OAuthService, Depends(get_oauth_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
     redirect_uri: Annotated[str | None, Query()] = None,
 ) -> Response:
     """Initiate Google OAuth flow with server-side state storage."""
-    correlation_id = getattr(
-        request.state,
-        "correlation_id",
-        request.headers.get("x-correlation-id", "unknown"),
-    )
-    client_ip = _extract_client_ip(request)
     try:
         authorization_url = await oauth_service.build_google_login_url(redirect_uri=redirect_uri)
     except OAuthServiceError as exc:
-        audit_service.log_login_attempt(
-            provider="google",
-            ip_address=client_ip,
-            correlation_id=correlation_id,
+        await audit_service.record(
+            db=db_session,
+            event_type="user.login.failure",
+            actor_type="user",
             success=False,
-            error_code=exc.code,
+            request=request,
+            failure_reason=exc.code,
+            metadata={"provider": "google", "phase": "start"},
         )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
 
-    audit_service.log_login_attempt(
-        provider="google",
-        ip_address=client_ip,
-        correlation_id=correlation_id,
+    await audit_service.record(
+        db=db_session,
+        event_type="user.login.success",
+        actor_type="user",
         success=True,
+        request=request,
+        metadata={"provider": "google", "phase": "start"},
     )
     return RedirectResponse(url=authorization_url, status_code=302)
 
@@ -75,12 +65,6 @@ async def google_callback(
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> TokenPairResponse | JSONResponse:
     """Complete Google OAuth callback and issue auth tokens."""
-    correlation_id = getattr(
-        request.state,
-        "correlation_id",
-        request.headers.get("x-correlation-id", "unknown"),
-    )
-    client_ip = _extract_client_ip(request)
     try:
         token_pair = await oauth_service.complete_google_callback(
             db_session=db_session,
@@ -88,26 +72,40 @@ async def google_callback(
             code=code,
         )
     except OAuthServiceError as exc:
-        audit_service.log_login_attempt(
-            provider="google",
-            ip_address=client_ip,
-            correlation_id=correlation_id,
+        await audit_service.record(
+            db=db_session,
+            event_type="user.login.failure",
+            actor_type="user",
             success=False,
-            error_code=exc.code,
+            request=request,
+            failure_reason=exc.code,
+            metadata={"provider": "google", "phase": "callback"},
         )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
 
-    audit_service.log_login_attempt(
-        provider="google",
-        ip_address=client_ip,
-        correlation_id=correlation_id,
+    await audit_service.record(
+        db=db_session,
+        event_type="user.login.success",
+        actor_type="user",
         success=True,
+        request=request,
+        metadata={"provider": "google", "phase": "callback"},
     )
-    audit_service.log_token_issuance(
-        provider="google",
-        ip_address=client_ip,
-        correlation_id=correlation_id,
+    await audit_service.record(
+        db=db_session,
+        event_type="session.created",
+        actor_type="user",
         success=True,
+        request=request,
+        metadata={"provider": "google"},
+    )
+    await audit_service.record(
+        db=db_session,
+        event_type="token.issued",
+        actor_type="user",
+        success=True,
+        request=request,
+        metadata={"provider": "google", "token_kind": "access_refresh_pair"},
     )
     return TokenPairResponse(
         access_token=token_pair.access_token,
