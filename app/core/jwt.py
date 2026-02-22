@@ -17,7 +17,7 @@ from jose.exceptions import ExpiredSignatureError, JWTError
 
 from app.config import get_settings
 
-TokenType = Literal["access", "refresh"]
+TokenType = Literal["access", "refresh", "email_verify"]
 JWT_ALGORITHM = "RS256"
 
 
@@ -152,9 +152,11 @@ class JWTService:
         }
 
     def _is_supported_token_type(self, token_type: str) -> bool:
-        """Check whether the token type is a valid access or refresh value."""
-        return hmac.compare_digest(token_type, "access") or hmac.compare_digest(
-            token_type, "refresh"
+        """Check whether token type is one of the supported v2 JWT classes."""
+        return (
+            hmac.compare_digest(token_type, "access")
+            or hmac.compare_digest(token_type, "refresh")
+            or hmac.compare_digest(token_type, "email_verify")
         )
 
     @staticmethod

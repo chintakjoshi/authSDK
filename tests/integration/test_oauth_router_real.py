@@ -8,8 +8,11 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
 
+from app.core.jwt import get_jwt_service
 from app.core.sessions import get_redis_client, get_session_service
+from app.models.user import User
 from app.services.oauth_service import OAuthService, get_oauth_service
 from app.services.token_service import get_token_service
 
@@ -78,7 +81,7 @@ def _build_oauth_service() -> OAuthService:
 
 
 @pytest.mark.asyncio
-async def test_oauth_google_login_and_callback_success(app_factory) -> None:
+async def test_oauth_google_login_and_callback_success(app_factory, db_session) -> None:
     """OAuth login stores state in Redis and callback issues token pair."""
     app: FastAPI = app_factory()
     app.dependency_overrides[get_oauth_service] = _build_oauth_service
@@ -99,6 +102,14 @@ async def test_oauth_google_login_and_callback_success(app_factory) -> None:
     payload = callback_response.json()
     assert payload["access_token"]
     assert payload["refresh_token"]
+    claims = get_jwt_service().verify_token(payload["access_token"], expected_type="access")
+    assert claims["email_verified"] is True
+    user = (
+        await db_session.execute(
+            select(User).where(User.email == "oauth-user@example.com", User.deleted_at.is_(None))
+        )
+    ).scalar_one()
+    assert user.email_verified is True
     app.dependency_overrides.clear()
 
 

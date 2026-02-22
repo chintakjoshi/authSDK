@@ -29,6 +29,7 @@ class SessionPayload:
     user_id: str
     email: str
     role: str
+    email_verified: bool
     scopes: list[str]
     issued_at: str
 
@@ -58,6 +59,7 @@ class TokenIssuer(Protocol):
         user_id: str,
         email: str | None = None,
         role: str | None = None,
+        email_verified: bool | None = None,
         scopes: list[str] | None = None,
     ) -> TokenPairLike | Awaitable[TokenPairLike]: ...
 
@@ -75,6 +77,7 @@ class SessionService:
         user_id: UUID,
         email: str,
         role: str,
+        email_verified: bool,
         scopes: list[str],
         raw_refresh_token: str,
     ) -> UUID:
@@ -89,6 +92,7 @@ class SessionService:
             user_id=str(user_id),
             email=email,
             role=role,
+            email_verified=email_verified,
             scopes=scopes,
             issued_at=datetime.now(UTC).isoformat(),
         )
@@ -125,10 +129,12 @@ class SessionService:
                 raise SessionStateError("Session expired.", "session_expired", 401)
 
             payload = await self._get_session_payload(session_id=session_row.session_id)
-            issued_pair = token_issuer(
-                str(session_row.user_id),
+            issued_pair = self._invoke_token_issuer(
+                token_issuer=token_issuer,
+                user_id=str(session_row.user_id),
                 email=payload.email,
                 role=payload.role,
+                email_verified=payload.email_verified,
                 scopes=payload.scopes,
             )
             token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
@@ -200,6 +206,7 @@ class SessionService:
         except json.JSONDecodeError as exc:
             raise SessionStateError("Session expired.", "session_expired", 401) from exc
         payload_dict.setdefault("role", "user")
+        payload_dict.setdefault("email_verified", False)
         return SessionPayload(**payload_dict)
 
     async def _set_session_payload(self, session_id: UUID, payload: SessionPayload) -> None:
@@ -214,6 +221,7 @@ class SessionService:
                         "user_id": payload.user_id,
                         "email": payload.email,
                         "role": payload.role,
+                        "email_verified": payload.email_verified,
                         "scopes": payload.scopes,
                         "issued_at": payload.issued_at,
                     }
@@ -241,6 +249,25 @@ class SessionService:
     def _session_key(self, session_id: UUID) -> str:
         """Build Redis key for session payload."""
         return f"session:{session_id}"
+
+    @staticmethod
+    def _invoke_token_issuer(
+        token_issuer: TokenIssuer,
+        user_id: str,
+        email: str,
+        role: str,
+        email_verified: bool,
+        scopes: list[str],
+    ) -> TokenPairLike | Awaitable[TokenPairLike]:
+        """Call token issuer while supporting legacy callbacks."""
+        try:
+            signature = inspect.signature(token_issuer)
+        except (TypeError, ValueError):
+            signature = None
+        kwargs: dict[str, object] = {"email": email, "role": role, "scopes": scopes}
+        if signature and "email_verified" in signature.parameters:
+            kwargs["email_verified"] = email_verified
+        return token_issuer(user_id, **kwargs)
 
     @staticmethod
     def _hash_token(raw_token: str) -> str:

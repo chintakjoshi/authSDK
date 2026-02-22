@@ -84,6 +84,18 @@ def test_verify_token_rejects_tampered_token(jwt_service: JWTService) -> None:
     assert exc_info.value.code == "invalid_token"
 
 
+def test_issue_and_verify_email_verify_token(jwt_service: JWTService) -> None:
+    """JWT service supports email verification token type."""
+    token = jwt_service.issue_token(
+        subject="user-verify",
+        token_type="email_verify",
+        expires_in_seconds=60,
+    )
+    payload = jwt_service.verify_token(token, expected_type="email_verify")
+    assert payload["sub"] == "user-verify"
+    assert payload["type"] == "email_verify"
+
+
 def test_jwks_returns_rsa_public_key(jwt_service: JWTService) -> None:
     """JWKS endpoint payload includes one RS256 RSA signing key."""
     jwks = jwt_service.jwks()

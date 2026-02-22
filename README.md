@@ -23,6 +23,7 @@ curl http://localhost:8000/health/ready
 Full step-by-step guide: `DEVELOPMENT.md`.
 
 The service is exposed at `http://localhost:8000`.
+Mailhog is exposed at `http://localhost:8025` for verification-email inspection.
 
 ## Signing Key Rotation CLI
 

@@ -98,6 +98,15 @@ class SigningKeySettings(BaseModel):
     encryption_key: SecretStr | None = None
 
 
+class EmailSettings(BaseModel):
+    """Email delivery settings for local Mailhog workflows."""
+
+    mailhog_host: str = "localhost"
+    mailhog_port: int = Field(default=1025, ge=1, le=65535)
+    email_from: str = "auth@localhost"
+    email_verify_ttl_seconds: int = Field(default=86400, ge=1)
+
+
 class Settings(BaseSettings):
     """Root application settings loaded from environment variables."""
 
@@ -116,6 +125,7 @@ class Settings(BaseSettings):
     saml: SAMLSettings
     rate_limit: RateLimitSettings
     signing_keys: SigningKeySettings = SigningKeySettings()
+    email: EmailSettings = EmailSettings()
 
 
 def _standard_log_fields(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, Any]:

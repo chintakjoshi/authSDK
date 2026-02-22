@@ -114,11 +114,15 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         role = claims.get("role")
         if role not in {"admin", "user", "service"}:
             return _error_response(401, "Invalid token.", "invalid_token")
+        email_verified = claims.get("email_verified")
+        if not isinstance(email_verified, bool):
+            return _error_response(401, "Invalid token.", "invalid_token")
 
         user_identity: UserIdentity = {
             "type": "user",
             "user_id": str(claims.get("sub", "")),
             "email": email,
+            "email_verified": email_verified,
             "role": str(role),
             "scopes": _normalize_scopes(claims.get("scopes", [])),
         }

@@ -29,6 +29,14 @@ services:
     networks:
       - backend
 
+  mailhog:
+    image: mailhog/mailhog
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - backend
+
   auth-service:
     build:
       context: ..
@@ -39,6 +47,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      mailhog:
+        condition: service_started
     environment:
       APP__ENVIRONMENT: ${APP__ENVIRONMENT:-development}
       APP__SERVICE: ${APP__SERVICE:-auth-service}
@@ -64,6 +74,10 @@ services:
       RATE_LIMIT__DEFAULT_REQUESTS_PER_MINUTE: "${RATE_LIMIT__DEFAULT_REQUESTS_PER_MINUTE:-120}"
       RATE_LIMIT__LOGIN_REQUESTS_PER_MINUTE: "${RATE_LIMIT__LOGIN_REQUESTS_PER_MINUTE:-10}"
       RATE_LIMIT__TOKEN_REQUESTS_PER_MINUTE: "${RATE_LIMIT__TOKEN_REQUESTS_PER_MINUTE:-30}"
+      EMAIL__MAILHOG_HOST: ${EMAIL__MAILHOG_HOST:-mailhog}
+      EMAIL__MAILHOG_PORT: "${EMAIL__MAILHOG_PORT:-1025}"
+      EMAIL__EMAIL_FROM: ${EMAIL__EMAIL_FROM:-auth@localhost}
+      EMAIL__EMAIL_VERIFY_TTL_SECONDS: "${EMAIL__EMAIL_VERIFY_TTL_SECONDS:-86400}"
       SIGNING_KEYS__ROTATION_OVERLAP_SECONDS: "${SIGNING_KEYS__ROTATION_OVERLAP_SECONDS:-900}"
       SIGNING_KEYS__ENCRYPTION_KEY: ${SIGNING_KEYS__ENCRYPTION_KEY:-}
     command: >

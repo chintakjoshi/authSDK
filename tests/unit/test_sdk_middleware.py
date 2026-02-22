@@ -48,6 +48,7 @@ def _build_token(
     private_pem: str,
     kid: str,
     email: str = "user@example.com",
+    email_verified: bool = True,
     include_jti: bool = True,
     role: str = "user",
 ) -> str:
@@ -59,6 +60,7 @@ def _build_token(
         "sub": "user-1",
         "type": "access",
         "email": email,
+        "email_verified": email_verified,
         "role": role,
         "scopes": ["svc:read"],
     }

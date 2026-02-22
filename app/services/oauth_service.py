@@ -60,6 +60,7 @@ class OAuthService:
         user_id: str,
         email: str,
         role: str,
+        email_verified: bool,
         scopes: list[str],
     ):
         """Issue token pair while tolerating legacy test doubles."""
@@ -77,10 +78,14 @@ class OAuthService:
             }
             if "role" in signature.parameters:
                 kwargs["role"] = role
+            if "email_verified" in signature.parameters:
+                kwargs["email_verified"] = email_verified
             return issue_method(**kwargs)
         kwargs = {"user_id": user_id, "email": email, "scopes": scopes}
         if signature and "role" in signature.parameters:
             kwargs["role"] = role
+        if signature and "email_verified" in signature.parameters:
+            kwargs["email_verified"] = email_verified
         return issue_method(**kwargs)
 
     async def build_google_login_url(self, redirect_uri: str | None) -> str:
@@ -147,12 +152,14 @@ class OAuthService:
             db_session=db_session,
             provider_user_id=provider_user_id,
             email=email,
+            email_verified=email_verified,
         )
         issued_pair = self._issue_token_pair(
             db_session=db_session,
             user_id=str(user.id),
             email=user.email,
             role=user.role,
+            email_verified=user.email_verified,
             scopes=[],
         )
         token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
@@ -161,6 +168,7 @@ class OAuthService:
             user_id=user.id,
             email=user.email,
             role=user.role,
+            email_verified=user.email_verified,
             scopes=[],
             raw_refresh_token=token_pair.refresh_token,
         )
@@ -171,6 +179,7 @@ class OAuthService:
         db_session: AsyncSession,
         provider_user_id: str,
         email: str,
+        email_verified: bool,
     ) -> User:
         """Upsert identity first, then resolve/create canonical user."""
         identity_stmt = select(UserIdentity).where(
@@ -184,7 +193,13 @@ class OAuthService:
         if identity is None:
             user = await self._get_user_by_email(db_session=db_session, email=email)
             if user is None:
-                user = User(email=email, password_hash=None, is_active=True, role="user")
+                user = User(
+                    email=email,
+                    password_hash=None,
+                    is_active=True,
+                    role="user",
+                    email_verified=email_verified,
+                )
                 db_session.add(user)
                 await db_session.flush()
             identity = UserIdentity(
@@ -199,13 +214,21 @@ class OAuthService:
 
         user = await self._get_user_by_id(db_session=db_session, user_id=identity.user_id)
         if user is None:
-            user = User(email=email, password_hash=None, is_active=True, role="user")
+            user = User(
+                email=email,
+                password_hash=None,
+                is_active=True,
+                role="user",
+                email_verified=email_verified,
+            )
             db_session.add(user)
             await db_session.flush()
             identity.user_id = user.id
 
         if user.email.lower() != email.lower():
             user.email = email
+        if email_verified and not user.email_verified:
+            user.email_verified = True
         if identity.email != email:
             identity.email = email
         await db_session.flush()

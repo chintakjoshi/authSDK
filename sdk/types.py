@@ -15,6 +15,8 @@ ErrorCode = Literal[
     "saml_assertion_invalid",
     "oauth_state_mismatch",
     "session_expired",
+    "already_verified",
+    "invalid_verify_token",
 ]
 
 
@@ -24,6 +26,7 @@ class UserIdentity(TypedDict):
     type: Literal["user"]
     user_id: str
     email: str
+    email_verified: bool
     role: Literal["admin", "user", "service"]
     scopes: list[str]
 

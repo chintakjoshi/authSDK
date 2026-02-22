@@ -54,6 +54,7 @@ def _build_token(private_pem: str, kid: str, role: str) -> str:
         "sub": "user-1",
         "type": "access",
         "email": "user@example.com",
+        "email_verified": True,
         "role": role,
         "scopes": ["svc:read"],
     }
