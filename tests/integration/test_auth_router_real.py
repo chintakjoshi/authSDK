@@ -35,6 +35,7 @@ async def test_auth_login_refresh_logout_happy_path(
             login_payload["access_token"], expected_type="access"
         )
         assert login_access_claims["email"] == "alice@example.com"
+        assert login_access_claims["role"] == "user"
         assert login_access_claims["scopes"] == []
 
         refresh_response = await client.post(
@@ -48,6 +49,7 @@ async def test_auth_login_refresh_logout_happy_path(
             refresh_payload["access_token"], expected_type="access"
         )
         assert refresh_access_claims["email"] == "alice@example.com"
+        assert refresh_access_claims["role"] == "user"
         assert refresh_access_claims["scopes"] == []
 
         logout_response = await client.post(

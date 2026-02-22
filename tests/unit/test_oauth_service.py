@@ -85,10 +85,11 @@ class _TokenServiceStub:
         self,
         user_id: str,
         email: str | None = None,
+        role: str | None = None,
         scopes: list[str] | None = None,
     ) -> TokenPair:
         """Return deterministic token pair."""
-        del user_id, email, scopes
+        del user_id, email, role, scopes
         return TokenPair(access_token="access-token", refresh_token="refresh-token")
 
 
@@ -100,10 +101,12 @@ class _SessionServiceStub:
         db_session: Any,
         user_id: Any,
         email: str,
+        role: str,
         scopes: list[str],
         raw_refresh_token: str,
     ) -> str:
         """Return deterministic session id."""
+        del db_session, user_id, email, role, scopes, raw_refresh_token
         return "session-id"
 
 

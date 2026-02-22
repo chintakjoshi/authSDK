@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -20,12 +20,19 @@ class User(Base, TimestampTenantMixin):
     """Canonical user record shared across all authentication providers."""
 
     __tablename__ = "users"
-    __table_args__ = (Index("ix_users_email_deleted_at", "email", "deleted_at"),)
+    __table_args__ = (
+        Index("ix_users_email_deleted_at", "email", "deleted_at"),
+        CheckConstraint(
+            "role IN ('admin', 'user', 'service')",
+            name="ck_users_role_allowed",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="user", server_default="user")
 
     identities: Mapped[list[UserIdentity]] = relationship(back_populates="user")
     sessions: Mapped[list[Session]] = relationship(back_populates="user")

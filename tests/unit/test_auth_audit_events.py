@@ -52,10 +52,11 @@ class _TokenServiceStub:
         self,
         user_id: str,
         email: str | None = None,
+        role: str | None = None,
         scopes: list[str] | None = None,
     ) -> TokenPair:
         """Return synthetic token pair with stable format."""
-        del email, scopes
+        del email, role, scopes
         self._counter += 1
         return TokenPair(
             access_token=f"access-token-{self._counter}-{user_id}",
@@ -71,11 +72,12 @@ class _SessionServiceStub:
         db_session: Any,
         user_id: Any,
         email: str,
+        role: str,
         scopes: list[str],
         raw_refresh_token: str,
     ) -> Any:
         """No-op login session create."""
-        del db_session, user_id, email, scopes, raw_refresh_token
+        del db_session, user_id, email, role, scopes, raw_refresh_token
         return uuid4()
 
     async def rotate_refresh_session(
@@ -86,7 +88,7 @@ class _SessionServiceStub:
     ) -> TokenPair:
         """Issue a fresh token pair for refresh route."""
         del db_session, raw_refresh_token
-        return token_issuer("user-refresh")
+        return token_issuer("user-refresh", role="user")
 
     async def revoke_session(
         self,

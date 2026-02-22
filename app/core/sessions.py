@@ -28,6 +28,7 @@ class SessionPayload:
 
     user_id: str
     email: str
+    role: str
     scopes: list[str]
     issued_at: str
 
@@ -56,6 +57,7 @@ class TokenIssuer(Protocol):
         self,
         user_id: str,
         email: str | None = None,
+        role: str | None = None,
         scopes: list[str] | None = None,
     ) -> TokenPairLike | Awaitable[TokenPairLike]: ...
 
@@ -72,6 +74,7 @@ class SessionService:
         db_session: AsyncSession,
         user_id: UUID,
         email: str,
+        role: str,
         scopes: list[str],
         raw_refresh_token: str,
     ) -> UUID:
@@ -85,6 +88,7 @@ class SessionService:
         payload = SessionPayload(
             user_id=str(user_id),
             email=email,
+            role=role,
             scopes=scopes,
             issued_at=datetime.now(UTC).isoformat(),
         )
@@ -124,6 +128,7 @@ class SessionService:
             issued_pair = token_issuer(
                 str(session_row.user_id),
                 email=payload.email,
+                role=payload.role,
                 scopes=payload.scopes,
             )
             token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
@@ -194,6 +199,7 @@ class SessionService:
             payload_dict = json.loads(raw_payload)
         except json.JSONDecodeError as exc:
             raise SessionStateError("Session expired.", "session_expired", 401) from exc
+        payload_dict.setdefault("role", "user")
         return SessionPayload(**payload_dict)
 
     async def _set_session_payload(self, session_id: UUID, payload: SessionPayload) -> None:
@@ -207,6 +213,7 @@ class SessionService:
                     {
                         "user_id": payload.user_id,
                         "email": payload.email,
+                        "role": payload.role,
                         "scopes": payload.scopes,
                         "issued_at": payload.issued_at,
                     }

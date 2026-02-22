@@ -306,6 +306,7 @@ async def user_factory(
             email=email,
             password_hash=user_service.hash_password(password),
             is_active=True,
+            role="user",
         )
         db_session.add(user)
         await db_session.commit()

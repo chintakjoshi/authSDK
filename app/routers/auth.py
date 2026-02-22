@@ -51,6 +51,7 @@ def _issue_token_pair(
     db_session: AsyncSession,
     user_id: str,
     email: str | None = None,
+    role: str | None = None,
     scopes: list[str] | None = None,
 ):
     """Issue token pair while supporting legacy test doubles without db_session arg."""
@@ -60,13 +61,19 @@ def _issue_token_pair(
     except (TypeError, ValueError):
         signature = None
     if signature and "db_session" in signature.parameters:
-        return issue_method(
-            db_session=db_session,
-            user_id=user_id,
-            email=email,
-            scopes=scopes,
-        )
-    return issue_method(user_id=user_id, email=email, scopes=scopes)
+        kwargs: dict[str, object] = {
+            "db_session": db_session,
+            "user_id": user_id,
+            "email": email,
+            "scopes": scopes,
+        }
+        if role is not None and "role" in signature.parameters:
+            kwargs["role"] = role
+        return issue_method(**kwargs)
+    kwargs: dict[str, object] = {"user_id": user_id, "email": email, "scopes": scopes}
+    if signature and role is not None and "role" in signature.parameters:
+        kwargs["role"] = role
+    return issue_method(**kwargs)
 
 
 @router.post("/auth/login", response_model=TokenPairResponse)
@@ -106,6 +113,7 @@ async def login(
         db_session=db_session,
         user_id=str(user.id),
         email=user.email,
+        role=getattr(user, "role", "user"),
         scopes=[],
     )
     token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
@@ -114,6 +122,7 @@ async def login(
             db_session=db_session,
             user_id=user.id,
             email=user.email,
+            role=getattr(user, "role", "user"),
             scopes=[],
             raw_refresh_token=token_pair.refresh_token,
         )
@@ -180,6 +189,7 @@ async def refresh_token(
         async def _issue_pair(
             user_id: str,
             email: str | None = None,
+            role: str | None = None,
             scopes: list[str] | None = None,
         ):
             issued = _issue_token_pair(
@@ -187,6 +197,7 @@ async def refresh_token(
                 db_session=db_session,
                 user_id=user_id,
                 email=email,
+                role=role,
                 scopes=scopes,
             )
             return await issued if inspect.isawaitable(issued) else issued

@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from app.models.user import User
-from app.services.user_service import UserService
+from app.services.user_service import UserService, UserServiceError
 
 
 @dataclass
@@ -42,6 +42,7 @@ def _build_user(password_hash: str | None) -> User:
         email="user@example.com",
         password_hash=password_hash,
         is_active=True,
+        role="user",
         created_at=now,
         updated_at=now,
         deleted_at=None,
@@ -121,3 +122,35 @@ def test_hash_password_and_verify_round_trip() -> None:
     assert (
         service.verify_password(password="not-the-password", password_hash=password_hash) is False
     )
+
+
+@pytest.mark.asyncio
+async def test_update_role_requires_admin_actor() -> None:
+    """Role updates are forbidden for non-admin actors."""
+    service = UserService()
+    with pytest.raises(UserServiceError) as exc_info:
+        await service.update_role(
+            db_session=_FakeSession(user=None),  # type: ignore[arg-type]
+            actor_role="user",
+            actor_id=str(uuid4()),
+            user_id=uuid4(),
+            new_role="admin",
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.code == "insufficient_role"
+
+
+@pytest.mark.asyncio
+async def test_delete_user_requires_admin_actor() -> None:
+    """User deletion is forbidden for non-admin actors."""
+    service = UserService()
+    with pytest.raises(UserServiceError) as exc_info:
+        await service.delete_user(
+            db_session=_FakeSession(user=None),  # type: ignore[arg-type]
+            actor_role="user",
+            user_id=uuid4(),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.code == "insufficient_role"

@@ -45,7 +45,11 @@ def _generate_signing_material(kid: str) -> tuple[str, dict[str, str]]:
 
 
 def _build_token(
-    private_pem: str, kid: str, email: str = "user@example.com", include_jti: bool = True
+    private_pem: str,
+    kid: str,
+    email: str = "user@example.com",
+    include_jti: bool = True,
+    role: str = "user",
 ) -> str:
     """Build RS256 JWT for middleware tests."""
     now = datetime.now(UTC)
@@ -55,6 +59,7 @@ def _build_token(
         "sub": "user-1",
         "type": "access",
         "email": email,
+        "role": role,
         "scopes": ["svc:read"],
     }
     if include_jti:
@@ -98,6 +103,7 @@ async def test_jwt_middleware_verifies_and_caches_jwks() -> None:
     assert first.status_code == 200
     assert second.status_code == 200
     assert first.json()["user"]["type"] == "user"
+    assert first.json()["user"]["role"] == "user"
     assert jwks_calls == 1
 
 
@@ -168,6 +174,49 @@ async def test_jwt_middleware_rejects_missing_required_claim() -> None:
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
         response = await client.get("/protected", headers={"authorization": f"Bearer {token}"})
+
+    await auth_http_client.aclose()
+    assert response.status_code == 401
+    assert response.json()["code"] == "invalid_token"
+
+
+@pytest.mark.asyncio
+async def test_jwt_middleware_rejects_missing_role_claim() -> None:
+    """JWT middleware rejects tokens without role claim."""
+    private_pem, jwk = _generate_signing_material("kid-1")
+    token = _build_token(private_pem, kid="kid-1")
+    payload = jwt.get_unverified_claims(token)
+    payload.pop("role", None)
+    token_without_role = jwt.encode(
+        payload,
+        private_pem,
+        algorithm="RS256",
+        headers={"kid": "kid-1"},
+    )
+
+    async def auth_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/jwks.json":
+            return httpx.Response(status_code=200, json={"keys": [jwk]})
+        return httpx.Response(status_code=404, json={"detail": "not found"})
+
+    app = FastAPI()
+    transport = httpx.MockTransport(auth_handler)
+    auth_http_client = httpx.AsyncClient(base_url="https://auth.local", transport=transport)
+    auth_client = AuthClient(base_url="https://auth.local", http_client=auth_http_client)
+    app.add_middleware(
+        JWTAuthMiddleware, auth_base_url="https://auth.local", auth_client=auth_client
+    )
+
+    @app.get("/protected")
+    async def protected(request: Request) -> dict[str, object]:
+        return {"user": request.state.user}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            "/protected", headers={"authorization": f"Bearer {token_without_role}"}
+        )
 
     await auth_http_client.aclose()
     assert response.status_code == 401

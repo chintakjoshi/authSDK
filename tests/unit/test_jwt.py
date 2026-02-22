@@ -34,7 +34,12 @@ def jwt_service() -> JWTService:
 
 def test_issue_and_verify_access_token(jwt_service: JWTService) -> None:
     """Issued access token includes required claims and verifies successfully."""
-    token = jwt_service.issue_token(subject="user-123", token_type="access", expires_in_seconds=60)
+    token = jwt_service.issue_token(
+        subject="user-123",
+        token_type="access",
+        expires_in_seconds=60,
+        additional_claims={"role": "admin"},
+    )
     payload = jwt_service.verify_token(token, expected_type="access")
 
     assert payload["sub"] == "user-123"
@@ -42,6 +47,7 @@ def test_issue_and_verify_access_token(jwt_service: JWTService) -> None:
     assert isinstance(payload["jti"], str)
     assert isinstance(payload["iat"], int)
     assert isinstance(payload["exp"], int)
+    assert payload["role"] == "admin"
     assert payload["exp"] > int(datetime.now(UTC).timestamp())
 
 

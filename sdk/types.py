@@ -24,6 +24,7 @@ class UserIdentity(TypedDict):
     type: Literal["user"]
     user_id: str
     email: str
+    role: Literal["admin", "user", "service"]
     scopes: list[str]
 
 
