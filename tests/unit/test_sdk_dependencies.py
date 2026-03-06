@@ -167,9 +167,7 @@ async def test_require_action_token_sets_headers_when_missing() -> None:
         "role": "user",
         "scopes": [],
     }
-    dependency = Depends(
-        require_action_token("erase_account", auth_base_url="https://auth.local")
-    )
+    dependency = Depends(require_action_token("erase_account", auth_base_url="https://auth.local"))
 
     @app.post("/dangerous")
     async def dangerous(user=dependency):  # type: ignore[no-untyped-def]
