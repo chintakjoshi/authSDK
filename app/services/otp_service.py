@@ -377,7 +377,9 @@ class OTPService:
             code=code,
             expires_in_seconds=self._otp_ttl_seconds,
         )
-        return ActionOTPRequestResult(user_id=user_id, action=action, expires_in=self._otp_ttl_seconds)
+        return ActionOTPRequestResult(
+            user_id=user_id, action=action, expires_in=self._otp_ttl_seconds
+        )
 
     async def verify_action_code(
         self,
@@ -394,7 +396,9 @@ class OTPService:
 
         stored_action = otp_payload.get("action")
         if stored_action != action:
-            raise OTPServiceError("OTP action mismatch.", "otp_action_mismatch", 401, user_id=user_id)
+            raise OTPServiceError(
+                "OTP action mismatch.", "otp_action_mismatch", 401, user_id=user_id
+            )
 
         attempt_count = await self._increment_hash_counter(key, "attempt_count")
         if attempt_count > self._otp_max_attempts:
@@ -429,7 +433,9 @@ class OTPService:
             signing_kid=active_key.kid,
         )
         await db_session.commit()
-        return ActionOTPVerificationResult(user_id=user_id, action=action, action_token=action_token)
+        return ActionOTPVerificationResult(
+            user_id=user_id, action=action, action_token=action_token
+        )
 
     async def enable_email_otp(
         self,
