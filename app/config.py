@@ -105,6 +105,10 @@ class EmailSettings(BaseModel):
     mailhog_port: int = Field(default=1025, ge=1, le=65535)
     email_from: str = "auth@localhost"
     email_verify_ttl_seconds: int = Field(default=86400, ge=1)
+    otp_code_length: int = Field(default=6, ge=4, le=12)
+    otp_ttl_seconds: int = Field(default=600, ge=1)
+    otp_max_attempts: int = Field(default=5, ge=1)
+    action_token_ttl_seconds: int = Field(default=300, ge=1)
 
 
 class Settings(BaseSettings):

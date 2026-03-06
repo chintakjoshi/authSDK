@@ -1,0 +1,372 @@
+"""Email OTP routes for login MFA and sensitive action verification."""
+
+from __future__ import annotations
+
+import hmac
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.dependencies import get_database_session
+from app.schemas.otp import (
+    OTPEnrollmentResponse,
+    OTPMessageSentResponse,
+    RequestActionOTPRequest,
+    RequestActionOTPResponse,
+    ResendLoginOTPRequest,
+    VerifyActionOTPRequest,
+    VerifyActionOTPResponse,
+    VerifyLoginOTPRequest,
+)
+from app.schemas.token import TokenPairResponse
+from app.services.audit_service import AuditService, get_audit_service
+from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
+
+router = APIRouter(tags=["otp"])
+
+
+def _error_response(
+    status_code: int,
+    detail: str,
+    code: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
+    """Build standardized API error response payload."""
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": detail, "code": code},
+        headers=headers,
+    )
+
+
+def _extract_bearer_token(request: Request) -> str | None:
+    """Extract bearer token from Authorization header."""
+    authorization = request.headers.get("authorization", "").strip()
+    if not authorization:
+        return None
+    scheme, _, token = authorization.partition(" ")
+    if not hmac.compare_digest(scheme.lower(), "bearer"):
+        return None
+    stripped = token.strip()
+    return stripped or None
+
+
+def _extract_action_token(request: Request) -> str | None:
+    """Extract action token from X-Action-Token header."""
+    token = request.headers.get("x-action-token", "").strip()
+    return token or None
+
+
+async def _record_failure_events(
+    *,
+    audit_service: AuditService,
+    db_session: AsyncSession,
+    request: Request,
+    actor_id: str | None,
+    events: tuple[str, ...],
+    metadata: dict[str, object] | None = None,
+    failure_reason: str | None = None,
+) -> None:
+    """Persist OTP-related audit failures derived from service exceptions."""
+    for event_type in events:
+        await audit_service.record(
+            db=db_session,
+            event_type=event_type,
+            actor_type="user",
+            success=False,
+            request=request,
+            actor_id=actor_id,
+            failure_reason=failure_reason,
+            metadata=metadata,
+        )
+
+
+@router.post("/auth/otp/verify/login", response_model=TokenPairResponse)
+async def verify_login_otp(
+    payload: VerifyLoginOTPRequest,
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    otp_service: Annotated[OTPService, Depends(get_otp_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
+) -> TokenPairResponse | JSONResponse:
+    """Complete password login after email OTP verification."""
+    try:
+        result = await otp_service.verify_login_code(
+            db_session=db_session,
+            challenge_token=payload.challenge_token,
+            code=payload.code,
+        )
+    except OTPServiceError as exc:
+        await _record_failure_events(
+            audit_service=audit_service,
+            db_session=db_session,
+            request=request,
+            actor_id=exc.user_id,
+            events=exc.audit_events,
+            metadata={"context": "login"},
+            failure_reason=exc.code,
+        )
+        return _error_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            headers=exc.headers,
+        )
+
+    await audit_service.record(
+        db=db_session,
+        event_type="otp.verified",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=result.user_id,
+        metadata={"context": "login"},
+    )
+    await audit_service.record(
+        db=db_session,
+        event_type="user.login.success",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=result.user_id,
+        metadata={"provider": "password"},
+    )
+    await audit_service.record(
+        db=db_session,
+        event_type="session.created",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=result.user_id,
+        target_id=str(result.session_id),
+        target_type="session",
+        metadata={"provider": "password"},
+    )
+    await audit_service.record(
+        db=db_session,
+        event_type="token.issued",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=result.user_id,
+        metadata={"provider": "password", "token_kind": "access_refresh_pair"},
+    )
+    return TokenPairResponse(
+        access_token=result.token_pair.access_token,
+        refresh_token=result.token_pair.refresh_token,
+    )
+
+
+@router.post("/auth/otp/resend/login", response_model=OTPMessageSentResponse)
+async def resend_login_otp(
+    payload: ResendLoginOTPRequest,
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    otp_service: Annotated[OTPService, Depends(get_otp_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
+) -> OTPMessageSentResponse | JSONResponse:
+    """Resend a login OTP for an active challenge token."""
+    try:
+        user_id = await otp_service.resend_login_code(
+            db_session=db_session,
+            challenge_token=payload.challenge_token,
+        )
+    except OTPServiceError as exc:
+        return _error_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            headers=exc.headers,
+        )
+
+    await audit_service.record(
+        db=db_session,
+        event_type="otp.sent",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=user_id,
+        metadata={"context": "login"},
+    )
+    return OTPMessageSentResponse(sent=True)
+
+
+@router.post("/auth/otp/request/action", response_model=RequestActionOTPResponse)
+async def request_action_otp(
+    payload: RequestActionOTPRequest,
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    otp_service: Annotated[OTPService, Depends(get_otp_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
+) -> RequestActionOTPResponse | JSONResponse:
+    """Send an OTP for a sensitive authenticated action."""
+    access_token = _extract_bearer_token(request)
+    if access_token is None:
+        return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
+
+    try:
+        claims = await otp_service.validate_access_token(db_session=db_session, token=access_token)
+        user_id = str(claims.get("sub", "")).strip()
+        if not user_id:
+            return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
+        result = await otp_service.request_action_code(
+            db_session=db_session,
+            user_id=user_id,
+            action=payload.action,
+        )
+    except OTPServiceError as exc:
+        return _error_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            headers=exc.headers,
+        )
+
+    await audit_service.record(
+        db=db_session,
+        event_type="otp.sent",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=result.user_id,
+        metadata={"context": "action", "action": result.action},
+    )
+    return RequestActionOTPResponse(sent=True, action=result.action, expires_in=result.expires_in)
+
+
+@router.post("/auth/otp/verify/action", response_model=VerifyActionOTPResponse)
+async def verify_action_otp(
+    payload: VerifyActionOTPRequest,
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    otp_service: Annotated[OTPService, Depends(get_otp_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
+) -> VerifyActionOTPResponse | JSONResponse:
+    """Verify an action OTP and mint an action token."""
+    access_token = _extract_bearer_token(request)
+    if access_token is None:
+        return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
+
+    try:
+        claims = await otp_service.validate_access_token(db_session=db_session, token=access_token)
+        user_id = str(claims.get("sub", "")).strip()
+        if not user_id:
+            return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
+        result = await otp_service.verify_action_code(
+            db_session=db_session,
+            user_id=user_id,
+            code=payload.code,
+            action=payload.action,
+        )
+    except OTPServiceError as exc:
+        await _record_failure_events(
+            audit_service=audit_service,
+            db_session=db_session,
+            request=request,
+            actor_id=exc.user_id,
+            events=exc.audit_events,
+            metadata={"context": "action", "action": payload.action},
+            failure_reason=exc.code,
+        )
+        return _error_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            headers=exc.headers,
+        )
+
+    await audit_service.record(
+        db=db_session,
+        event_type="otp.verified",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=result.user_id,
+        metadata={"context": "action", "action": result.action},
+    )
+    return VerifyActionOTPResponse(action_token=result.action_token)
+
+
+@router.post("/auth/otp/enable", response_model=OTPEnrollmentResponse)
+async def enable_email_otp(
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    otp_service: Annotated[OTPService, Depends(get_otp_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
+) -> OTPEnrollmentResponse | JSONResponse:
+    """Enable login OTP for the authenticated user."""
+    access_token = _extract_bearer_token(request)
+    if access_token is None:
+        return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
+
+    try:
+        claims = await otp_service.validate_access_token(db_session=db_session, token=access_token)
+        user_id = str(claims.get("sub", "")).strip()
+        if not user_id:
+            return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
+        user = await otp_service.enable_email_otp(
+            db_session=db_session,
+            user_id=user_id,
+            action_token=_extract_action_token(request),
+        )
+    except OTPServiceError as exc:
+        return _error_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            headers=exc.headers,
+        )
+
+    await audit_service.record(
+        db=db_session,
+        event_type="otp.enabled",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=str(user.id),
+    )
+    return OTPEnrollmentResponse(email_otp_enabled=user.email_otp_enabled)
+
+
+@router.post("/auth/otp/disable", response_model=OTPEnrollmentResponse)
+async def disable_email_otp(
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    otp_service: Annotated[OTPService, Depends(get_otp_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
+) -> OTPEnrollmentResponse | JSONResponse:
+    """Disable login OTP for the authenticated user."""
+    access_token = _extract_bearer_token(request)
+    if access_token is None:
+        return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
+
+    try:
+        claims = await otp_service.validate_access_token(db_session=db_session, token=access_token)
+        user_id = str(claims.get("sub", "")).strip()
+        if not user_id:
+            return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
+        user = await otp_service.disable_email_otp(
+            db_session=db_session,
+            user_id=user_id,
+            action_token=_extract_action_token(request),
+        )
+    except OTPServiceError as exc:
+        return _error_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            headers=exc.headers,
+        )
+
+    await audit_service.record(
+        db=db_session,
+        event_type="otp.disabled",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=str(user.id),
+    )
+    return OTPEnrollmentResponse(email_otp_enabled=user.email_otp_enabled)

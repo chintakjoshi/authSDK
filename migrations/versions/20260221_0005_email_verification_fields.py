@@ -18,7 +18,9 @@ def upgrade() -> None:
         "users",
         sa.Column("email_verified", sa.Boolean(), nullable=False, server_default=sa.false()),
     )
-    op.add_column("users", sa.Column("email_verify_token_hash", sa.String(length=64), nullable=True))
+    op.add_column(
+        "users", sa.Column("email_verify_token_hash", sa.String(length=64), nullable=True)
+    )
     op.add_column(
         "users",
         sa.Column("email_verify_token_expires", sa.DateTime(timezone=True), nullable=True),

@@ -53,6 +53,12 @@ class User(Base, TimestampTenantMixin):
         DateTime(timezone=True),
         nullable=True,
     )
+    email_otp_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
     role: Mapped[str] = mapped_column(
         String(16), nullable=False, default="user", server_default="user"
     )

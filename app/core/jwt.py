@@ -17,7 +17,7 @@ from jose.exceptions import ExpiredSignatureError, JWTError
 
 from app.config import get_settings
 
-TokenType = Literal["access", "refresh", "email_verify"]
+TokenType = Literal["access", "refresh", "email_verify", "otp_challenge", "action_token"]
 JWT_ALGORITHM = "RS256"
 
 
@@ -76,7 +76,10 @@ class JWTService:
         public_keys_by_kid: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Verify token signature and required claims."""
-        header = jwt.get_unverified_header(token)
+        try:
+            header = jwt.get_unverified_header(token)
+        except JWTError as exc:
+            raise TokenValidationError("Invalid token.", "invalid_token") from exc
         algorithm = str(header.get("alg", ""))
         if not hmac.compare_digest(algorithm, JWT_ALGORITHM):
             raise TokenValidationError("Invalid token algorithm.", "invalid_token")
@@ -157,6 +160,8 @@ class JWTService:
             hmac.compare_digest(token_type, "access")
             or hmac.compare_digest(token_type, "refresh")
             or hmac.compare_digest(token_type, "email_verify")
+            or hmac.compare_digest(token_type, "otp_challenge")
+            or hmac.compare_digest(token_type, "action_token")
         )
 
     @staticmethod
