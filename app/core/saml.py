@@ -20,6 +20,7 @@ class SamlAssertion:
 
     provider_user_id: str
     email: str
+    email_verified: bool = False
 
 
 class SamlProtocolError(Exception):
@@ -63,10 +64,16 @@ class SamlCore:
             raise SamlProtocolError("SAML assertion invalid.", "saml_assertion_invalid", 401)
 
         provider_user_id = str(auth.get_nameid() or "").strip()
-        email = self._extract_email(auth.get_attributes(), provider_user_id)
+        attributes = auth.get_attributes()
+        email = self._extract_email(attributes, provider_user_id)
+        email_verified = self._extract_email_verified(attributes)
         if not provider_user_id or not email:
             raise SamlProtocolError("SAML assertion invalid.", "saml_assertion_invalid", 401)
-        return SamlAssertion(provider_user_id=provider_user_id, email=email)
+        return SamlAssertion(
+            provider_user_id=provider_user_id,
+            email=email,
+            email_verified=email_verified,
+        )
 
     def metadata_xml(self) -> str:
         """Generate SP metadata from current SAML configuration."""
@@ -123,6 +130,26 @@ class SamlCore:
         if "@" in name_id:
             return name_id
         return ""
+
+    @staticmethod
+    def _extract_email_verified(attributes: dict[str, list[str]]) -> bool:
+        """Extract boolean email-verification state from known SAML attributes."""
+        candidate_keys = (
+            "email_verified",
+            "emailVerified",
+            "EmailVerified",
+            "verified_email",
+            "verifiedEmail",
+        )
+        truthy_values = {"true", "1", "yes"}
+        for key in candidate_keys:
+            values = attributes.get(key, [])
+            if not values:
+                continue
+            candidate = str(values[0]).strip().lower()
+            if candidate in truthy_values:
+                return True
+        return False
 
 
 def build_saml_request_data(

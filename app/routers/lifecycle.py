@@ -100,6 +100,15 @@ async def verify_email(
     try:
         user = await lifecycle_service.verify_email_token(db_session=db_session, token=token)
     except LifecycleServiceError as exc:
+        await audit_service.record(
+            db=db_session,
+            event_type="user.email.verified",
+            actor_type="user",
+            success=False,
+            request=request,
+            failure_reason=exc.code,
+            metadata={"operation": "verify"},
+        )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
 
     await audit_service.record(
@@ -120,12 +129,23 @@ async def resend_verification_email(
     request: Request,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     lifecycle_service: Annotated[LifecycleService, Depends(get_lifecycle_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> ResendVerifyEmailResponse | JSONResponse:
     """Resend email verification link for authenticated user."""
     access_token = _extract_bearer_token(request)
     if access_token is None:
+        await audit_service.record(
+            db=db_session,
+            event_type="user.email.verification_resent",
+            actor_type="user",
+            success=False,
+            request=request,
+            failure_reason="invalid_token",
+            metadata={"operation": "resend"},
+        )
         return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
 
+    user_id: str | None = None
     try:
         claims = await lifecycle_service.validate_access_token(
             db_session=db_session,
@@ -133,9 +153,41 @@ async def resend_verification_email(
         )
         user_id = str(claims.get("sub", "")).strip()
         if not user_id:
+            await audit_service.record(
+                db=db_session,
+                event_type="user.email.verification_resent",
+                actor_type="user",
+                success=False,
+                request=request,
+                failure_reason="invalid_token",
+                metadata={"operation": "resend"},
+            )
             return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
         await lifecycle_service.resend_verification_email(db_session=db_session, user_id=user_id)
     except LifecycleServiceError as exc:
+        await audit_service.record(
+            db=db_session,
+            event_type="user.email.verification_resent",
+            actor_type="user",
+            success=False,
+            request=request,
+            actor_id=user_id,
+            target_id=user_id,
+            target_type="user",
+            failure_reason=exc.code,
+            metadata={"operation": "resend"},
+        )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
 
+    await audit_service.record(
+        db=db_session,
+        event_type="user.email.verification_resent",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=user_id,
+        target_id=user_id,
+        target_type="user",
+        metadata={"operation": "resend"},
+    )
     return ResendVerifyEmailResponse(sent=True)

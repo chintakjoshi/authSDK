@@ -43,15 +43,6 @@ async def google_login(
             metadata={"provider": "google", "phase": "start"},
         )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
-
-    await audit_service.record(
-        db=db_session,
-        event_type="user.login.success",
-        actor_type="user",
-        success=True,
-        request=request,
-        metadata={"provider": "google", "phase": "start"},
-    )
     return RedirectResponse(url=authorization_url, status_code=302)
 
 
