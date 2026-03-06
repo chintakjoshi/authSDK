@@ -18,6 +18,7 @@ from app.dependencies import get_database_session
 from app.routers.auth import get_user_service, router
 from app.services.api_key_service import APIKeyIntrospectionResult, get_api_key_service
 from app.services.audit_service import get_audit_service
+from app.services.otp_service import get_otp_service
 from app.services.token_service import TokenPair, get_token_service
 
 
@@ -102,6 +103,15 @@ class _SessionServiceStub:
         del db_session, raw_refresh_token, access_jti, access_expiration_epoch
 
 
+class _OTPServiceStub:
+    """OTP service stub used to satisfy auth router dependency injection."""
+
+    async def start_login_challenge(self, db_session: Any, user: Any) -> Any:
+        """This test should never hit the OTP login branch."""
+        del db_session, user
+        raise AssertionError("OTP branch should not run in this test")
+
+
 class _JWTServiceStub:
     """JWT service stub for logout token verification path."""
 
@@ -178,6 +188,7 @@ async def test_auth_routes_emit_required_step13_audit_events() -> None:
     app.dependency_overrides[get_jwt_service] = _JWTServiceStub
     app.dependency_overrides[get_signing_key_service] = _SigningKeyServiceStub
     app.dependency_overrides[get_api_key_service] = _APIKeyServiceStub
+    app.dependency_overrides[get_otp_service] = _OTPServiceStub
     app.dependency_overrides[get_audit_service] = lambda: audit_stub
 
     async with AsyncClient(

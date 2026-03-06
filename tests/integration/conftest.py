@@ -53,6 +53,7 @@ def _clear_dependency_caches() -> None:
     from app.services.api_key_service import get_api_key_service
     from app.services.lifecycle_service import get_lifecycle_service, get_verification_email_sender
     from app.services.oauth_service import get_oauth_service
+    from app.services.otp_service import get_otp_email_sender, get_otp_service
     from app.services.saml_service import get_saml_service
     from app.services.token_service import get_token_service
 
@@ -70,6 +71,8 @@ def _clear_dependency_caches() -> None:
     get_api_key_service.cache_clear()
     get_verification_email_sender.cache_clear()
     get_lifecycle_service.cache_clear()
+    get_otp_email_sender.cache_clear()
+    get_otp_service.cache_clear()
     get_oauth_service.cache_clear()
     get_saml_service.cache_clear()
 

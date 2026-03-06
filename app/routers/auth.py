@@ -14,10 +14,12 @@ from app.core.sessions import SessionService, SessionStateError, get_session_ser
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
 from app.dependencies import get_database_session
 from app.schemas.api_key import APIKeyIntrospectRequest
+from app.schemas.otp import LoginOTPChallengeResponse
 from app.schemas.token import LogoutRequest, RefreshTokenRequest, TokenPairResponse
 from app.schemas.user import LoginRequest
 from app.services.api_key_service import APIKeyService, get_api_key_service
 from app.services.audit_service import AuditService, get_audit_service
+from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
 from app.services.token_service import TokenService, get_token_service
 from app.services.user_service import UserService
 
@@ -29,9 +31,19 @@ def get_user_service() -> UserService:
     return UserService()
 
 
-def _error_response(status_code: int, detail: str, code: str) -> JSONResponse:
+def _error_response(
+    status_code: int,
+    detail: str,
+    code: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
     """Build standardized API error response payload."""
-    return JSONResponse(status_code=status_code, content={"detail": detail, "code": code})
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": detail, "code": code},
+        headers=headers,
+    )
 
 
 def _extract_bearer_token(request: Request) -> str | None:
@@ -81,7 +93,7 @@ def _issue_token_pair(
     return issue_method(**kwargs)
 
 
-@router.post("/auth/login", response_model=TokenPairResponse)
+@router.post("/auth/login", response_model=TokenPairResponse | LoginOTPChallengeResponse)
 async def login(
     payload: LoginRequest,
     request: Request,
@@ -89,8 +101,9 @@ async def login(
     user_service: Annotated[UserService, Depends(get_user_service)],
     token_service: Annotated[TokenService, Depends(get_token_service)],
     session_service: Annotated[SessionService, Depends(get_session_service)],
+    otp_service: Annotated[OTPService, Depends(get_otp_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
-) -> TokenPairResponse | JSONResponse:
+) -> TokenPairResponse | LoginOTPChallengeResponse | JSONResponse:
     """Authenticate email/password credentials and issue JWT pair."""
     user = await user_service.authenticate_user(
         db_session=db_session,
@@ -111,6 +124,43 @@ async def login(
             status_code=401,
             detail="Invalid email or password.",
             code="invalid_credentials",
+        )
+
+    if bool(getattr(user, "email_verified", False)) and bool(
+        getattr(user, "email_otp_enabled", False)
+    ):
+        try:
+            challenge = await otp_service.start_login_challenge(db_session=db_session, user=user)
+        except OTPServiceError as exc:
+            return _error_response(
+                status_code=exc.status_code,
+                detail=exc.detail,
+                code=exc.code,
+                headers=exc.headers,
+            )
+
+        await audit_service.record(
+            db=db_session,
+            event_type="user.login.otp_required",
+            actor_type="user",
+            success=True,
+            request=request,
+            actor_id=challenge.user_id,
+            metadata={"provider": "password"},
+        )
+        await audit_service.record(
+            db=db_session,
+            event_type="otp.sent",
+            actor_type="user",
+            success=True,
+            request=request,
+            actor_id=challenge.user_id,
+            metadata={"context": "login"},
+        )
+        return LoginOTPChallengeResponse(
+            otp_required=True,
+            challenge_token=challenge.challenge_token,
+            masked_email=challenge.masked_email,
         )
 
     issued_pair = _issue_token_pair(

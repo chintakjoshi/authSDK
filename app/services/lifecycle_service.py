@@ -137,7 +137,9 @@ class LifecycleService:
             await db_session.commit()
         except IntegrityError as exc:
             await db_session.rollback()
-            raise LifecycleServiceError("Email already registered.", "invalid_credentials", 409) from exc
+            raise LifecycleServiceError(
+                "Email already registered.", "invalid_credentials", 409
+            ) from exc
         except Exception:
             await db_session.rollback()
             raise

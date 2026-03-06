@@ -66,15 +66,23 @@ Behavior:
 - JWT/user identity: `{ "type": "user", "user_id": str, "email": str, "email_verified": bool, "role": "admin"|"user"|"service", "scopes": list[str] }`
 - API key identity: `{ "type": "api_key", "key_id": str, "service": str, "scopes": list[str], "email": None }`
 
-## Role Dependency
+## Dependencies
 
 ```python
 from fastapi import Depends, FastAPI
-from sdk import require_role
+from sdk import require_action_token, require_role
 
 app = FastAPI()
 
 @app.get("/admin-only")
 async def admin_only(user=Depends(require_role("admin"))):
+    return {"user_id": user["user_id"]}
+
+@app.post("/dangerous")
+async def dangerous_op(
+    user=Depends(
+        require_action_token("erase_account", auth_base_url="https://auth.example.com")
+    )
+):
     return {"user_id": user["user_id"]}
 ```
