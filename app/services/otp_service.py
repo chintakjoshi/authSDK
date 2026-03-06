@@ -187,13 +187,15 @@ class OTPService:
         """Validate an access token for OTP-protected endpoints."""
         verification_keys = await self._signing_key_service.get_verification_public_keys(db_session)
         try:
-            return self._jwt_service.verify_token(
+            claims = self._jwt_service.verify_token(
                 token,
                 expected_type="access",
                 public_keys_by_kid=verification_keys,
             )
         except TokenValidationError as exc:
             raise OTPServiceError("Invalid token.", "invalid_token", 401) from exc
+        await self._ensure_access_token_not_revoked(claims)
+        return claims
 
     async def start_login_challenge(
         self,
@@ -571,6 +573,20 @@ class OTPService:
                 headers={"Retry-After": str(retry_after)},
                 user_id=user_id,
             )
+
+    async def _ensure_access_token_not_revoked(self, claims: dict[str, object]) -> None:
+        """Reject access tokens that have already been blocklisted."""
+        jti = str(claims.get("jti", "")).strip()
+        if not jti:
+            raise OTPServiceError("Invalid token.", "invalid_token", 401)
+
+        try:
+            blocklisted = await self._redis.get(f"blocklist:jti:{jti}")
+        except RedisError as exc:
+            raise OTPServiceError("Session backend unavailable.", "session_expired", 503) from exc
+
+        if blocklisted is not None:
+            raise OTPServiceError("Invalid token.", "invalid_token", 401)
 
     async def _increment_failed_counter(self, user_id: str) -> bool:
         """Increment the cumulative OTP failure counter and set issuance block if needed."""

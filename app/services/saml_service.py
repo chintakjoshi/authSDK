@@ -93,6 +93,7 @@ class SamlService:
             db_session=db_session,
             provider_user_id=assertion.provider_user_id,
             email=assertion.email,
+            email_verified=assertion.email_verified,
         )
         issued_pair = self._issue_token_pair(
             db_session=db_session,
@@ -126,6 +127,7 @@ class SamlService:
         db_session: AsyncSession,
         provider_user_id: str,
         email: str,
+        email_verified: bool,
     ) -> User:
         """Upsert SAML identity first, then resolve/create canonical user."""
         identity_stmt = select(UserIdentity).where(
@@ -139,7 +141,13 @@ class SamlService:
         if identity is None:
             user = await self._get_user_by_email(db_session=db_session, email=email)
             if user is None:
-                user = User(email=email, password_hash=None, is_active=True, role="user")
+                user = User(
+                    email=email,
+                    password_hash=None,
+                    is_active=True,
+                    role="user",
+                    email_verified=email_verified,
+                )
                 db_session.add(user)
                 await db_session.flush()
             identity = UserIdentity(
@@ -154,13 +162,21 @@ class SamlService:
 
         user = await self._get_user_by_id(db_session=db_session, user_id=identity.user_id)
         if user is None:
-            user = User(email=email, password_hash=None, is_active=True, role="user")
+            user = User(
+                email=email,
+                password_hash=None,
+                is_active=True,
+                role="user",
+                email_verified=email_verified,
+            )
             db_session.add(user)
             await db_session.flush()
             identity.user_id = user.id
 
         if user.email.lower() != email.lower():
             user.email = email
+        if email_verified and not user.email_verified:
+            user.email_verified = True
         if identity.email != email:
             identity.email = email
         await db_session.flush()

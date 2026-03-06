@@ -201,6 +201,7 @@ class LifecycleService:
             )
         except TokenValidationError as exc:
             raise LifecycleServiceError("Invalid token.", "invalid_token", 401) from exc
+        await self._ensure_access_token_not_revoked(claims)
         return claims
 
     async def resend_verification_email(
@@ -303,6 +304,24 @@ class LifecycleService:
                 "rate_limited",
                 429,
             )
+
+    async def _ensure_access_token_not_revoked(self, claims: dict[str, object]) -> None:
+        """Reject access tokens that have been blocklisted on logout."""
+        jti = str(claims.get("jti", "")).strip()
+        if not jti:
+            raise LifecycleServiceError("Invalid token.", "invalid_token", 401)
+
+        try:
+            blocklisted = await self._redis.get(f"blocklist:jti:{jti}")
+        except RedisError as exc:
+            raise LifecycleServiceError(
+                "Session backend unavailable.",
+                "session_expired",
+                503,
+            ) from exc
+
+        if blocklisted is not None:
+            raise LifecycleServiceError("Invalid token.", "invalid_token", 401)
 
     @staticmethod
     def _hash_verification_token(token: str) -> str:
