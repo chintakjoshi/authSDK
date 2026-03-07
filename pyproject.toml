@@ -13,7 +13,7 @@ authors = [{ name = "Auth Service Team" }]
 dependencies = [
   "alembic==1.18.4",
   "asyncpg==0.31.0",
-  "authlib==1.6.8",
+  "authlib==1.6.9",
   "bcrypt==4.3.0",
   "cachetools==7.0.3",
   "fastapi==0.129.2",
