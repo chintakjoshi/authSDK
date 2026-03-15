@@ -23,6 +23,11 @@ from app.core.sessions import SessionService, get_redis_client, get_session_serv
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
 from app.models.user import User
 from app.schemas.otp import OTPAction
+from app.services.brute_force_service import (
+    BruteForceProtectionError,
+    BruteForceProtectionService,
+    get_brute_force_service,
+)
 from app.services.token_service import TokenPair, TokenService, get_token_service
 
 _OTP_FAILURE_TTL_SECONDS = 3600
@@ -131,6 +136,7 @@ class LoginOTPVerificationResult:
     user_id: str
     session_id: UUID
     token_pair: TokenPair
+    suspicious_login: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -160,6 +166,7 @@ class OTPService:
         signing_key_service: SigningKeyService,
         token_service: TokenService,
         session_service: SessionService,
+        brute_force_service: BruteForceProtectionService,
         redis_client: Redis,
         email_sender: OTPEmailSender,
         otp_code_length: int,
@@ -171,6 +178,7 @@ class OTPService:
         self._signing_key_service = signing_key_service
         self._token_service = token_service
         self._session_service = session_service
+        self._brute_force_service = brute_force_service
         self._redis = redis_client
         self._email_sender = email_sender
         self._otp_code_length = otp_code_length
@@ -242,12 +250,16 @@ class OTPService:
         db_session: AsyncSession,
         challenge_token: str,
         code: str,
+        *,
+        client_ip: str | None = None,
+        user_agent: str | None = None,
     ) -> LoginOTPVerificationResult:
         """Verify a login OTP and issue the real access/refresh token pair."""
         challenge_claims = await self._validate_challenge_token(db_session, challenge_token)
         user_id = str(challenge_claims.get("sub", "")).strip()
         if not user_id:
             raise OTPServiceError("Invalid token.", "invalid_token", 401)
+        await self._ensure_not_locked(user_id)
 
         key = self._login_otp_key(user_id)
         otp_payload = await self._get_hash(key)
@@ -257,6 +269,7 @@ class OTPService:
         attempt_count = await self._increment_hash_counter(key, "attempt_count")
         if attempt_count > self._otp_max_attempts:
             await self._delete_keys(key)
+            await self._apply_shared_failed_attempt(user_id)
             raise OTPServiceError(
                 "OTP attempts exceeded.",
                 "otp_max_attempts_exceeded",
@@ -266,6 +279,7 @@ class OTPService:
             )
 
         if not verify_otp(code.strip(), otp_payload["code_hash"]):
+            await self._apply_shared_failed_attempt(user_id)
             blocked_now = await self._increment_failed_counter(user_id)
             events = ("otp.failed", "otp.excessive_failures") if blocked_now else ("otp.failed",)
             raise OTPServiceError(
@@ -282,6 +296,11 @@ class OTPService:
         if user is None:
             raise OTPServiceError("Invalid token.", "invalid_token", 401)
 
+        suspicious_login = await self._record_successful_login(
+            user_id=str(user.id),
+            client_ip=client_ip,
+            user_agent=user_agent,
+        )
         token_pair = await self._token_service.issue_token_pair(
             db_session=db_session,
             user_id=str(user.id),
@@ -303,6 +322,7 @@ class OTPService:
             user_id=str(user.id),
             session_id=session_id,
             token_pair=token_pair,
+            suspicious_login=suspicious_login,
         )
 
     async def resend_login_code(
@@ -391,6 +411,7 @@ class OTPService:
         action: OTPAction,
     ) -> ActionOTPVerificationResult:
         """Verify action OTP and return a short-lived action token."""
+        await self._ensure_not_locked(user_id)
         key = self._action_otp_key(user_id)
         otp_payload = await self._get_hash(key)
         if not otp_payload or "code_hash" not in otp_payload:
@@ -405,6 +426,7 @@ class OTPService:
         attempt_count = await self._increment_hash_counter(key, "attempt_count")
         if attempt_count > self._otp_max_attempts:
             await self._delete_keys(key)
+            await self._apply_shared_failed_attempt(user_id)
             raise OTPServiceError(
                 "OTP attempts exceeded.",
                 "otp_max_attempts_exceeded",
@@ -414,6 +436,7 @@ class OTPService:
             )
 
         if not verify_otp(code.strip(), otp_payload["code_hash"]):
+            await self._apply_shared_failed_attempt(user_id)
             blocked_now = await self._increment_failed_counter(user_id)
             events = ("otp.failed", "otp.excessive_failures") if blocked_now else ("otp.failed",)
             raise OTPServiceError(
@@ -555,6 +578,68 @@ class OTPService:
         result = await db_session.execute(statement)
         return result.scalar_one_or_none()
 
+    async def _ensure_not_locked(self, user_id: str) -> None:
+        """Reject OTP verification attempts while account lockout is active."""
+        try:
+            await self._brute_force_service.ensure_not_locked(user_id)
+        except BruteForceProtectionError as exc:
+            raise OTPServiceError(
+                exc.detail,
+                exc.code,
+                exc.status_code,
+                headers=exc.headers,
+                user_id=user_id,
+                audit_events=exc.audit_events,
+            ) from exc
+
+    async def _apply_shared_failed_attempt(self, user_id: str) -> None:
+        """Increment shared failed-attempt counters for OTP verification failures."""
+        try:
+            decision = await self._brute_force_service.record_failed_otp_attempt(user_id)
+        except BruteForceProtectionError as exc:
+            raise OTPServiceError(
+                exc.detail,
+                exc.code,
+                exc.status_code,
+                headers=exc.headers,
+                user_id=user_id,
+                audit_events=exc.audit_events,
+            ) from exc
+
+        if decision.locked:
+            raise OTPServiceError(
+                "Account temporarily locked.",
+                "account_locked",
+                401,
+                headers={"Retry-After": str(decision.retry_after or 1)},
+                user_id=user_id,
+                audit_events=("otp.failed", "user.locked"),
+            )
+
+    async def _record_successful_login(
+        self,
+        user_id: str,
+        *,
+        client_ip: str | None,
+        user_agent: str | None,
+    ) -> dict[str, object] | None:
+        """Clear lockout state after a successful OTP-backed login."""
+        try:
+            result = await self._brute_force_service.record_successful_login(
+                user_id,
+                ip_address=client_ip,
+                user_agent=user_agent,
+            )
+        except BruteForceProtectionError as exc:
+            raise OTPServiceError(
+                exc.detail,
+                exc.code,
+                exc.status_code,
+                headers=exc.headers,
+                user_id=user_id,
+            ) from exc
+        return result.metadata if result.suspicious else None
+
     async def _ensure_issuance_not_blocked(self, user_id: str) -> None:
         """Reject OTP issuance while a temporary block is active."""
         key = self._issuance_block_key(user_id)
@@ -694,6 +779,7 @@ def get_otp_service() -> OTPService:
         signing_key_service=get_signing_key_service(),
         token_service=get_token_service(),
         session_service=get_session_service(),
+        brute_force_service=get_brute_force_service(),
         redis_client=get_redis_client(),
         email_sender=get_otp_email_sender(),
         otp_code_length=settings.email.otp_code_length,

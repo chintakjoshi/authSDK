@@ -55,6 +55,10 @@ class _SessionServiceStub:
     """Unused session-service dependency placeholder."""
 
 
+class _BruteForceServiceStub:
+    """Unused brute-force dependency placeholder."""
+
+
 class _EmailSenderStub:
     """Unused email-sender dependency placeholder."""
 
@@ -66,6 +70,7 @@ def _build_service(redis_client: _RedisStub) -> OTPService:
         signing_key_service=_SigningKeyServiceStub(),  # type: ignore[arg-type]
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]
         session_service=_SessionServiceStub(),  # type: ignore[arg-type]
+        brute_force_service=_BruteForceServiceStub(),  # type: ignore[arg-type]
         redis_client=redis_client,  # type: ignore[arg-type]
         email_sender=_EmailSenderStub(),  # type: ignore[arg-type]
         otp_code_length=6,

@@ -17,6 +17,7 @@ ErrorCode = Literal[
     "session_expired",
     "already_verified",
     "invalid_verify_token",
+    "account_locked",
     "otp_expired",
     "invalid_otp",
     "otp_max_attempts_exceeded",

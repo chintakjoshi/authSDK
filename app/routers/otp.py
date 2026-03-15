@@ -22,6 +22,7 @@ from app.schemas.otp import (
 )
 from app.schemas.token import TokenPairResponse
 from app.services.audit_service import AuditService, get_audit_service
+from app.services.brute_force_service import extract_client_ip, normalize_user_agent
 from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
 
 router = APIRouter(tags=["otp"])
@@ -98,6 +99,8 @@ async def verify_login_otp(
             db_session=db_session,
             challenge_token=payload.challenge_token,
             code=payload.code,
+            client_ip=extract_client_ip(request),
+            user_agent=normalize_user_agent(request.headers.get("user-agent")),
         )
     except OTPServiceError as exc:
         await _record_failure_events(
@@ -134,6 +137,16 @@ async def verify_login_otp(
         actor_id=result.user_id,
         metadata={"provider": "password"},
     )
+    if result.suspicious_login is not None:
+        await audit_service.record(
+            db=db_session,
+            event_type="user.login.suspicious",
+            actor_type="user",
+            success=True,
+            request=request,
+            actor_id=result.user_id,
+            metadata={"provider": "password", **result.suspicious_login},
+        )
     await audit_service.record(
         db=db_session,
         event_type="session.created",

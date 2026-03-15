@@ -51,6 +51,7 @@ def _clear_dependency_caches() -> None:
     from app.db.session import get_engine, get_session_factory
     from app.middleware.rate_limit import get_rate_limit_redis_client
     from app.services.api_key_service import get_api_key_service
+    from app.services.brute_force_service import get_brute_force_service
     from app.services.lifecycle_service import get_lifecycle_service, get_verification_email_sender
     from app.services.oauth_service import get_oauth_service
     from app.services.otp_service import get_otp_email_sender, get_otp_service
@@ -69,6 +70,7 @@ def _clear_dependency_caches() -> None:
     get_signing_key_service.cache_clear()
     get_token_service.cache_clear()
     get_api_key_service.cache_clear()
+    get_brute_force_service.cache_clear()
     get_verification_email_sender.cache_clear()
     get_lifecycle_service.cache_clear()
     get_otp_email_sender.cache_clear()
