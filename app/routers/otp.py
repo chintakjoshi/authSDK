@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Request
@@ -59,6 +60,14 @@ def _extract_action_token(request: Request) -> str | None:
     """Extract action token from X-Action-Token header."""
     token = request.headers.get("x-action-token", "").strip()
     return token or None
+
+
+def _auth_time_is_fresh(claims: dict[str, object], *, max_age_seconds: int = 300) -> bool:
+    """Return True when auth_time is recent enough for password step-up."""
+    auth_time = claims.get("auth_time")
+    if not isinstance(auth_time, int):
+        return False
+    return (time.time() - auth_time) <= max_age_seconds
 
 
 async def _record_failure_events(
@@ -320,10 +329,33 @@ async def enable_email_otp(
         user_id = str(claims.get("sub", "")).strip()
         if not user_id:
             return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
+        action = "enable_otp"
+        action_token_valid = await otp_service.validate_action_token_for_user(
+            db_session=db_session,
+            token=_extract_action_token(request),
+            expected_action=action,
+            user_id=user_id,
+        )
+        if not action_token_valid:
+            if bool(claims.get("email_otp_enabled", False)):
+                return _error_response(
+                    status_code=403,
+                    detail="OTP required.",
+                    code="otp_required",
+                    headers={"X-OTP-Required": "true", "X-OTP-Action": action},
+                )
+            if not _auth_time_is_fresh(claims):
+                return _error_response(
+                    status_code=403,
+                    detail="Re-authentication required.",
+                    code="reauth_required",
+                    headers={"X-Reauth-Required": "true"},
+                )
         user = await otp_service.enable_email_otp(
             db_session=db_session,
             user_id=user_id,
-            action_token=_extract_action_token(request),
+            action_token=None,
+            require_action_token=False,
         )
     except OTPServiceError as exc:
         return _error_response(
@@ -361,10 +393,33 @@ async def disable_email_otp(
         user_id = str(claims.get("sub", "")).strip()
         if not user_id:
             return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
+        action = "disable_otp"
+        action_token_valid = await otp_service.validate_action_token_for_user(
+            db_session=db_session,
+            token=_extract_action_token(request),
+            expected_action=action,
+            user_id=user_id,
+        )
+        if not action_token_valid:
+            if bool(claims.get("email_otp_enabled", False)):
+                return _error_response(
+                    status_code=403,
+                    detail="OTP required.",
+                    code="otp_required",
+                    headers={"X-OTP-Required": "true", "X-OTP-Action": action},
+                )
+            if not _auth_time_is_fresh(claims):
+                return _error_response(
+                    status_code=403,
+                    detail="Re-authentication required.",
+                    code="reauth_required",
+                    headers={"X-Reauth-Required": "true"},
+                )
         user = await otp_service.disable_email_otp(
             db_session=db_session,
             user_id=user_id,
-            action_token=_extract_action_token(request),
+            action_token=None,
+            require_action_token=False,
         )
     except OTPServiceError as exc:
         return _error_response(

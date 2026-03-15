@@ -307,6 +307,7 @@ class OTPService:
             email=user.email,
             role=user.role,
             email_verified=user.email_verified,
+            email_otp_enabled=user.email_otp_enabled,
             scopes=[],
         )
         session_id = await self._session_service.create_login_session(
@@ -315,7 +316,9 @@ class OTPService:
             email=user.email,
             role=user.role,
             email_verified=user.email_verified,
+            email_otp_enabled=user.email_otp_enabled,
             scopes=[],
+            raw_access_token=token_pair.access_token,
             raw_refresh_token=token_pair.refresh_token,
         )
         return LoginOTPVerificationResult(
@@ -462,22 +465,47 @@ class OTPService:
             user_id=user_id, action=action, action_token=action_token
         )
 
+    async def validate_action_token_for_user(
+        self,
+        db_session: AsyncSession,
+        *,
+        token: str | None,
+        expected_action: OTPAction,
+        user_id: str,
+    ) -> bool:
+        """Return True when a supplied action token is valid for the user/action pair."""
+        if not token or not token.strip():
+            return False
+        try:
+            await self._validate_action_token(
+                db_session=db_session,
+                token=token,
+                expected_action=expected_action,
+                user_id=user_id,
+            )
+        except OTPServiceError:
+            return False
+        return True
+
     async def enable_email_otp(
         self,
         db_session: AsyncSession,
         user_id: str,
         action_token: str | None,
+        *,
+        require_action_token: bool = True,
     ) -> User:
         """Enable login OTP for a verified user after action-token validation."""
         user = await self._get_user_by_id(db_session=db_session, user_id=user_id, for_update=True)
         if user is None:
             raise OTPServiceError("Invalid token.", "invalid_token", 401)
-        await self._validate_action_token(
-            db_session=db_session,
-            token=action_token,
-            expected_action="enable_otp",
-            user_id=user_id,
-        )
+        if require_action_token:
+            await self._validate_action_token(
+                db_session=db_session,
+                token=action_token,
+                expected_action="enable_otp",
+                user_id=user_id,
+            )
         if not user.email_verified:
             raise OTPServiceError("Email is not verified.", "email_not_verified", 400)
 
@@ -491,17 +519,20 @@ class OTPService:
         db_session: AsyncSession,
         user_id: str,
         action_token: str | None,
+        *,
+        require_action_token: bool = True,
     ) -> User:
         """Disable login OTP and clear active OTP Redis state."""
         user = await self._get_user_by_id(db_session=db_session, user_id=user_id, for_update=True)
         if user is None:
             raise OTPServiceError("Invalid token.", "invalid_token", 401)
-        await self._validate_action_token(
-            db_session=db_session,
-            token=action_token,
-            expected_action="disable_otp",
-            user_id=user_id,
-        )
+        if require_action_token:
+            await self._validate_action_token(
+                db_session=db_session,
+                token=action_token,
+                expected_action="disable_otp",
+                user_id=user_id,
+            )
 
         user.email_otp_enabled = False
         await db_session.flush()

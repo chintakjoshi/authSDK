@@ -117,14 +117,22 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         email_verified = claims.get("email_verified")
         if not isinstance(email_verified, bool):
             return _error_response(401, "Invalid token.", "invalid_token")
+        email_otp_enabled = claims.get("email_otp_enabled")
+        if not isinstance(email_otp_enabled, bool):
+            return _error_response(401, "Invalid token.", "invalid_token")
+        auth_time = claims.get("auth_time")
+        if not isinstance(auth_time, int):
+            return _error_response(401, "Invalid token.", "invalid_token")
 
         user_identity: UserIdentity = {
             "type": "user",
             "user_id": str(claims.get("sub", "")),
             "email": email,
             "email_verified": email_verified,
+            "email_otp_enabled": email_otp_enabled,
             "role": str(role),
             "scopes": _normalize_scopes(claims.get("scopes", [])),
+            "auth_time": auth_time,
         }
         request.state.user = user_identity
         return await call_next(request)

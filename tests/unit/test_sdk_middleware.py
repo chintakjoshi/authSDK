@@ -62,8 +62,10 @@ def _build_token(
         "type": token_type,
         "email": email,
         "email_verified": email_verified,
+        "email_otp_enabled": False,
         "role": role,
         "scopes": ["svc:read"],
+        "auth_time": int(now.timestamp()),
     }
     if include_jti:
         payload["jti"] = str(uuid4())

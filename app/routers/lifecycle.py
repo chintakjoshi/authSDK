@@ -13,6 +13,8 @@ from app.dependencies import get_database_session
 from app.schemas.lifecycle import (
     ForgotPasswordRequest,
     ForgotPasswordResponse,
+    ReauthRequest,
+    ReauthResponse,
     ResendVerifyEmailResponse,
     ResetPasswordRequest,
     ResetPasswordResponse,
@@ -22,6 +24,7 @@ from app.schemas.lifecycle import (
     VerifyEmailResponse,
 )
 from app.services.audit_service import AuditService, get_audit_service
+from app.services.brute_force_service import extract_client_ip, normalize_user_agent
 from app.services.lifecycle_service import (
     LifecycleService,
     LifecycleServiceError,
@@ -31,9 +34,19 @@ from app.services.lifecycle_service import (
 router = APIRouter(tags=["lifecycle"])
 
 
-def _error_response(status_code: int, detail: str, code: str) -> JSONResponse:
+def _error_response(
+    status_code: int,
+    detail: str,
+    code: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> JSONResponse:
     """Build standardized API error response payload."""
-    return JSONResponse(status_code=status_code, content={"detail": detail, "code": code})
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": detail, "code": code},
+        headers=headers,
+    )
 
 
 def _extract_bearer_token(request: Request) -> str | None:
@@ -114,7 +127,12 @@ async def verify_email(
             failure_reason=exc.code,
             metadata={"operation": "verify"},
         )
-        return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
+        return _error_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            headers=exc.headers,
+        )
 
     await audit_service.record(
         db=db_session,
@@ -292,3 +310,75 @@ async def reset_password(
         target_type="user",
     )
     return ResetPasswordResponse(reset=True)
+
+
+@router.post("/auth/reauth", response_model=ReauthResponse)
+async def reauthenticate(
+    payload: ReauthRequest,
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    lifecycle_service: Annotated[LifecycleService, Depends(get_lifecycle_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
+) -> ReauthResponse | JSONResponse:
+    """Re-verify password and issue a fresh access token with updated auth_time."""
+    access_token = _extract_bearer_token(request)
+    if access_token is None:
+        await audit_service.record(
+            db=db_session,
+            event_type="user.reauth.failure",
+            actor_type="user",
+            success=False,
+            request=request,
+            failure_reason="invalid_token",
+        )
+        return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
+
+    user_id: str | None = None
+    try:
+        claims = await lifecycle_service.validate_access_token(db_session=db_session, token=access_token)
+        user_id = str(claims.get("sub", "")).strip() or None
+        fresh_access_token = await lifecycle_service.reauthenticate(
+            db_session=db_session,
+            access_token=access_token,
+            password=payload.password,
+            client_ip=extract_client_ip(request),
+            user_agent=normalize_user_agent(request.headers.get("user-agent")),
+        )
+    except LifecycleServiceError as exc:
+        if exc.code == "account_locked" and user_id:
+            await audit_service.record(
+                db=db_session,
+                event_type="user.locked",
+                actor_type="user",
+                success=False,
+                request=request,
+                actor_id=user_id,
+                target_id=user_id,
+                target_type="user",
+                failure_reason="account_locked",
+            )
+        await audit_service.record(
+            db=db_session,
+            event_type="user.reauth.failure",
+            actor_type="user",
+            success=False,
+            request=request,
+            actor_id=user_id,
+            failure_reason=exc.code,
+        )
+        return _error_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            headers=exc.headers,
+        )
+
+    await audit_service.record(
+        db=db_session,
+        event_type="user.reauth.success",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=user_id,
+    )
+    return ReauthResponse(access_token=fresh_access_token)

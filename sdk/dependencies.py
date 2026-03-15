@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import time
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request
@@ -71,6 +72,22 @@ def require_action_token(
             raise HTTPException(status_code=403, detail="Action mismatch")
         if claims.get("sub") != user.get("user_id"):
             raise HTTPException(status_code=403, detail="Token user mismatch")
+        return user
+
+    return checker
+
+
+def require_fresh_auth(max_age_seconds: int = 300) -> Callable[[UserIdentity], UserIdentity]:
+    """Require a recent auth_time claim for password re-authenticated actions."""
+
+    def checker(user: Annotated[UserIdentity, Depends(get_current_user)]) -> UserIdentity:
+        auth_time = user.get("auth_time", 0)
+        if not isinstance(auth_time, int) or (time.time() - auth_time) > max_age_seconds:
+            raise HTTPException(
+                status_code=403,
+                detail="Re-authentication required",
+                headers={"X-Reauth-Required": "true"},
+            )
         return user
 
     return checker

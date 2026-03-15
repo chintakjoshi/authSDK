@@ -36,8 +36,10 @@ async def test_auth_login_refresh_logout_happy_path(
         )
         assert login_access_claims["email"] == "alice@example.com"
         assert login_access_claims["email_verified"] is False
+        assert login_access_claims["email_otp_enabled"] is False
         assert login_access_claims["role"] == "user"
         assert login_access_claims["scopes"] == []
+        assert isinstance(login_access_claims["auth_time"], int)
 
         refresh_response = await client.post(
             "/auth/token",
@@ -51,8 +53,10 @@ async def test_auth_login_refresh_logout_happy_path(
         )
         assert refresh_access_claims["email"] == "alice@example.com"
         assert refresh_access_claims["email_verified"] is False
+        assert refresh_access_claims["email_otp_enabled"] is False
         assert refresh_access_claims["role"] == "user"
         assert refresh_access_claims["scopes"] == []
+        assert refresh_access_claims["auth_time"] == login_access_claims["auth_time"]
 
         logout_response = await client.post(
             "/auth/logout",
@@ -140,3 +144,48 @@ async def test_jwks_endpoint_is_public_and_returns_keys(app_factory) -> None:
     assert isinstance(payload["keys"], list)
     assert payload["keys"]
     assert payload["keys"][0]["kty"] == "RSA"
+
+
+@pytest.mark.asyncio
+async def test_reauth_issues_fresh_access_token_without_rotating_refresh(
+    app_factory,
+    user_factory,
+) -> None:
+    """Re-authentication returns a newer auth_time while leaving the session refresh flow intact."""
+    app: FastAPI = app_factory()
+    await user_factory("reauth-user@example.com", "Password123!")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        login_response = await client.post(
+            "/auth/login",
+            json={"email": "reauth-user@example.com", "password": "Password123!"},
+        )
+        assert login_response.status_code == 200
+        login_access_token = login_response.json()["access_token"]
+        jwt_service = get_jwt_service()
+        login_claims = jwt_service.verify_token(login_access_token, expected_type="access")
+
+        reauth_response = await client.post(
+            "/auth/reauth",
+            json={"password": "Password123!"},
+            headers={"authorization": f"Bearer {login_access_token}"},
+        )
+        assert reauth_response.status_code == 200
+        fresh_access_token = reauth_response.json()["access_token"]
+        fresh_claims = jwt_service.verify_token(fresh_access_token, expected_type="access")
+        assert fresh_claims["auth_time"] >= login_claims["auth_time"]
+        assert fresh_claims["jti"] != login_claims["jti"]
+
+        refresh_response = await client.post(
+            "/auth/token",
+            json={"refresh_token": login_response.json()["refresh_token"]},
+        )
+        assert refresh_response.status_code == 200
+        refreshed_claims = jwt_service.verify_token(
+            refresh_response.json()["access_token"],
+            expected_type="access",
+        )
+        assert refreshed_claims["auth_time"] == fresh_claims["auth_time"]

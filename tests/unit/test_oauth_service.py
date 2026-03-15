@@ -103,11 +103,23 @@ class _SessionServiceStub:
         email: str,
         role: str,
         email_verified: bool,
+        email_otp_enabled: bool,
         scopes: list[str],
+        raw_access_token: str,
         raw_refresh_token: str,
     ) -> str:
         """Return deterministic session id."""
-        del db_session, user_id, email, role, email_verified, scopes, raw_refresh_token
+        del (
+            db_session,
+            user_id,
+            email,
+            role,
+            email_verified,
+            email_otp_enabled,
+            scopes,
+            raw_access_token,
+            raw_refresh_token,
+        )
         return "session-id"
 
 

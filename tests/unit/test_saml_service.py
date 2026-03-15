@@ -21,6 +21,7 @@ class _UserStub:
     email: str
     role: str
     email_verified: bool
+    email_otp_enabled: bool = False
 
 
 class _SamlCoreStub:
@@ -64,11 +65,13 @@ class _SessionServiceStub:
         email: str,
         role: str,
         email_verified: bool,
+        email_otp_enabled: bool,
         scopes: list[str],
+        raw_access_token: str,
         raw_refresh_token: str,
     ) -> str:
         """Assert verified state is propagated into session metadata."""
-        del db_session, user_id, email, role, scopes, raw_refresh_token
+        del db_session, user_id, email, role, email_otp_enabled, scopes, raw_access_token, raw_refresh_token
         assert email_verified is True
         return "session-id"
 

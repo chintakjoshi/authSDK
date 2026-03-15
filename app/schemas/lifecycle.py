@@ -64,3 +64,15 @@ class ResetPasswordResponse(BaseModel):
     """Password reset completion success response."""
 
     reset: Literal[True] = True
+
+
+class ReauthRequest(BaseModel):
+    """Password re-authentication payload."""
+
+    password: str = Field(min_length=8, max_length=256)
+
+
+class ReauthResponse(BaseModel):
+    """Re-authentication success response."""
+
+    access_token: str

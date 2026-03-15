@@ -9,6 +9,7 @@ from types import MethodType
 from uuid import uuid4
 
 import pytest
+from jose import jwt
 from redis.exceptions import RedisError
 
 from app.core.sessions import SessionService, SessionStateError
@@ -24,6 +25,7 @@ class _FakeUser:
     email: str
     role: str
     email_verified: bool
+    email_otp_enabled: bool = False
 
 
 class _FakeRedis:
@@ -94,6 +96,7 @@ def _session_row(raw_refresh_token: str) -> Session:
         id=uuid4(),
         user_id=uuid4(),
         hashed_refresh_token=sha256(raw_refresh_token.encode("utf-8")).hexdigest(),
+        auth_time=now,
         expires_at=now + timedelta(minutes=10),
         revoked_at=None,
         created_at=now,
@@ -103,12 +106,45 @@ def _session_row(raw_refresh_token: str) -> Session:
     )
 
 
+def _build_access_token(
+    *,
+    user_id: str = "u1",
+    email: str = "user@example.com",
+    email_verified: bool = False,
+    email_otp_enabled: bool = False,
+    role: str = "user",
+    scopes: list[str] | None = None,
+    auth_time: int | None = None,
+    jti: str = "access-jti-1",
+) -> str:
+    """Build a syntactically valid JWT for unverified-claims parsing."""
+    now = datetime.now(UTC)
+    payload = {
+        "jti": jti,
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=5)).timestamp()),
+        "sub": user_id,
+        "type": "access",
+        "email": email,
+        "email_verified": email_verified,
+        "email_otp_enabled": email_otp_enabled,
+        "role": role,
+        "scopes": scopes or [],
+        "auth_time": auth_time if auth_time is not None else int(now.timestamp()),
+    }
+    return jwt.encode(payload, "session-test-secret", algorithm="HS256")
+
+
 @pytest.mark.asyncio
 async def test_create_login_session_stores_hashed_token_and_redis_payload() -> None:
     """Login session stores token hash in DB and metadata in Redis."""
     redis = _FakeRedis()
     db_session = _FakeDBSession()
-    service = SessionService(redis_client=redis, refresh_token_ttl_seconds=600)
+    service = SessionService(
+        redis_client=redis,
+        refresh_token_ttl_seconds=600,
+        access_token_ttl_seconds=300,
+    )
     user_id = uuid4()
 
     session_id = await service.create_login_session(
@@ -117,7 +153,9 @@ async def test_create_login_session_stores_hashed_token_and_redis_payload() -> N
         email="user@example.com",
         role="user",
         email_verified=False,
+        email_otp_enabled=False,
         scopes=["read:all"],
+        raw_access_token=_build_access_token(user_id=str(user_id), jti="login-jti"),
         raw_refresh_token="refresh-token-raw-value",
     )
 
@@ -129,6 +167,7 @@ async def test_create_login_session_stores_hashed_token_and_redis_payload() -> N
     assert redis_key in redis.values
     assert "refresh-token-raw-value" not in redis.values[redis_key]
     assert redis.ttls[redis_key] == 600
+    assert redis.values["session_access:login-jti"] == str(session_id)
     assert db_session.commit_count == 1
     assert db_session.rollback_count == 0
 
@@ -138,10 +177,14 @@ async def test_rotate_refresh_session_updates_hash_and_ttl() -> None:
     """Refresh rotation updates DB token hash and refreshes Redis TTL."""
     redis = _FakeRedis()
     db_session = _FakeDBSession()
-    service = SessionService(redis_client=redis, refresh_token_ttl_seconds=900)
+    service = SessionService(
+        redis_client=redis,
+        refresh_token_ttl_seconds=900,
+        access_token_ttl_seconds=300,
+    )
     row = _session_row(raw_refresh_token="old-refresh-token")
     redis.values[f"session:{row.session_id}"] = (
-        '{"user_id":"u1","email":"user@example.com","role":"admin","scopes":[],"issued_at":"now"}'
+        '{"user_id":"u1","email":"user@example.com","role":"admin","email_verified":false,"email_otp_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
     )
     redis.ttls[f"session:{row.session_id}"] = 30
 
@@ -175,16 +218,28 @@ async def test_rotate_refresh_session_updates_hash_and_ttl() -> None:
     token_pair = await service.rotate_refresh_session(
         db_session=db_session,  # type: ignore[arg-type]
         raw_refresh_token="old-refresh-token",
-        token_issuer=lambda _user_id, email=None, role=None, email_verified=None, scopes=None: (
-            TokenPair(access_token="new-access-token", refresh_token="new-refresh-token")
+        token_issuer=lambda _user_id, email=None, role=None, email_verified=None, scopes=None, auth_time=None: (
+            TokenPair(
+                access_token=_build_access_token(
+                    user_id=_user_id,
+                    email=email or "updated@example.com",
+                    email_verified=bool(email_verified),
+                    role=role or "user",
+                    scopes=scopes,
+                    auth_time=int((auth_time or datetime.now(UTC)).timestamp()),
+                    jti="refresh-jti",
+                ),
+                refresh_token="new-refresh-token",
+            )
             if email == "updated@example.com" and role == "user" and email_verified is True
             else (_ for _ in ()).throw(AssertionError("refresh used stale user claims"))
         ),
     )
 
-    assert token_pair.access_token == "new-access-token"
+    assert token_pair.access_token
     assert row.hashed_refresh_token == sha256(b"new-refresh-token").hexdigest()
     assert redis.ttls[f"session:{row.session_id}"] == 900
+    assert redis.values["session_access:refresh-jti"] == str(row.session_id)
     assert db_session.commit_count == 1
 
 
@@ -194,7 +249,11 @@ async def test_rotate_refresh_session_fails_closed_when_redis_unavailable() -> N
     redis = _FakeRedis()
     redis.fail_get = True
     db_session = _FakeDBSession()
-    service = SessionService(redis_client=redis, refresh_token_ttl_seconds=900)
+    service = SessionService(
+        redis_client=redis,
+        refresh_token_ttl_seconds=900,
+        access_token_ttl_seconds=300,
+    )
     row = _session_row(raw_refresh_token="old-refresh-token")
 
     async def _fake_fetch(
@@ -225,8 +284,18 @@ async def test_rotate_refresh_session_fails_closed_when_redis_unavailable() -> N
         await service.rotate_refresh_session(
             db_session=db_session,  # type: ignore[arg-type]
             raw_refresh_token="old-refresh-token",
-            token_issuer=lambda _user_id, email=None, role=None, email_verified=None, scopes=None: (
-                TokenPair(access_token="new-access-token", refresh_token="new-refresh-token")
+            token_issuer=lambda _user_id, email=None, role=None, email_verified=None, scopes=None, auth_time=None: (
+                TokenPair(
+                    access_token=_build_access_token(
+                        user_id=_user_id,
+                        email=email or "user@example.com",
+                        email_verified=bool(email_verified),
+                        role=role or "user",
+                        scopes=scopes,
+                        auth_time=int((auth_time or datetime.now(UTC)).timestamp()),
+                    ),
+                    refresh_token="new-refresh-token",
+                )
             ),
         )
 
@@ -240,10 +309,14 @@ async def test_revoke_session_deletes_redis_key_and_blocklists_jti() -> None:
     """Logout revokes DB session, removes Redis session, and blocklists JTI."""
     redis = _FakeRedis()
     db_session = _FakeDBSession()
-    service = SessionService(redis_client=redis, refresh_token_ttl_seconds=900)
+    service = SessionService(
+        redis_client=redis,
+        refresh_token_ttl_seconds=900,
+        access_token_ttl_seconds=300,
+    )
     row = _session_row(raw_refresh_token="logout-refresh-token")
     redis.values[f"session:{row.session_id}"] = (
-        '{"user_id":"u1","email":"user@example.com","role":"user","scopes":[],"issued_at":"now"}'
+        '{"user_id":"u1","email":"user@example.com","role":"user","email_verified":false,"email_otp_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
     )
     redis.ttls[f"session:{row.session_id}"] = 300
 
@@ -277,7 +350,11 @@ async def test_revoke_session_fails_closed_when_redis_unavailable() -> None:
     redis = _FakeRedis()
     redis.fail_delete = True
     db_session = _FakeDBSession()
-    service = SessionService(redis_client=redis, refresh_token_ttl_seconds=900)
+    service = SessionService(
+        redis_client=redis,
+        refresh_token_ttl_seconds=900,
+        access_token_ttl_seconds=300,
+    )
     row = _session_row(raw_refresh_token="logout-refresh-token")
 
     async def _fake_fetch(
@@ -308,14 +385,18 @@ async def test_revoke_user_sessions_marks_all_sessions_revoked_without_committin
     """Bulk revocation supports caller-managed transactions for password reset."""
     redis = _FakeRedis()
     db_session = _FakeDBSession()
-    service = SessionService(redis_client=redis, refresh_token_ttl_seconds=900)
+    service = SessionService(
+        redis_client=redis,
+        refresh_token_ttl_seconds=900,
+        access_token_ttl_seconds=300,
+    )
     first = _session_row(raw_refresh_token="refresh-token-1")
     second = _session_row(raw_refresh_token="refresh-token-2")
     redis.values[f"session:{first.session_id}"] = (
-        '{"user_id":"u1","email":"a@example.com","role":"user","scopes":[],"issued_at":"now"}'
+        '{"user_id":"u1","email":"a@example.com","role":"user","email_verified":false,"email_otp_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
     )
     redis.values[f"session:{second.session_id}"] = (
-        '{"user_id":"u1","email":"a@example.com","role":"user","scopes":[],"issued_at":"now"}'
+        '{"user_id":"u1","email":"a@example.com","role":"user","email_verified":false,"email_otp_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
     )
 
     async def _fake_fetch_for_user(
@@ -352,7 +433,11 @@ async def test_revoke_user_sessions_rolls_back_when_redis_delete_fails() -> None
     redis = _FakeRedis()
     redis.fail_delete = True
     db_session = _FakeDBSession()
-    service = SessionService(redis_client=redis, refresh_token_ttl_seconds=900)
+    service = SessionService(
+        redis_client=redis,
+        refresh_token_ttl_seconds=900,
+        access_token_ttl_seconds=300,
+    )
     first = _session_row(raw_refresh_token="refresh-token-1")
 
     async def _fake_fetch_for_user(

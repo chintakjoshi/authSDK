@@ -30,6 +30,7 @@ class Session(Base, TimestampTenantMixin):
         PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     hashed_refresh_token: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    auth_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

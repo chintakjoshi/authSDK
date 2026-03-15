@@ -55,8 +55,10 @@ def _build_token(private_pem: str, kid: str, role: str) -> str:
         "type": "access",
         "email": "user@example.com",
         "email_verified": True,
+        "email_otp_enabled": False,
         "role": role,
         "scopes": ["svc:read"],
+        "auth_time": int(now.timestamp()),
     }
     return jwt.encode(payload, private_pem, algorithm="RS256", headers={"kid": kid})
 
