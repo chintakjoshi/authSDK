@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.models.session import Session
+from app.models.user import User
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,18 @@ class SessionService:
                 raise SessionStateError("Session expired.", "session_expired", 401)
 
             payload = await self._get_session_payload(session_id=session_row.session_id)
+            user = await self._get_active_user(db_session=db_session, user_id=session_row.user_id)
+            if user is None:
+                raise SessionStateError("Session expired.", "session_expired", 401)
+
+            payload = SessionPayload(
+                user_id=str(user.id),
+                email=user.email,
+                role=user.role,
+                email_verified=user.email_verified,
+                scopes=payload.scopes,
+                issued_at=payload.issued_at,
+            )
             issued_pair = self._invoke_token_issuer(
                 token_issuer=token_issuer,
                 user_id=str(session_row.user_id),
@@ -147,6 +160,35 @@ class SessionService:
             raise
         await db_session.commit()
         return token_pair
+
+    async def revoke_user_sessions(
+        self,
+        db_session: AsyncSession,
+        user_id: UUID,
+        *,
+        commit: bool = True,
+    ) -> list[UUID]:
+        """Revoke all non-deleted, non-revoked sessions for one user."""
+        try:
+            session_rows = await self._fetch_active_sessions_for_user(
+                db_session=db_session,
+                user_id=user_id,
+            )
+            revoked_at = datetime.now(UTC)
+            session_ids: list[UUID] = []
+            for session_row in session_rows:
+                session_row.revoked_at = revoked_at
+                session_ids.append(session_row.session_id)
+
+            await db_session.flush()
+            await self._delete_session_payloads(*session_ids)
+        except Exception:
+            await db_session.rollback()
+            raise
+
+        if commit:
+            await db_session.commit()
+        return session_ids
 
     async def revoke_session(
         self,
@@ -168,13 +210,31 @@ class SessionService:
 
             session_row.revoked_at = datetime.now(UTC)
             await db_session.flush()
-            await self._delete_session_payload(session_id=session_row.session_id)
+            await self._delete_session_payloads(session_row.session_id)
             remaining_ttl = self._remaining_lifetime_seconds(access_expiration_epoch)
             await self._add_to_blocklist(access_jti=access_jti, ttl_seconds=remaining_ttl)
         except Exception:
             await db_session.rollback()
             raise
         await db_session.commit()
+
+    async def _fetch_active_sessions_for_user(
+        self,
+        db_session: AsyncSession,
+        user_id: UUID,
+    ) -> list[Session]:
+        """Fetch all revocable sessions for the provided user ID."""
+        statement = (
+            select(Session)
+            .where(
+                Session.user_id == user_id,
+                Session.deleted_at.is_(None),
+                Session.revoked_at.is_(None),
+            )
+            .with_for_update()
+        )
+        result = await db_session.execute(statement)
+        return list(result.scalars().all())
 
     async def _fetch_session_by_refresh_hash(
         self,
@@ -189,6 +249,16 @@ class SessionService:
         )
         if for_update:
             statement = statement.with_for_update()
+        result = await db_session.execute(statement)
+        return result.scalar_one_or_none()
+
+    async def _get_active_user(self, db_session: AsyncSession, user_id: UUID) -> User | None:
+        """Fetch the current active user record for refresh-time claim issuance."""
+        statement = select(User).where(
+            User.id == user_id,
+            User.deleted_at.is_(None),
+            User.is_active.is_(True),
+        )
         result = await db_session.execute(statement)
         return result.scalar_one_or_none()
 
@@ -230,11 +300,13 @@ class SessionService:
         except RedisError as exc:
             raise SessionStateError("Session backend unavailable.", "session_expired", 503) from exc
 
-    async def _delete_session_payload(self, session_id: UUID) -> None:
-        """Delete Redis session key."""
-        key = self._session_key(session_id)
+    async def _delete_session_payloads(self, *session_ids: UUID) -> None:
+        """Delete one or more Redis session keys in one backend call."""
+        keys = [self._session_key(session_id) for session_id in session_ids]
+        if not keys:
+            return
         try:
-            await self._redis.delete(key)
+            await self._redis.delete(*keys)
         except RedisError as exc:
             raise SessionStateError("Session backend unavailable.", "session_expired", 503) from exc
 

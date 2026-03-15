@@ -53,6 +53,11 @@ class User(Base, TimestampTenantMixin):
         DateTime(timezone=True),
         nullable=True,
     )
+    password_reset_token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    password_reset_token_expires: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     email_otp_enabled: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from types import MethodType
@@ -13,6 +14,16 @@ from redis.exceptions import RedisError
 from app.core.sessions import SessionService, SessionStateError
 from app.models.session import Session
 from app.services.token_service import TokenPair
+
+
+@dataclass(frozen=True)
+class _FakeUser:
+    """Minimal user payload returned by refresh-time user lookups."""
+
+    id: object
+    email: str
+    role: str
+    email_verified: bool
 
 
 class _FakeRedis:
@@ -39,13 +50,14 @@ class _FakeRedis:
         self.ttls[key] = ttl
         return True
 
-    async def delete(self, key: str) -> int:
-        """Delete a key."""
+    async def delete(self, *keys: str) -> int:
+        """Delete one or more keys."""
         if self.fail_delete:
             raise RedisError("redis unavailable")
-        self.values.pop(key, None)
-        self.ttls.pop(key, None)
-        return 1
+        for key in keys:
+            self.values.pop(key, None)
+            self.ttls.pop(key, None)
+        return len(keys)
 
 
 class _FakeDBSession:
@@ -143,13 +155,32 @@ async def test_rotate_refresh_session_updates_hash_and_ttl() -> None:
         assert for_update is True
         return row
 
+    async def _fake_user_lookup(
+        self: SessionService,
+        db_session: _FakeDBSession,
+        user_id: object,
+    ) -> _FakeUser:
+        del db_session
+        assert user_id == row.user_id
+        return _FakeUser(
+            id=row.user_id,
+            email="updated@example.com",
+            role="user",
+            email_verified=True,
+        )
+
     service._fetch_session_by_refresh_hash = MethodType(_fake_fetch, service)  # type: ignore[assignment]
+    service._get_active_user = MethodType(_fake_user_lookup, service)  # type: ignore[assignment]
 
     token_pair = await service.rotate_refresh_session(
         db_session=db_session,  # type: ignore[arg-type]
         raw_refresh_token="old-refresh-token",
-        token_issuer=lambda _user_id, email=None, role=None, scopes=None: TokenPair(
-            access_token="new-access-token", refresh_token="new-refresh-token"
+        token_issuer=lambda _user_id, email=None, role=None, email_verified=None, scopes=None: (
+            TokenPair(access_token="new-access-token", refresh_token="new-refresh-token")
+            if email == "updated@example.com"
+            and role == "user"
+            and email_verified is True
+            else (_ for _ in ()).throw(AssertionError("refresh used stale user claims"))
         ),
     )
 
@@ -176,14 +207,28 @@ async def test_rotate_refresh_session_fails_closed_when_redis_unavailable() -> N
     ) -> Session:
         return row
 
+    async def _fake_user_lookup(
+        self: SessionService,
+        db_session: _FakeDBSession,
+        user_id: object,
+    ) -> _FakeUser:
+        del db_session, user_id
+        return _FakeUser(
+            id=row.user_id,
+            email="user@example.com",
+            role="user",
+            email_verified=False,
+        )
+
     service._fetch_session_by_refresh_hash = MethodType(_fake_fetch, service)  # type: ignore[assignment]
+    service._get_active_user = MethodType(_fake_user_lookup, service)  # type: ignore[assignment]
 
     with pytest.raises(SessionStateError) as exc_info:
         await service.rotate_refresh_session(
             db_session=db_session,  # type: ignore[arg-type]
             raw_refresh_token="old-refresh-token",
-            token_issuer=lambda _user_id, email=None, role=None, scopes=None: TokenPair(
-                access_token="new-access-token", refresh_token="new-refresh-token"
+            token_issuer=lambda _user_id, email=None, role=None, email_verified=None, scopes=None: (
+                TokenPair(access_token="new-access-token", refresh_token="new-refresh-token")
             ),
         )
 
@@ -253,6 +298,79 @@ async def test_revoke_session_fails_closed_when_redis_unavailable() -> None:
             raw_refresh_token="logout-refresh-token",
             access_jti="jti-123",
             access_expiration_epoch=int(datetime.now(UTC).timestamp()) + 120,
+        )
+
+    assert exc_info.value.code == "session_expired"
+    assert exc_info.value.status_code == 503
+    assert db_session.rollback_count == 1
+
+
+@pytest.mark.asyncio
+async def test_revoke_user_sessions_marks_all_sessions_revoked_without_committing() -> None:
+    """Bulk revocation supports caller-managed transactions for password reset."""
+    redis = _FakeRedis()
+    db_session = _FakeDBSession()
+    service = SessionService(redis_client=redis, refresh_token_ttl_seconds=900)
+    first = _session_row(raw_refresh_token="refresh-token-1")
+    second = _session_row(raw_refresh_token="refresh-token-2")
+    redis.values[f"session:{first.session_id}"] = '{"user_id":"u1","email":"a@example.com","role":"user","scopes":[],"issued_at":"now"}'
+    redis.values[f"session:{second.session_id}"] = '{"user_id":"u1","email":"a@example.com","role":"user","scopes":[],"issued_at":"now"}'
+
+    async def _fake_fetch_for_user(
+        self: SessionService,
+        db_session: _FakeDBSession,
+        user_id: object,
+    ) -> list[Session]:
+        del db_session, user_id
+        return [first, second]
+
+    service._fetch_active_sessions_for_user = MethodType(  # type: ignore[assignment]
+        _fake_fetch_for_user,
+        service,
+    )
+
+    revoked_ids = await service.revoke_user_sessions(
+        db_session=db_session,  # type: ignore[arg-type]
+        user_id=uuid4(),
+        commit=False,
+    )
+
+    assert revoked_ids == [first.session_id, second.session_id]
+    assert first.revoked_at is not None
+    assert second.revoked_at is not None
+    assert f"session:{first.session_id}" not in redis.values
+    assert f"session:{second.session_id}" not in redis.values
+    assert db_session.commit_count == 0
+    assert db_session.rollback_count == 0
+
+
+@pytest.mark.asyncio
+async def test_revoke_user_sessions_rolls_back_when_redis_delete_fails() -> None:
+    """Bulk revocation fails closed when Redis cannot delete session keys."""
+    redis = _FakeRedis()
+    redis.fail_delete = True
+    db_session = _FakeDBSession()
+    service = SessionService(redis_client=redis, refresh_token_ttl_seconds=900)
+    first = _session_row(raw_refresh_token="refresh-token-1")
+
+    async def _fake_fetch_for_user(
+        self: SessionService,
+        db_session: _FakeDBSession,
+        user_id: object,
+    ) -> list[Session]:
+        del db_session, user_id
+        return [first]
+
+    service._fetch_active_sessions_for_user = MethodType(  # type: ignore[assignment]
+        _fake_fetch_for_user,
+        service,
+    )
+
+    with pytest.raises(SessionStateError) as exc_info:
+        await service.revoke_user_sessions(
+            db_session=db_session,  # type: ignore[arg-type]
+            user_id=uuid4(),
+            commit=False,
         )
 
     assert exc_info.value.code == "session_expired"

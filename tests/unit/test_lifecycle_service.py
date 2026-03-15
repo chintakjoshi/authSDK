@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from redis.exceptions import RedisError
 
+from app.core.sessions import SessionStateError
 from app.services.lifecycle_service import LifecycleService, LifecycleServiceError
 
 
@@ -48,22 +52,109 @@ class _RedisStub:
 
 
 class _UserServiceStub:
-    """Unused user-service dependency placeholder."""
+    """User-service stub covering password reset test flows."""
+
+    def __init__(self) -> None:
+        self.users_by_email: dict[str, _UserRecord] = {}
+        self.verify_calls: list[tuple[str, str]] = []
+
+    async def get_user_by_email(self, db_session: Any, email: str) -> _UserRecord | None:
+        del db_session
+        return self.users_by_email.get(email.lower())
+
+    def hash_password(self, password: str) -> str:
+        return f"hashed::{password}"
+
+    def verify_password(self, password: str, password_hash: str) -> bool:
+        self.verify_calls.append((password, password_hash))
+        return True
 
 
 class _EmailSenderStub:
-    """Unused email-sender dependency placeholder."""
+    """Email sender stub capturing password reset deliveries."""
+
+    def __init__(self) -> None:
+        self.reset_links: list[tuple[str, str]] = []
+        self.confirmations: list[str] = []
+
+    async def send_verification_email(self, to_email: str, verification_link: str) -> None:
+        del to_email, verification_link
+
+    async def send_password_reset_email(self, to_email: str, reset_link: str) -> None:
+        self.reset_links.append((to_email, reset_link))
+
+    async def send_password_reset_confirmation_email(self, to_email: str) -> None:
+        self.confirmations.append(to_email)
 
 
-def _build_service(redis_client: _RedisStub) -> LifecycleService:
+class _SessionServiceStub:
+    """Session-service stub used by password reset tests."""
+
+    def __init__(self) -> None:
+        self.revoked_user_ids: list[object] = []
+        self.fail_with_redis = False
+
+    async def revoke_user_sessions(
+        self,
+        db_session: Any,
+        user_id: object,
+        *,
+        commit: bool = True,
+    ) -> list[object]:
+        del db_session
+        if self.fail_with_redis:
+            raise SessionStateError("Session backend unavailable.", "session_expired", 503)
+        self.revoked_user_ids.append((user_id, commit))
+        return []
+
+
+class _DBSessionStub:
+    """Minimal DB-session stub for lifecycle unit tests."""
+
+    def __init__(self) -> None:
+        self.flush_count = 0
+        self.commit_count = 0
+        self.rollback_count = 0
+
+    async def flush(self) -> None:
+        self.flush_count += 1
+
+    async def commit(self) -> None:
+        self.commit_count += 1
+
+    async def rollback(self) -> None:
+        self.rollback_count += 1
+
+
+@dataclass
+class _UserRecord:
+    """In-memory user record used by password reset tests."""
+
+    id: object
+    email: str
+    email_verified: bool = False
+    password_hash: str | None = "hashed::initial"
+    password_reset_token_hash: str | None = None
+    password_reset_token_expires: datetime | None = None
+
+
+def _build_service(
+    redis_client: _RedisStub,
+    *,
+    user_service: _UserServiceStub | None = None,
+    email_sender: _EmailSenderStub | None = None,
+    session_service: _SessionServiceStub | None = None,
+) -> LifecycleService:
     """Create lifecycle service with only the dependencies needed here."""
     return LifecycleService(
         jwt_service=_JWTServiceStub(),  # type: ignore[arg-type]
         signing_key_service=_SigningKeyServiceStub(),  # type: ignore[arg-type]
-        user_service=_UserServiceStub(),  # type: ignore[arg-type]
+        user_service=user_service or _UserServiceStub(),  # type: ignore[arg-type]
+        session_service=session_service,  # type: ignore[arg-type]
         redis_client=redis_client,  # type: ignore[arg-type]
-        email_sender=_EmailSenderStub(),  # type: ignore[arg-type]
+        email_sender=email_sender or _EmailSenderStub(),  # type: ignore[arg-type]
         email_verify_ttl_seconds=86400,
+        password_reset_ttl_seconds=3600,
     )
 
 
@@ -93,3 +184,104 @@ async def test_validate_access_token_fails_closed_when_blocklist_backend_unavail
 
     assert exc_info.value.code == "session_expired"
     assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_request_password_reset_uses_dummy_workload_for_unknown_email() -> None:
+    """Forgot-password requests avoid enumeration by doing dummy password work."""
+    user_service = _UserServiceStub()
+    email_sender = _EmailSenderStub()
+    service = _build_service(
+        _RedisStub(),
+        user_service=user_service,
+        email_sender=email_sender,
+    )
+    db_session = _DBSessionStub()
+
+    user_id = await service.request_password_reset(
+        db_session=db_session,  # type: ignore[arg-type]
+        email="missing@example.com",
+    )
+
+    assert user_id is None
+    assert user_service.verify_calls
+    assert email_sender.reset_links == []
+    assert db_session.commit_count == 0
+
+
+@pytest.mark.asyncio
+async def test_complete_password_reset_hashes_password_and_revokes_sessions() -> None:
+    """Completing password reset updates password and revokes active sessions in one flow."""
+    user = _UserRecord(
+        id=uuid4(),
+        email="reset@example.com",
+        password_hash="hashed::old",
+    )
+    user.password_reset_token_hash = LifecycleService._hash_password_reset_token("reset-token")
+    user.password_reset_token_expires = datetime.now(UTC) + timedelta(minutes=10)
+    user_service = _UserServiceStub()
+    email_sender = _EmailSenderStub()
+    session_service = _SessionServiceStub()
+    service = _build_service(
+        _RedisStub(),
+        user_service=user_service,
+        email_sender=email_sender,
+        session_service=session_service,
+    )
+    db_session = _DBSessionStub()
+
+    async def _fake_lookup(
+        self: LifecycleService,
+        db_session: _DBSessionStub,
+        token: str,
+        *,
+        for_update: bool,
+    ) -> _UserRecord | None:
+        del db_session
+        assert token == "reset-token"
+        assert for_update is True
+        return user
+
+    service._get_user_by_password_reset_token = _fake_lookup.__get__(service, LifecycleService)  # type: ignore[assignment]
+
+    updated_user = await service.complete_password_reset(
+        db_session=db_session,  # type: ignore[arg-type]
+        token="reset-token",
+        new_password="NewPassword123!",
+    )
+
+    assert updated_user is user
+    assert user.password_hash == "hashed::NewPassword123!"
+    assert user.password_reset_token_hash is None
+    assert user.password_reset_token_expires is None
+    assert session_service.revoked_user_ids == [(user.id, False)]
+    assert email_sender.confirmations == ["reset@example.com"]
+    assert db_session.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_complete_password_reset_rejects_invalid_or_expired_token() -> None:
+    """Reset completion does not distinguish invalid from expired tokens."""
+    service = _build_service(_RedisStub(), session_service=_SessionServiceStub())
+
+    async def _fake_lookup(
+        self: LifecycleService,
+        db_session: _DBSessionStub,
+        token: str,
+        *,
+        for_update: bool,
+    ) -> None:
+        del db_session, token, for_update
+        return None
+
+    service._get_user_by_password_reset_token = _fake_lookup.__get__(service, LifecycleService)  # type: ignore[assignment]
+
+    with pytest.raises(LifecycleServiceError) as exc_info:
+        await service.complete_password_reset(
+            db_session=_DBSessionStub(),  # type: ignore[arg-type]
+            token="expired-or-invalid",
+            new_password="NewPassword123!",
+        )
+
+    assert exc_info.value.code == "invalid_reset_token"
+    assert exc_info.value.status_code == 400

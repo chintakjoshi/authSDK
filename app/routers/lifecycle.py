@@ -11,9 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_database_session
 from app.schemas.lifecycle import (
+    ForgotPasswordRequest,
+    ForgotPasswordResponse,
     ResendVerifyEmailResponse,
+    ResetPasswordRequest,
+    ResetPasswordResponse,
     SignupRequest,
     SignupResponse,
+    ValidatePasswordResetResponse,
     VerifyEmailResponse,
 )
 from app.services.audit_service import AuditService, get_audit_service
@@ -191,3 +196,99 @@ async def resend_verification_email(
         metadata={"operation": "resend"},
     )
     return ResendVerifyEmailResponse(sent=True)
+
+
+@router.post("/auth/password/forgot", response_model=ForgotPasswordResponse)
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    lifecycle_service: Annotated[LifecycleService, Depends(get_lifecycle_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
+) -> ForgotPasswordResponse | JSONResponse:
+    """Issue a password reset token without revealing whether the email exists."""
+    try:
+        user_id = await lifecycle_service.request_password_reset(
+            db_session=db_session,
+            email=payload.email,
+        )
+    except LifecycleServiceError as exc:
+        await audit_service.record(
+            db=db_session,
+            event_type="user.password.reset.requested",
+            actor_type="user",
+            success=False,
+            request=request,
+            failure_reason=exc.code,
+        )
+        return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
+
+    await audit_service.record(
+        db=db_session,
+        event_type="user.password.reset.requested",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=user_id,
+        target_id=user_id,
+        target_type="user",
+    )
+    return ForgotPasswordResponse(sent=True)
+
+
+@router.get("/auth/password/reset", response_model=ValidatePasswordResetResponse)
+async def validate_password_reset_token(
+    token: Annotated[str, Query(min_length=16, max_length=512)],
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    lifecycle_service: Annotated[LifecycleService, Depends(get_lifecycle_service)],
+) -> ValidatePasswordResetResponse | JSONResponse:
+    """Validate password reset token without consuming it."""
+    try:
+        await lifecycle_service.validate_password_reset_token(db_session=db_session, token=token)
+    except LifecycleServiceError as exc:
+        return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
+    return ValidatePasswordResetResponse(valid=True)
+
+
+@router.post("/auth/password/reset", response_model=ResetPasswordResponse)
+async def reset_password(
+    payload: ResetPasswordRequest,
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    lifecycle_service: Annotated[LifecycleService, Depends(get_lifecycle_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
+) -> ResetPasswordResponse | JSONResponse:
+    """Consume a reset token, set a new password, and revoke all active sessions."""
+    user_id: str | None = None
+    try:
+        user = await lifecycle_service.complete_password_reset(
+            db_session=db_session,
+            token=payload.token,
+            new_password=payload.new_password,
+        )
+        user_id = str(user.id)
+    except LifecycleServiceError as exc:
+        await audit_service.record(
+            db=db_session,
+            event_type="user.password.reset.completed",
+            actor_type="user",
+            success=False,
+            request=request,
+            actor_id=user_id,
+            target_id=user_id,
+            target_type="user",
+            failure_reason=exc.code,
+        )
+        return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
+
+    await audit_service.record(
+        db=db_session,
+        event_type="user.password.reset.completed",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=user_id,
+        target_id=user_id,
+        target_type="user",
+    )
+    return ResetPasswordResponse(reset=True)
