@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 import smtplib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -12,6 +13,7 @@ from hashlib import sha256
 from typing import Protocol
 from uuid import UUID
 
+import structlog
 from redis.asyncio.client import Redis
 from redis.exceptions import RedisError
 from sqlalchemy import select
@@ -20,10 +22,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.core.jwt import JWTService, TokenValidationError, get_jwt_service
-from app.core.sessions import get_redis_client
+from app.core.sessions import (
+    SessionService,
+    SessionStateError,
+    get_redis_client,
+    get_session_service,
+)
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
 from app.models.user import User
 from app.services.user_service import UserService
+
+logger = structlog.get_logger(__name__)
 
 
 class LifecycleServiceError(Exception):
@@ -36,11 +45,17 @@ class LifecycleServiceError(Exception):
         self.status_code = status_code
 
 
-class VerificationEmailSender(Protocol):
-    """Contract for verification-email delivery adapters."""
+class LifecycleEmailSender(Protocol):
+    """Contract for lifecycle-related email delivery adapters."""
 
     async def send_verification_email(self, to_email: str, verification_link: str) -> None:
         """Deliver a verification email."""
+
+    async def send_password_reset_email(self, to_email: str, reset_link: str) -> None:
+        """Deliver a password reset email."""
+
+    async def send_password_reset_confirmation_email(self, to_email: str) -> None:
+        """Deliver a password reset confirmation email."""
 
 
 @dataclass(frozen=True)
@@ -60,6 +75,24 @@ class MailhogVerificationEmailSender:
             to_email=to_email,
             subject=subject,
             body=body,
+        )
+
+    async def send_password_reset_email(self, to_email: str, reset_link: str) -> None:
+        """Send a password reset email through SMTP."""
+        await asyncio.to_thread(
+            self._send_blocking,
+            to_email=to_email,
+            subject="Reset your password",
+            body=f"Open this link to reset your password: {reset_link}",
+        )
+
+    async def send_password_reset_confirmation_email(self, to_email: str) -> None:
+        """Send a password reset confirmation email through SMTP."""
+        await asyncio.to_thread(
+            self._send_blocking,
+            to_email=to_email,
+            subject="Your password has been reset",
+            body="Your password was reset successfully. If this was not you, contact support.",
         )
 
     def _send_blocking(self, to_email: str, subject: str, body: str) -> None:
@@ -83,17 +116,22 @@ class LifecycleService:
         signing_key_service: SigningKeyService,
         user_service: UserService,
         redis_client: Redis,
-        email_sender: VerificationEmailSender,
+        email_sender: LifecycleEmailSender,
         email_verify_ttl_seconds: int,
+        session_service: SessionService | None = None,
+        password_reset_ttl_seconds: int = 3600,
     ) -> None:
         self._jwt_service = jwt_service
         self._signing_key_service = signing_key_service
         self._user_service = user_service
+        self._session_service = session_service
         self._redis = redis_client
         self._email_sender = email_sender
         self._email_verify_ttl_seconds = email_verify_ttl_seconds
+        self._password_reset_ttl_seconds = password_reset_ttl_seconds
         self._resend_limit_ttl_seconds = 3600
         self._resend_limit_count = 3
+        self._dummy_password_hash = self._user_service.hash_password("auth-service-dummy-password")
 
     async def signup_password(
         self,
@@ -249,6 +287,99 @@ class LifecycleService:
             await db_session.rollback()
             raise
 
+    async def request_password_reset(
+        self,
+        db_session: AsyncSession,
+        email: str,
+    ) -> str | None:
+        """Issue a single active password reset token when the email exists."""
+        normalized_email = email.strip().lower()
+        user = None
+        if normalized_email:
+            user = await self._user_service.get_user_by_email(
+                db_session=db_session,
+                email=normalized_email,
+            )
+
+        if user is None:
+            self._perform_dummy_password_workload(normalized_email or "missing-user")
+            return None
+
+        reset_token = secrets.token_urlsafe(32)
+        user.password_reset_token_hash = self._hash_password_reset_token(reset_token)
+        user.password_reset_token_expires = datetime.now(UTC) + timedelta(
+            seconds=self._password_reset_ttl_seconds
+        )
+        try:
+            await db_session.flush()
+            await self._email_sender.send_password_reset_email(
+                to_email=user.email,
+                reset_link=self._password_reset_link(reset_token),
+            )
+            await db_session.commit()
+        except Exception:
+            await db_session.rollback()
+            raise
+        return str(user.id)
+
+    async def validate_password_reset_token(
+        self,
+        db_session: AsyncSession,
+        token: str,
+    ) -> None:
+        """Validate a raw password reset token without consuming it."""
+        user = await self._get_user_by_password_reset_token(
+            db_session=db_session,
+            token=token,
+            for_update=False,
+        )
+        if user is None:
+            raise LifecycleServiceError("Invalid reset token.", "invalid_reset_token", 400)
+
+    async def complete_password_reset(
+        self,
+        db_session: AsyncSession,
+        token: str,
+        new_password: str,
+    ) -> User:
+        """Consume reset token, update password, and synchronously revoke sessions."""
+        user = await self._get_user_by_password_reset_token(
+            db_session=db_session,
+            token=token,
+            for_update=True,
+        )
+        if user is None:
+            raise LifecycleServiceError("Invalid reset token.", "invalid_reset_token", 400)
+        if self._session_service is None:
+            raise RuntimeError("LifecycleService requires session_service for password reset.")
+
+        user.password_hash = self._user_service.hash_password(new_password)
+        user.password_reset_token_hash = None
+        user.password_reset_token_expires = None
+        try:
+            await db_session.flush()
+            await self._session_service.revoke_user_sessions(
+                db_session=db_session,
+                user_id=user.id,
+                commit=False,
+            )
+            await db_session.commit()
+        except SessionStateError as exc:
+            raise LifecycleServiceError(exc.detail, exc.code, exc.status_code) from exc
+        except Exception:
+            await db_session.rollback()
+            raise
+
+        try:
+            await self._email_sender.send_password_reset_confirmation_email(to_email=user.email)
+        except Exception as exc:
+            logger.error(
+                "password_reset_confirmation_email_failed",
+                user_id=str(user.id),
+                error=str(exc),
+            )
+        return user
+
     async def _issue_email_verify_token(
         self,
         db_session: AsyncSession,
@@ -323,19 +454,61 @@ class LifecycleService:
         if blocklisted is not None:
             raise LifecycleServiceError("Invalid token.", "invalid_token", 401)
 
+    async def _get_user_by_password_reset_token(
+        self,
+        db_session: AsyncSession,
+        token: str,
+        *,
+        for_update: bool,
+    ) -> User | None:
+        """Look up a non-expired password reset token without distinguishing invalid states."""
+        normalized_token = token.strip()
+        if not normalized_token:
+            return None
+        token_hash = self._hash_password_reset_token(normalized_token)
+        statement = select(User).where(
+            User.password_reset_token_hash == token_hash,
+            User.deleted_at.is_(None),
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        result = await db_session.execute(statement)
+        user = result.scalar_one_or_none()
+        if (
+            user is None
+            or user.password_reset_token_expires is None
+            or user.password_reset_token_expires <= datetime.now(UTC)
+        ):
+            return None
+        return user
+
     @staticmethod
     def _hash_verification_token(token: str) -> str:
         """Hash verification token for database storage."""
         return sha256(token.encode("utf-8")).hexdigest()
 
     @staticmethod
+    def _hash_password_reset_token(token: str) -> str:
+        """Hash password reset token for database storage."""
+        return sha256(token.encode("utf-8")).hexdigest()
+
+    def _perform_dummy_password_workload(self, candidate: str) -> None:
+        """Execute constant-time-ish bcrypt work when the email is absent."""
+        self._user_service.verify_password(candidate, self._dummy_password_hash)
+
+    @staticmethod
     def _verification_link(token: str) -> str:
         """Build signup verification endpoint path."""
         return f"/auth/verify-email?token={token}"
 
+    @staticmethod
+    def _password_reset_link(token: str) -> str:
+        """Build password reset validation endpoint path."""
+        return f"/auth/password/reset?token={token}"
+
 
 @lru_cache
-def get_verification_email_sender() -> VerificationEmailSender:
+def get_verification_email_sender() -> LifecycleEmailSender:
     """Create and cache default Mailhog SMTP sender."""
     settings = get_settings()
     return MailhogVerificationEmailSender(
@@ -353,7 +526,9 @@ def get_lifecycle_service() -> LifecycleService:
         jwt_service=get_jwt_service(),
         signing_key_service=get_signing_key_service(),
         user_service=UserService(),
+        session_service=get_session_service(),
         redis_client=get_redis_client(),
         email_sender=get_verification_email_sender(),
         email_verify_ttl_seconds=settings.email.email_verify_ttl_seconds,
+        password_reset_ttl_seconds=settings.email.password_reset_ttl_seconds,
     )
