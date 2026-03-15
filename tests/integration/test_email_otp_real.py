@@ -16,6 +16,7 @@ from app.core.sessions import get_redis_client, get_session_service
 from app.core.signing_keys import get_signing_key_service
 from app.models.user import User
 from app.schemas.otp import OTPAction
+from app.services.brute_force_service import get_brute_force_service
 from app.services.otp_service import OTPService, get_otp_service
 from app.services.token_service import get_token_service
 
@@ -68,6 +69,7 @@ def _build_otp_service(sender: _CapturingOTPEmailSender) -> OTPService:
         signing_key_service=get_signing_key_service(),
         token_service=get_token_service(),
         session_service=get_session_service(),
+        brute_force_service=get_brute_force_service(),
         redis_client=get_redis_client(),
         email_sender=sender,
         otp_code_length=settings.email.otp_code_length,
@@ -167,7 +169,7 @@ async def test_login_otp_enforces_invalid_and_max_attempt_paths(
         challenge_token = login.json()["challenge_token"]
         wrong_code = "999999" if sender.latest_code("login") != "999999" else "000000"
 
-        for _ in range(5):
+        for _ in range(4):
             invalid = await client.post(
                 "/auth/otp/verify/login",
                 json={"challenge_token": challenge_token, "code": wrong_code},
@@ -175,12 +177,13 @@ async def test_login_otp_enforces_invalid_and_max_attempt_paths(
             assert invalid.status_code == 401
             assert invalid.json()["code"] == "invalid_otp"
 
-        exceeded = await client.post(
+        locked = await client.post(
             "/auth/otp/verify/login",
             json={"challenge_token": challenge_token, "code": wrong_code},
         )
-        assert exceeded.status_code == 401
-        assert exceeded.json()["code"] == "otp_max_attempts_exceeded"
+        assert locked.status_code == 401
+        assert locked.json()["code"] == "account_locked"
+        assert locked.headers["retry-after"] == "60"
 
     app.dependency_overrides.clear()
 

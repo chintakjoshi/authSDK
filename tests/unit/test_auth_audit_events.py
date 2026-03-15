@@ -18,6 +18,7 @@ from app.dependencies import get_database_session
 from app.routers.auth import get_user_service, router
 from app.services.api_key_service import APIKeyIntrospectionResult, get_api_key_service
 from app.services.audit_service import get_audit_service
+from app.services.brute_force_service import get_brute_force_service
 from app.services.otp_service import get_otp_service
 from app.services.token_service import TokenPair, get_token_service
 
@@ -28,19 +29,28 @@ class _UserStub:
 
     id: Any
     email: str
+    password_hash: str = "hashed-password"
+    role: str = "user"
+    email_verified: bool = False
 
 
 class _UserServiceStub:
     """User service stub returning one deterministic authenticated user."""
 
-    async def authenticate_user(
-        self, db_session: Any, email: str, password: str
-    ) -> _UserStub | None:
-        """Return a user object for the configured credential set."""
+    async def get_user_by_email(self, db_session: Any, email: str) -> _UserStub | None:
+        """Return a user object for the configured email."""
         del db_session
-        if email == "alice@example.com" and password == "Password123!":
+        if email == "alice@example.com":
             return _UserStub(id=uuid4(), email=email)
         return None
+
+    def verify_password(self, password: str, password_hash: str) -> bool:
+        """Accept only the happy-path password value."""
+        del password_hash
+        return password == "Password123!"
+
+    def dummy_verify(self) -> None:
+        """No-op dummy verify for unknown-user branches."""
 
 
 class _TokenServiceStub:
@@ -110,6 +120,23 @@ class _OTPServiceStub:
         """This test should never hit the OTP login branch."""
         del db_session, user
         raise AssertionError("OTP branch should not run in this test")
+
+
+class _BruteForceServiceStub:
+    """Brute-force stub that never locks the account in this audit test."""
+
+    async def ensure_not_locked(self, user_id: str) -> None:
+        del user_id
+
+    async def record_successful_login(
+        self,
+        user_id: str,
+        *,
+        ip_address: str | None,
+        user_agent: str | None,
+    ) -> Any:
+        del user_id, ip_address, user_agent
+        return type("Suspicious", (), {"suspicious": False, "metadata": {}})()
 
 
 class _JWTServiceStub:
@@ -189,6 +216,7 @@ async def test_auth_routes_emit_required_step13_audit_events() -> None:
     app.dependency_overrides[get_signing_key_service] = _SigningKeyServiceStub
     app.dependency_overrides[get_api_key_service] = _APIKeyServiceStub
     app.dependency_overrides[get_otp_service] = _OTPServiceStub
+    app.dependency_overrides[get_brute_force_service] = _BruteForceServiceStub
     app.dependency_overrides[get_audit_service] = lambda: audit_stub
 
     async with AsyncClient(

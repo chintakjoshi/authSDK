@@ -19,6 +19,13 @@ from app.schemas.token import LogoutRequest, RefreshTokenRequest, TokenPairRespo
 from app.schemas.user import LoginRequest
 from app.services.api_key_service import APIKeyService, get_api_key_service
 from app.services.audit_service import AuditService, get_audit_service
+from app.services.brute_force_service import (
+    BruteForceProtectionError,
+    BruteForceProtectionService,
+    extract_client_ip,
+    get_brute_force_service,
+    normalize_user_agent,
+)
 from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
 from app.services.token_service import TokenService, get_token_service
 from app.services.user_service import UserService
@@ -102,21 +109,119 @@ async def login(
     token_service: Annotated[TokenService, Depends(get_token_service)],
     session_service: Annotated[SessionService, Depends(get_session_service)],
     otp_service: Annotated[OTPService, Depends(get_otp_service)],
+    brute_force_service: Annotated[BruteForceProtectionService, Depends(get_brute_force_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> TokenPairResponse | LoginOTPChallengeResponse | JSONResponse:
     """Authenticate email/password credentials and issue JWT pair."""
-    user = await user_service.authenticate_user(
-        db_session=db_session,
-        email=payload.email,
-        password=payload.password,
-    )
-    if user is None:
+    user = await user_service.get_user_by_email(db_session=db_session, email=payload.email)
+    client_ip = extract_client_ip(request)
+    user_agent = normalize_user_agent(request.headers.get("user-agent"))
+
+    if user is None or user.password_hash is None:
+        user_service.dummy_verify()
         await audit_service.record(
             db=db_session,
             event_type="user.login.failure",
             actor_type="user",
             success=False,
             request=request,
+            failure_reason="invalid_credentials",
+            metadata={"provider": "password"},
+        )
+        return _error_response(
+            status_code=401,
+            detail="Invalid email or password.",
+            code="invalid_credentials",
+        )
+
+    try:
+        await brute_force_service.ensure_not_locked(str(user.id))
+    except BruteForceProtectionError as exc:
+        await audit_service.record(
+            db=db_session,
+            event_type="user.login.failure",
+            actor_type="user",
+            success=False,
+            request=request,
+            actor_id=str(user.id),
+            failure_reason=exc.code,
+            metadata={"provider": "password"},
+        )
+        return _error_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            headers=exc.headers,
+        )
+
+    if not user_service.verify_password(
+        password=payload.password, password_hash=user.password_hash
+    ):
+        try:
+            failure_decision = await brute_force_service.record_failed_password_attempt(
+                str(user.id),
+                ip_address=client_ip,
+            )
+        except BruteForceProtectionError as exc:
+            await audit_service.record(
+                db=db_session,
+                event_type="user.login.failure",
+                actor_type="user",
+                success=False,
+                request=request,
+                actor_id=str(user.id),
+                failure_reason=exc.code,
+                metadata={"provider": "password"},
+            )
+            return _error_response(
+                status_code=exc.status_code,
+                detail=exc.detail,
+                code=exc.code,
+                headers=exc.headers,
+            )
+
+        if failure_decision.locked:
+            await audit_service.record(
+                db=db_session,
+                event_type="user.locked",
+                actor_type="user",
+                success=False,
+                request=request,
+                actor_id=str(user.id),
+                target_id=str(user.id),
+                target_type="user",
+                failure_reason="account_locked",
+                metadata={
+                    "provider": "password",
+                    "retry_after": failure_decision.retry_after,
+                    "distributed_attack": failure_decision.distributed_attack,
+                    "attempt_count": failure_decision.attempt_count,
+                },
+            )
+            await audit_service.record(
+                db=db_session,
+                event_type="user.login.failure",
+                actor_type="user",
+                success=False,
+                request=request,
+                actor_id=str(user.id),
+                failure_reason="account_locked",
+                metadata={"provider": "password"},
+            )
+            return _error_response(
+                status_code=401,
+                detail="Account temporarily locked.",
+                code="account_locked",
+                headers={"Retry-After": str(failure_decision.retry_after or 1)},
+            )
+
+        await audit_service.record(
+            db=db_session,
+            event_type="user.login.failure",
+            actor_type="user",
+            success=False,
+            request=request,
+            actor_id=str(user.id),
             failure_reason="invalid_credentials",
             metadata={"provider": "password"},
         )
@@ -163,6 +268,30 @@ async def login(
             masked_email=challenge.masked_email,
         )
 
+    try:
+        suspicious_login = await brute_force_service.record_successful_login(
+            str(user.id),
+            ip_address=client_ip,
+            user_agent=user_agent,
+        )
+    except BruteForceProtectionError as exc:
+        await audit_service.record(
+            db=db_session,
+            event_type="user.login.failure",
+            actor_type="user",
+            success=False,
+            request=request,
+            actor_id=str(user.id),
+            failure_reason=exc.code,
+            metadata={"provider": "password"},
+        )
+        return _error_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            headers=exc.headers,
+        )
+
     issued_pair = _issue_token_pair(
         token_service=token_service,
         db_session=db_session,
@@ -205,6 +334,16 @@ async def login(
         actor_id=str(user.id),
         metadata={"provider": "password"},
     )
+    if suspicious_login.suspicious:
+        await audit_service.record(
+            db=db_session,
+            event_type="user.login.suspicious",
+            actor_type="user",
+            success=True,
+            request=request,
+            actor_id=str(user.id),
+            metadata={"provider": "password", **suspicious_login.metadata},
+        )
     await audit_service.record(
         db=db_session,
         event_type="session.created",

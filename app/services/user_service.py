@@ -145,6 +145,10 @@ class UserService:
         """Verify a plaintext password against the stored bcrypt hash."""
         return bool(self._password_context.verify(password, password_hash))
 
+    def dummy_verify(self) -> None:
+        """Perform constant-time-ish password work for enumeration-safe failures."""
+        self._password_context.dummy_verify()
+
     async def _get_user_for_update(self, db_session: AsyncSession, user_id: UUID) -> User | None:
         """Fetch user row for mutation with row lock."""
         statement = select(User).where(User.id == user_id).with_for_update()
