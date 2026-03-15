@@ -30,6 +30,12 @@ from app.core.sessions import (
 )
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
 from app.models.user import User
+from app.services.brute_force_service import (
+    BruteForceProtectionError,
+    BruteForceProtectionService,
+    get_brute_force_service,
+)
+from app.services.token_service import TokenService, get_token_service
 from app.services.user_service import UserService
 
 logger = structlog.get_logger(__name__)
@@ -38,11 +44,19 @@ logger = structlog.get_logger(__name__)
 class LifecycleServiceError(Exception):
     """Raised for lifecycle flow failures."""
 
-    def __init__(self, detail: str, code: str, status_code: int) -> None:
+    def __init__(
+        self,
+        detail: str,
+        code: str,
+        status_code: int,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(detail)
         self.detail = detail
         self.code = code
         self.status_code = status_code
+        self.headers = headers or {}
 
 
 class LifecycleEmailSender(Protocol):
@@ -120,10 +134,14 @@ class LifecycleService:
         email_verify_ttl_seconds: int,
         session_service: SessionService | None = None,
         password_reset_ttl_seconds: int = 3600,
+        token_service: TokenService | None = None,
+        brute_force_service: BruteForceProtectionService | None = None,
     ) -> None:
         self._jwt_service = jwt_service
         self._signing_key_service = signing_key_service
         self._user_service = user_service
+        self._token_service = token_service
+        self._brute_force_service = brute_force_service
         self._session_service = session_service
         self._redis = redis_client
         self._email_sender = email_sender
@@ -380,6 +398,88 @@ class LifecycleService:
             )
         return user
 
+    async def reauthenticate(
+        self,
+        db_session: AsyncSession,
+        *,
+        access_token: str,
+        password: str,
+        client_ip: str | None = None,
+        user_agent: str | None = None,
+    ) -> str:
+        """Re-verify the user's password and mint a fresh access token."""
+        claims = await self.validate_access_token(db_session=db_session, token=access_token)
+        user_id = str(claims.get("sub", "")).strip()
+        access_jti = str(claims.get("jti", "")).strip()
+        if not user_id or not access_jti:
+            raise LifecycleServiceError("Invalid token.", "invalid_token", 401)
+        if bool(claims.get("email_otp_enabled", False)):
+            raise LifecycleServiceError("OTP required.", "otp_required", 403)
+        if self._token_service is None or self._brute_force_service is None:
+            raise RuntimeError("LifecycleService requires reauth dependencies.")
+
+        user = await self._get_user_by_id(db_session=db_session, user_id=user_id, for_update=True)
+        if user is None or user.password_hash is None:
+            raise LifecycleServiceError("Invalid token.", "invalid_token", 401)
+
+        try:
+            await self._brute_force_service.ensure_not_locked(user_id)
+        except BruteForceProtectionError as exc:
+            raise LifecycleServiceError(
+                exc.detail,
+                exc.code,
+                exc.status_code,
+                headers=exc.headers,
+            ) from exc
+
+        if not self._user_service.verify_password(password=password, password_hash=user.password_hash):
+            try:
+                decision = await self._brute_force_service.record_failed_password_attempt(
+                    user_id,
+                    ip_address=client_ip,
+                )
+            except BruteForceProtectionError as exc:
+                raise LifecycleServiceError(
+                    exc.detail,
+                    exc.code,
+                    exc.status_code,
+                    headers=exc.headers,
+                ) from exc
+            if decision.locked:
+                raise LifecycleServiceError(
+                    "Account temporarily locked.",
+                    "account_locked",
+                    401,
+                    headers={"Retry-After": str(decision.retry_after or 1)},
+                )
+            raise LifecycleServiceError("Invalid email or password.", "invalid_credentials", 401)
+
+        auth_time = datetime.now(UTC)
+        access_token_result = await self._token_service.issue_access_token(
+            db_session=db_session,
+            user_id=str(user.id),
+            email=user.email,
+            role=user.role,
+            email_verified=user.email_verified,
+            email_otp_enabled=user.email_otp_enabled,
+            scopes=[str(scope) for scope in claims.get("scopes", [])]
+            if isinstance(claims.get("scopes", []), list)
+            else [],
+            auth_time=auth_time,
+        )
+        if self._session_service is None:
+            raise RuntimeError("LifecycleService requires session_service for re-authentication.")
+        try:
+            await self._session_service.reauthenticate_session(
+                db_session=db_session,
+                current_access_jti=access_jti,
+                new_access_token=access_token_result.access_token,
+                auth_time=auth_time,
+            )
+        except SessionStateError as exc:
+            raise LifecycleServiceError(exc.detail, exc.code, exc.status_code) from exc
+        return access_token_result.access_token
+
     async def _issue_email_verify_token(
         self,
         db_session: AsyncSession,
@@ -482,6 +582,28 @@ class LifecycleService:
             return None
         return user
 
+    async def _get_user_by_id(
+        self,
+        db_session: AsyncSession,
+        user_id: str,
+        *,
+        for_update: bool,
+    ) -> User | None:
+        """Fetch one active, non-deleted user by ID."""
+        try:
+            parsed_user_id = UUID(user_id)
+        except ValueError:
+            return None
+        statement = select(User).where(
+            User.id == parsed_user_id,
+            User.deleted_at.is_(None),
+            User.is_active.is_(True),
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        result = await db_session.execute(statement)
+        return result.scalar_one_or_none()
+
     @staticmethod
     def _hash_verification_token(token: str) -> str:
         """Hash verification token for database storage."""
@@ -526,6 +648,8 @@ def get_lifecycle_service() -> LifecycleService:
         jwt_service=get_jwt_service(),
         signing_key_service=get_signing_key_service(),
         user_service=UserService(),
+        token_service=get_token_service(),
+        brute_force_service=get_brute_force_service(),
         session_service=get_session_service(),
         redis_client=get_redis_client(),
         email_sender=get_verification_email_sender(),

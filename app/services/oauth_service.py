@@ -61,6 +61,7 @@ class OAuthService:
         email: str,
         role: str,
         email_verified: bool,
+        email_otp_enabled: bool,
         scopes: list[str],
     ):
         """Issue token pair while tolerating legacy test doubles."""
@@ -80,12 +81,16 @@ class OAuthService:
                 kwargs["role"] = role
             if "email_verified" in signature.parameters:
                 kwargs["email_verified"] = email_verified
+            if "email_otp_enabled" in signature.parameters:
+                kwargs["email_otp_enabled"] = email_otp_enabled
             return issue_method(**kwargs)
         kwargs = {"user_id": user_id, "email": email, "scopes": scopes}
         if signature and "role" in signature.parameters:
             kwargs["role"] = role
         if signature and "email_verified" in signature.parameters:
             kwargs["email_verified"] = email_verified
+        if signature and "email_otp_enabled" in signature.parameters:
+            kwargs["email_otp_enabled"] = email_otp_enabled
         return issue_method(**kwargs)
 
     async def build_google_login_url(self, redirect_uri: str | None) -> str:
@@ -160,6 +165,7 @@ class OAuthService:
             email=user.email,
             role=user.role,
             email_verified=user.email_verified,
+            email_otp_enabled=user.email_otp_enabled,
             scopes=[],
         )
         token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
@@ -169,7 +175,9 @@ class OAuthService:
             email=user.email,
             role=user.role,
             email_verified=user.email_verified,
+            email_otp_enabled=user.email_otp_enabled,
             scopes=[],
+            raw_access_token=token_pair.access_token,
             raw_refresh_token=token_pair.refresh_token,
         )
         return token_pair

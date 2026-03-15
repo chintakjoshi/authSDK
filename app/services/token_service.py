@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import lru_cache
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +19,13 @@ class TokenPair:
 
     access_token: str
     refresh_token: str
+
+
+@dataclass(frozen=True)
+class AccessToken:
+    """Returned access token payload for re-authentication refreshes."""
+
+    access_token: str
 
 
 class TokenService:
@@ -42,11 +50,19 @@ class TokenService:
         email: str | None = None,
         role: str = "user",
         email_verified: bool = False,
+        email_otp_enabled: bool = False,
         scopes: list[str] | None = None,
+        auth_time: datetime | None = None,
     ) -> TokenPair:
         """Issue access and refresh tokens for a user identity."""
         active_key = await self._signing_key_service.get_active_signing_key(db_session)
-        access_claims: dict[str, object] = {"role": role, "email_verified": email_verified}
+        resolved_auth_time = auth_time or datetime.now(UTC)
+        access_claims: dict[str, object] = {
+            "role": role,
+            "email_verified": email_verified,
+            "email_otp_enabled": email_otp_enabled,
+            "auth_time": int(resolved_auth_time.timestamp()),
+        }
         if email is not None:
             access_claims["email"] = email
         if scopes is not None:
@@ -67,6 +83,40 @@ class TokenService:
             signing_kid=active_key.kid,
         )
         return TokenPair(access_token=access_token, refresh_token=refresh_token)
+
+    async def issue_access_token(
+        self,
+        db_session: AsyncSession,
+        user_id: str,
+        email: str | None = None,
+        role: str = "user",
+        email_verified: bool = False,
+        email_otp_enabled: bool = False,
+        scopes: list[str] | None = None,
+        auth_time: datetime | None = None,
+    ) -> AccessToken:
+        """Issue a fresh access token without rotating the refresh token."""
+        active_key = await self._signing_key_service.get_active_signing_key(db_session)
+        resolved_auth_time = auth_time or datetime.now(UTC)
+        access_claims: dict[str, object] = {
+            "role": role,
+            "email_verified": email_verified,
+            "email_otp_enabled": email_otp_enabled,
+            "auth_time": int(resolved_auth_time.timestamp()),
+        }
+        if email is not None:
+            access_claims["email"] = email
+        if scopes is not None:
+            access_claims["scopes"] = scopes
+        access_token = self._jwt_service.issue_token(
+            subject=user_id,
+            token_type="access",
+            expires_in_seconds=self._access_token_ttl_seconds,
+            additional_claims=access_claims,
+            signing_private_key_pem=active_key.private_key_pem,
+            signing_kid=active_key.kid,
+        )
+        return AccessToken(access_token=access_token)
 
 
 @lru_cache

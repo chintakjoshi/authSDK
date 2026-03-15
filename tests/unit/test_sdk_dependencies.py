@@ -14,7 +14,7 @@ from httpx import ASGITransport, AsyncClient
 from jose import jwt
 
 from sdk.client import AuthClient
-from sdk.dependencies import get_current_user, require_action_token, require_role
+from sdk.dependencies import get_current_user, require_action_token, require_fresh_auth, require_role
 
 
 def _base64url_uint(value: int) -> str:
@@ -75,8 +75,10 @@ async def test_require_role_allows_matching_role() -> None:
             "user_id": "u-1",
             "email": "a@example.com",
             "email_verified": True,
+            "email_otp_enabled": False,
             "role": "admin",
             "scopes": [],
+            "auth_time": int(datetime.now(UTC).timestamp()),
         }
     )
     async with AsyncClient(
@@ -96,8 +98,10 @@ async def test_require_role_rejects_non_matching_role() -> None:
             "user_id": "u-1",
             "email": "a@example.com",
             "email_verified": True,
+            "email_otp_enabled": False,
             "role": "user",
             "scopes": [],
+            "auth_time": int(datetime.now(UTC).timestamp()),
         }
     )
     async with AsyncClient(
@@ -131,8 +135,10 @@ async def test_require_action_token_allows_matching_action_and_user() -> None:
         "user_id": "u-1",
         "email": "a@example.com",
         "email_verified": True,
+        "email_otp_enabled": False,
         "role": "user",
         "scopes": [],
+        "auth_time": int(datetime.now(UTC).timestamp()),
     }
     dependency = Depends(
         require_action_token(
@@ -164,8 +170,10 @@ async def test_require_action_token_sets_headers_when_missing() -> None:
         "user_id": "u-1",
         "email": "a@example.com",
         "email_verified": True,
+        "email_otp_enabled": False,
         "role": "user",
         "scopes": [],
+        "auth_time": int(datetime.now(UTC).timestamp()),
     }
     dependency = Depends(require_action_token("erase_account", auth_base_url="https://auth.local"))
 
@@ -182,3 +190,32 @@ async def test_require_action_token_sets_headers_when_missing() -> None:
     assert response.json()["detail"] == "Action token required"
     assert response.headers["x-otp-required"] == "true"
     assert response.headers["x-otp-action"] == "erase_account"
+
+
+async def test_require_fresh_auth_rejects_stale_auth_time() -> None:
+    """Fresh-auth dependency rejects stale sessions with a reauth header."""
+    app = FastAPI()
+    app.dependency_overrides[get_current_user] = lambda: {
+        "type": "user",
+        "user_id": "u-1",
+        "email": "a@example.com",
+        "email_verified": True,
+        "email_otp_enabled": False,
+        "role": "user",
+        "scopes": [],
+        "auth_time": int((datetime.now(UTC) - timedelta(minutes=10)).timestamp()),
+    }
+    dependency = Depends(require_fresh_auth(300))
+
+    @app.post("/dangerous")
+    async def dangerous(user=dependency):  # type: ignore[no-untyped-def]
+        return {"user": user}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post("/dangerous")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Re-authentication required"
+    assert response.headers["x-reauth-required"] == "true"

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from jose import jwt
 from sqlalchemy import select
 
 from app.config import get_settings
@@ -251,7 +253,7 @@ async def test_action_otp_enables_and_disables_login_otp(
     user_factory,
     db_session,
 ) -> None:
-    """Action OTP gates OTP enrollment toggles and affects subsequent login behavior."""
+    """Fresh auth can enable OTP, while OTP-enabled users still require the OTP gate."""
     app: FastAPI = app_factory()
     sender = _CapturingOTPEmailSender()
     app.dependency_overrides[get_otp_service] = lambda: _build_otp_service(sender)
@@ -275,11 +277,9 @@ async def test_action_otp_enables_and_disables_login_otp(
         access_token = login.json()["access_token"]
         headers = {"authorization": f"Bearer {access_token}"}
 
-        missing_token = await client.post("/auth/otp/enable", headers=headers)
-        assert missing_token.status_code == 403
-        assert missing_token.json()["code"] == "action_token_invalid"
-        assert missing_token.headers["x-otp-required"] == "true"
-        assert missing_token.headers["x-otp-action"] == "enable_otp"
+        enable = await client.post("/auth/otp/enable", headers=headers)
+        assert enable.status_code == 200
+        assert enable.json() == {"email_otp_enabled": True}
 
         request_enable = await client.post(
             "/auth/otp/request/action",
@@ -296,12 +296,12 @@ async def test_action_otp_enables_and_disables_login_otp(
         assert verify_enable.status_code == 200
         enable_action_token = verify_enable.json()["action_token"]
 
-        enable = await client.post(
+        enable_with_action = await client.post(
             "/auth/otp/enable",
             headers={**headers, "x-action-token": enable_action_token},
         )
-        assert enable.status_code == 200
-        assert enable.json() == {"email_otp_enabled": True}
+        assert enable_with_action.status_code == 200
+        assert enable_with_action.json() == {"email_otp_enabled": True}
 
         login_with_otp = await client.post(
             "/auth/login",
@@ -318,6 +318,12 @@ async def test_action_otp_enables_and_disables_login_otp(
         assert verified_login.status_code == 200
         otp_access_token = verified_login.json()["access_token"]
         otp_headers = {"authorization": f"Bearer {otp_access_token}"}
+
+        disable_without_action = await client.post("/auth/otp/disable", headers=otp_headers)
+        assert disable_without_action.status_code == 403
+        assert disable_without_action.json()["code"] == "otp_required"
+        assert disable_without_action.headers["x-otp-required"] == "true"
+        assert disable_without_action.headers["x-otp-action"] == "disable_otp"
 
         request_disable = await client.post(
             "/auth/otp/request/action",
@@ -386,4 +392,74 @@ async def test_action_otp_request_requires_verified_email(
 
     assert request_action.status_code == 400
     assert request_action.json()["code"] == "email_not_verified"
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_enable_otp_requires_reauth_when_auth_time_is_stale(
+    app_factory,
+    user_factory,
+    db_session,
+) -> None:
+    """Non-OTP users fall back to password reauth when auth_time is stale."""
+    app: FastAPI = app_factory()
+    sender = _CapturingOTPEmailSender()
+    app.dependency_overrides[get_otp_service] = lambda: _build_otp_service(sender)
+
+    user = await user_factory("reauth-enable@example.com", "Password123!")
+    await _set_user_flags(
+        db_session,
+        user.id,
+        email_verified=True,
+        email_otp_enabled=False,
+    )
+    active_key = await get_signing_key_service().get_active_signing_key(db_session)
+    await db_session.rollback()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        login = await client.post(
+            "/auth/login",
+            json={"email": "reauth-enable@example.com", "password": "Password123!"},
+        )
+        assert login.status_code == 200
+        current_access_token = login.json()["access_token"]
+        current_claims = get_jwt_service().verify_token(current_access_token, expected_type="access")
+        stale_access_token = jwt.encode(
+            {
+                **current_claims,
+                "iat": int((datetime.now(UTC) - timedelta(minutes=10)).timestamp()),
+                "auth_time": int((datetime.now(UTC) - timedelta(minutes=10)).timestamp()),
+                "exp": int((datetime.now(UTC) + timedelta(minutes=5)).timestamp()),
+            },
+            active_key.private_key_pem,
+            algorithm="RS256",
+            headers={"kid": active_key.kid},
+        )
+
+        missing_reauth = await client.post(
+            "/auth/otp/enable",
+            headers={"authorization": f"Bearer {stale_access_token}"},
+        )
+        assert missing_reauth.status_code == 403
+        assert missing_reauth.json()["code"] == "reauth_required"
+        assert missing_reauth.headers["x-reauth-required"] == "true"
+
+        reauth = await client.post(
+            "/auth/reauth",
+            json={"password": "Password123!"},
+            headers={"authorization": f"Bearer {stale_access_token}"},
+        )
+        assert reauth.status_code == 200
+        fresh_access_token = reauth.json()["access_token"]
+
+        enable = await client.post(
+            "/auth/otp/enable",
+            headers={"authorization": f"Bearer {fresh_access_token}"},
+        )
+        assert enable.status_code == 200
+        assert enable.json() == {"email_otp_enabled": True}
+
     app.dependency_overrides.clear()

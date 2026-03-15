@@ -32,6 +32,7 @@ class _UserStub:
     password_hash: str = "hashed-password"
     role: str = "user"
     email_verified: bool = False
+    email_otp_enabled: bool = False
 
 
 class _UserServiceStub:
@@ -85,11 +86,23 @@ class _SessionServiceStub:
         email: str,
         role: str,
         email_verified: bool,
+        email_otp_enabled: bool,
         scopes: list[str],
+        raw_access_token: str,
         raw_refresh_token: str,
     ) -> Any:
         """No-op login session create."""
-        del db_session, user_id, email, role, email_verified, scopes, raw_refresh_token
+        del (
+            db_session,
+            user_id,
+            email,
+            role,
+            email_verified,
+            email_otp_enabled,
+            scopes,
+            raw_access_token,
+            raw_refresh_token,
+        )
         return uuid4()
 
     async def rotate_refresh_session(

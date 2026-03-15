@@ -72,7 +72,9 @@ def _issue_token_pair(
     email: str | None = None,
     role: str | None = None,
     email_verified: bool | None = None,
+    email_otp_enabled: bool | None = None,
     scopes: list[str] | None = None,
+    auth_time=None,
 ):
     """Issue token pair while supporting legacy test doubles without db_session arg."""
     issue_method = token_service.issue_token_pair
@@ -91,12 +93,20 @@ def _issue_token_pair(
             kwargs["role"] = role
         if email_verified is not None and "email_verified" in signature.parameters:
             kwargs["email_verified"] = email_verified
+        if email_otp_enabled is not None and "email_otp_enabled" in signature.parameters:
+            kwargs["email_otp_enabled"] = email_otp_enabled
+        if auth_time is not None and "auth_time" in signature.parameters:
+            kwargs["auth_time"] = auth_time
         return issue_method(**kwargs)
     kwargs: dict[str, object] = {"user_id": user_id, "email": email, "scopes": scopes}
     if signature and role is not None and "role" in signature.parameters:
         kwargs["role"] = role
     if signature and email_verified is not None and "email_verified" in signature.parameters:
         kwargs["email_verified"] = email_verified
+    if signature and email_otp_enabled is not None and "email_otp_enabled" in signature.parameters:
+        kwargs["email_otp_enabled"] = email_otp_enabled
+    if signature and auth_time is not None and "auth_time" in signature.parameters:
+        kwargs["auth_time"] = auth_time
     return issue_method(**kwargs)
 
 
@@ -299,6 +309,7 @@ async def login(
         email=user.email,
         role=getattr(user, "role", "user"),
         email_verified=bool(getattr(user, "email_verified", False)),
+        email_otp_enabled=bool(getattr(user, "email_otp_enabled", False)),
         scopes=[],
     )
     token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
@@ -309,7 +320,9 @@ async def login(
             email=user.email,
             role=getattr(user, "role", "user"),
             email_verified=bool(getattr(user, "email_verified", False)),
+            email_otp_enabled=bool(getattr(user, "email_otp_enabled", False)),
             scopes=[],
+            raw_access_token=token_pair.access_token,
             raw_refresh_token=token_pair.refresh_token,
         )
     except SessionStateError as exc:
@@ -387,7 +400,9 @@ async def refresh_token(
             email: str | None = None,
             role: str | None = None,
             email_verified: bool | None = None,
+            email_otp_enabled: bool | None = None,
             scopes: list[str] | None = None,
+            auth_time=None,
         ):
             issued = _issue_token_pair(
                 token_service=token_service,
@@ -396,7 +411,9 @@ async def refresh_token(
                 email=email,
                 role=role,
                 email_verified=email_verified,
+                email_otp_enabled=email_otp_enabled,
                 scopes=scopes,
+                auth_time=auth_time,
             )
             return await issued if inspect.isawaitable(issued) else issued
 

@@ -63,14 +63,14 @@ Behavior:
 
 ## `request.state.user` shape
 
-- JWT/user identity: `{ "type": "user", "user_id": str, "email": str, "email_verified": bool, "role": "admin"|"user"|"service", "scopes": list[str] }`
+- JWT/user identity: `{ "type": "user", "user_id": str, "email": str, "email_verified": bool, "email_otp_enabled": bool, "role": "admin"|"user"|"service", "scopes": list[str], "auth_time": int }`
 - API key identity: `{ "type": "api_key", "key_id": str, "service": str, "scopes": list[str], "email": None }`
 
 ## Dependencies
 
 ```python
 from fastapi import Depends, FastAPI
-from sdk import require_action_token, require_role
+from sdk import require_action_token, require_fresh_auth, require_role
 
 app = FastAPI()
 
@@ -84,5 +84,9 @@ async def dangerous_op(
         require_action_token("erase_account", auth_base_url="https://auth.example.com")
     )
 ):
+    return {"user_id": user["user_id"]}
+
+@app.post("/sensitive")
+async def sensitive_op(user=Depends(require_fresh_auth(300))):
     return {"user_id": user["user_id"]}
 ```

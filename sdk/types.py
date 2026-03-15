@@ -26,6 +26,7 @@ ErrorCode = Literal[
     "otp_required",
     "email_not_verified",
     "otp_issuance_blocked",
+    "reauth_required",
 ]
 
 
@@ -36,8 +37,10 @@ class UserIdentity(TypedDict):
     user_id: str
     email: str
     email_verified: bool
+    email_otp_enabled: bool
     role: Literal["admin", "user", "service"]
     scopes: list[str]
+    auth_time: int
 
 
 class APIKeyIdentity(TypedDict):
