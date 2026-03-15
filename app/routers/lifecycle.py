@@ -335,7 +335,9 @@ async def reauthenticate(
 
     user_id: str | None = None
     try:
-        claims = await lifecycle_service.validate_access_token(db_session=db_session, token=access_token)
+        claims = await lifecycle_service.validate_access_token(
+            db_session=db_session, token=access_token
+        )
         user_id = str(claims.get("sub", "")).strip() or None
         fresh_access_token = await lifecycle_service.reauthenticate(
             db_session=db_session,

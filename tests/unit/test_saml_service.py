@@ -71,7 +71,16 @@ class _SessionServiceStub:
         raw_refresh_token: str,
     ) -> str:
         """Assert verified state is propagated into session metadata."""
-        del db_session, user_id, email, role, email_otp_enabled, scopes, raw_access_token, raw_refresh_token
+        del (
+            db_session,
+            user_id,
+            email,
+            role,
+            email_otp_enabled,
+            scopes,
+            raw_access_token,
+            raw_refresh_token,
+        )
         assert email_verified is True
         return "session-id"
 

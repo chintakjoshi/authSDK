@@ -180,7 +180,9 @@ class SessionService:
                 auth_time=session_row.auth_time,
             )
             token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
-            access_jti = self._extract_access_jti(self._extract_access_claims(token_pair.access_token))
+            access_jti = self._extract_access_jti(
+                self._extract_access_claims(token_pair.access_token)
+            )
             session_row.hashed_refresh_token = self._hash_token(token_pair.refresh_token)
             session_row.expires_at = now + timedelta(seconds=self._refresh_token_ttl_seconds)
             await db_session.flush()
@@ -212,7 +214,11 @@ class SessionService:
                 for_update=True,
             )
             now = datetime.now(UTC)
-            if session_row is None or session_row.revoked_at is not None or session_row.expires_at <= now:
+            if (
+                session_row is None
+                or session_row.revoked_at is not None
+                or session_row.expires_at <= now
+            ):
                 raise SessionStateError("Session expired.", "session_expired", 401)
 
             payload = await self._get_session_payload(session_id=session_row.session_id)
@@ -377,7 +383,9 @@ class SessionService:
         payload_dict.setdefault("role", "user")
         payload_dict.setdefault("email_verified", False)
         payload_dict.setdefault("email_otp_enabled", False)
-        payload_dict.setdefault("auth_time", payload_dict.get("issued_at", datetime.now(UTC).isoformat()))
+        payload_dict.setdefault(
+            "auth_time", payload_dict.get("issued_at", datetime.now(UTC).isoformat())
+        )
         return SessionPayload(**payload_dict)
 
     async def _set_session_payload(

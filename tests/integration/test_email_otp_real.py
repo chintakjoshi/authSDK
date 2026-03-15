@@ -426,7 +426,9 @@ async def test_enable_otp_requires_reauth_when_auth_time_is_stale(
         )
         assert login.status_code == 200
         current_access_token = login.json()["access_token"]
-        current_claims = get_jwt_service().verify_token(current_access_token, expected_type="access")
+        current_claims = get_jwt_service().verify_token(
+            current_access_token, expected_type="access"
+        )
         stale_access_token = jwt.encode(
             {
                 **current_claims,

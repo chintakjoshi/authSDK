@@ -432,7 +432,9 @@ class LifecycleService:
                 headers=exc.headers,
             ) from exc
 
-        if not self._user_service.verify_password(password=password, password_hash=user.password_hash):
+        if not self._user_service.verify_password(
+            password=password, password_hash=user.password_hash
+        ):
             try:
                 decision = await self._brute_force_service.record_failed_password_attempt(
                     user_id,
@@ -462,9 +464,11 @@ class LifecycleService:
             role=user.role,
             email_verified=user.email_verified,
             email_otp_enabled=user.email_otp_enabled,
-            scopes=[str(scope) for scope in claims.get("scopes", [])]
-            if isinstance(claims.get("scopes", []), list)
-            else [],
+            scopes=(
+                [str(scope) for scope in claims.get("scopes", [])]
+                if isinstance(claims.get("scopes", []), list)
+                else []
+            ),
             auth_time=auth_time,
         )
         if self._session_service is None:
