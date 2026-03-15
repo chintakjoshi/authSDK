@@ -170,7 +170,9 @@ async def test_password_reset_rejects_expired_and_already_used_tokens(
 
         user = (
             await db_session.execute(
-                select(User).where(User.email == "expired-reset@example.com", User.deleted_at.is_(None))
+                select(User).where(
+                    User.email == "expired-reset@example.com", User.deleted_at.is_(None)
+                )
             )
         ).scalar_one()
         user.password_reset_token_expires = datetime.now(UTC) - timedelta(seconds=1)
@@ -184,7 +186,9 @@ async def test_password_reset_rejects_expired_and_already_used_tokens(
 
 
 @pytest.mark.asyncio
-async def test_password_forgot_returns_200_for_unknown_email_without_sending_mail(app_factory) -> None:
+async def test_password_forgot_returns_200_for_unknown_email_without_sending_mail(
+    app_factory,
+) -> None:
     """Forgot-password hides account existence for unknown emails."""
     app: FastAPI = app_factory()
     sender = _CapturingLifecycleEmailSender()

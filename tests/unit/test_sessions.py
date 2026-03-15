@@ -177,9 +177,7 @@ async def test_rotate_refresh_session_updates_hash_and_ttl() -> None:
         raw_refresh_token="old-refresh-token",
         token_issuer=lambda _user_id, email=None, role=None, email_verified=None, scopes=None: (
             TokenPair(access_token="new-access-token", refresh_token="new-refresh-token")
-            if email == "updated@example.com"
-            and role == "user"
-            and email_verified is True
+            if email == "updated@example.com" and role == "user" and email_verified is True
             else (_ for _ in ()).throw(AssertionError("refresh used stale user claims"))
         ),
     )
@@ -313,8 +311,12 @@ async def test_revoke_user_sessions_marks_all_sessions_revoked_without_committin
     service = SessionService(redis_client=redis, refresh_token_ttl_seconds=900)
     first = _session_row(raw_refresh_token="refresh-token-1")
     second = _session_row(raw_refresh_token="refresh-token-2")
-    redis.values[f"session:{first.session_id}"] = '{"user_id":"u1","email":"a@example.com","role":"user","scopes":[],"issued_at":"now"}'
-    redis.values[f"session:{second.session_id}"] = '{"user_id":"u1","email":"a@example.com","role":"user","scopes":[],"issued_at":"now"}'
+    redis.values[f"session:{first.session_id}"] = (
+        '{"user_id":"u1","email":"a@example.com","role":"user","scopes":[],"issued_at":"now"}'
+    )
+    redis.values[f"session:{second.session_id}"] = (
+        '{"user_id":"u1","email":"a@example.com","role":"user","scopes":[],"issued_at":"now"}'
+    )
 
     async def _fake_fetch_for_user(
         self: SessionService,
