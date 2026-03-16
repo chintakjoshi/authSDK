@@ -12,6 +12,7 @@ from app.dependencies import get_database_session
 from app.schemas.token import TokenPairResponse
 from app.services.audit_service import AuditService, get_audit_service
 from app.services.oauth_service import OAuthService, OAuthServiceError, get_oauth_service
+from app.services.webhook_service import WebhookService, get_webhook_service
 
 router = APIRouter(prefix="/auth/oauth", tags=["oauth"])
 
@@ -54,6 +55,7 @@ async def google_callback(
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     oauth_service: Annotated[OAuthService, Depends(get_oauth_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> TokenPairResponse | JSONResponse:
     """Complete Google OAuth callback and issue auth tokens."""
     try:
@@ -89,6 +91,10 @@ async def google_callback(
         success=True,
         request=request,
         metadata={"provider": "google"},
+    )
+    await webhook_service.emit_event(
+        event_type="session.created",
+        data={"provider": "google"},
     )
     await audit_service.record(
         db=db_session,

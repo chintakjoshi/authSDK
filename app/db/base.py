@@ -46,6 +46,8 @@ def import_model_modules() -> None:
         session,
         signing_key,
         user,
+        webhook_delivery,
+        webhook_endpoint,
     )
 
 

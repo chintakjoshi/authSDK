@@ -14,6 +14,7 @@ from app.dependencies import get_database_session
 from app.schemas.api_key import APIKeyCreateRequest, APIKeyCreateResponse, APIKeyListItem
 from app.services.api_key_service import APIKeyService, APIKeyServiceError, get_api_key_service
 from app.services.audit_service import AuditService, get_audit_service
+from app.services.webhook_service import WebhookService, get_webhook_service
 
 router = APIRouter(prefix="/auth/apikeys", tags=["apikeys"])
 
@@ -30,6 +31,7 @@ async def create_api_key(
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     api_key_service: Annotated[APIKeyService, Depends(get_api_key_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> APIKeyCreateResponse | JSONResponse:
     """Create API key and return raw key exactly once."""
     try:
@@ -64,6 +66,15 @@ async def create_api_key(
         target_id=str(created.key_id),
         target_type="api_key",
         metadata={"service": created.service, "scope": created.scope},
+    )
+    await webhook_service.emit_event(
+        event_type="api_key.created",
+        data={
+            "key_id": str(created.key_id),
+            "user_id": str(created.user_id) if created.user_id is not None else None,
+            "service": created.service,
+            "scope": created.scope,
+        },
     )
     return APIKeyCreateResponse(
         key_id=created.key_id,
@@ -124,6 +135,7 @@ async def revoke_api_key(
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     api_key_service: Annotated[APIKeyService, Depends(get_api_key_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> JSONResponse:
     """Revoke API key by key ID."""
     try:
@@ -151,6 +163,15 @@ async def revoke_api_key(
         target_id=str(revoked.id),
         target_type="api_key",
         metadata={"service": revoked.service, "scope": revoked.scope},
+    )
+    await webhook_service.emit_event(
+        event_type="api_key.revoked",
+        data={
+            "key_id": str(revoked.id),
+            "user_id": str(revoked.user_id) if revoked.user_id is not None else None,
+            "service": revoked.service,
+            "scope": revoked.scope,
+        },
     )
     return JSONResponse(
         status_code=200,

@@ -25,6 +25,7 @@ from app.schemas.token import TokenPairResponse
 from app.services.audit_service import AuditService, get_audit_service
 from app.services.brute_force_service import extract_client_ip, normalize_user_agent
 from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
+from app.services.webhook_service import WebhookService, get_webhook_service
 
 router = APIRouter(tags=["otp"])
 
@@ -101,6 +102,7 @@ async def verify_login_otp(
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     otp_service: Annotated[OTPService, Depends(get_otp_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> TokenPairResponse | JSONResponse:
     """Complete password login after email OTP verification."""
     try:
@@ -137,6 +139,10 @@ async def verify_login_otp(
         actor_id=result.user_id,
         metadata={"context": "login"},
     )
+    await webhook_service.emit_event(
+        event_type="otp.verified",
+        data={"user_id": result.user_id, "context": "login"},
+    )
     await audit_service.record(
         db=db_session,
         event_type="user.login.success",
@@ -166,6 +172,14 @@ async def verify_login_otp(
         target_id=str(result.session_id),
         target_type="session",
         metadata={"provider": "password"},
+    )
+    await webhook_service.emit_event(
+        event_type="session.created",
+        data={
+            "session_id": str(result.session_id),
+            "user_id": result.user_id,
+            "provider": "password",
+        },
     )
     await audit_service.record(
         db=db_session,
@@ -266,6 +280,7 @@ async def verify_action_otp(
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     otp_service: Annotated[OTPService, Depends(get_otp_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> VerifyActionOTPResponse | JSONResponse:
     """Verify an action OTP and mint an action token."""
     access_token = _extract_bearer_token(request)
@@ -308,6 +323,10 @@ async def verify_action_otp(
         request=request,
         actor_id=result.user_id,
         metadata={"context": "action", "action": result.action},
+    )
+    await webhook_service.emit_event(
+        event_type="otp.verified",
+        data={"user_id": result.user_id, "context": "action", "action": result.action},
     )
     return VerifyActionOTPResponse(action_token=result.action_token)
 

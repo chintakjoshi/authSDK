@@ -14,6 +14,7 @@ from app.dependencies import get_database_session
 from app.schemas.token import TokenPairResponse
 from app.services.audit_service import AuditService, get_audit_service
 from app.services.saml_service import SamlService, SamlServiceError, get_saml_service
+from app.services.webhook_service import WebhookService, get_webhook_service
 
 router = APIRouter(prefix="/auth/saml", tags=["saml"])
 
@@ -72,6 +73,7 @@ async def saml_callback(
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     saml_service: Annotated[SamlService, Depends(get_saml_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> TokenPairResponse | JSONResponse:
     """Handle SAML response callback and issue tokens."""
     get_data = _query_to_dict(request)
@@ -109,6 +111,10 @@ async def saml_callback(
         success=True,
         request=request,
         metadata={"provider": "saml"},
+    )
+    await webhook_service.emit_event(
+        event_type="session.created",
+        data={"provider": "saml"},
     )
     await audit_service.record(
         db=db_session,

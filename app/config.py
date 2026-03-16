@@ -112,6 +112,15 @@ class EmailSettings(BaseModel):
     action_token_ttl_seconds: int = Field(default=300, ge=1)
 
 
+class WebhookSettings(BaseModel):
+    """Webhook delivery, signing, and worker settings."""
+
+    queue_name: str = "webhooks"
+    request_timeout_seconds: int = Field(default=10, ge=1)
+    response_body_max_chars: int = Field(default=1000, ge=1)
+    secret_encryption_key: SecretStr | None = None
+
+
 class Settings(BaseSettings):
     """Root application settings loaded from environment variables."""
 
@@ -131,6 +140,7 @@ class Settings(BaseSettings):
     rate_limit: RateLimitSettings
     signing_keys: SigningKeySettings = SigningKeySettings()
     email: EmailSettings = EmailSettings()
+    webhook: WebhookSettings = WebhookSettings()
 
 
 def _standard_log_fields(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, Any]:

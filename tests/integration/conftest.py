@@ -57,6 +57,12 @@ def _clear_dependency_caches() -> None:
     from app.services.otp_service import get_otp_email_sender, get_otp_service
     from app.services.saml_service import get_saml_service
     from app.services.token_service import get_token_service
+    from app.services.webhook_service import (
+        get_webhook_queue,
+        get_webhook_redis_connection,
+        get_webhook_scheduler,
+        get_webhook_service,
+    )
 
     get_settings.cache_clear()
     get_engine.cache_clear()
@@ -77,6 +83,10 @@ def _clear_dependency_caches() -> None:
     get_otp_service.cache_clear()
     get_oauth_service.cache_clear()
     get_saml_service.cache_clear()
+    get_webhook_redis_connection.cache_clear()
+    get_webhook_queue.cache_clear()
+    get_webhook_scheduler.cache_clear()
+    get_webhook_service.cache_clear()
 
 
 async def _close_async_client(client: Any) -> None:
@@ -265,6 +275,8 @@ async def reset_state(
     from app.models.session import Session
     from app.models.signing_key import SigningKey
     from app.models.user import User, UserIdentity
+    from app.models.webhook_delivery import WebhookDelivery
+    from app.models.webhook_endpoint import WebhookEndpoint
 
     await _dispose_async_singletons()
     _clear_dependency_caches()
@@ -277,6 +289,8 @@ async def reset_state(
         await session.execute(delete(SigningKey))
         await session.execute(delete(APIKey))
         await session.execute(delete(OAuthClient))
+        await session.execute(delete(WebhookDelivery))
+        await session.execute(delete(WebhookEndpoint))
         await session.execute(delete(User))
         await session.commit()
 

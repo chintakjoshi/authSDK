@@ -38,6 +38,7 @@ from app.services.m2m_service import M2MService, M2MServiceError, get_m2m_servic
 from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
 from app.services.token_service import TokenService, get_token_service
 from app.services.user_service import UserService
+from app.services.webhook_service import WebhookService, get_webhook_service
 
 router = APIRouter(tags=["auth"])
 
@@ -139,6 +140,7 @@ async def login(
     otp_service: Annotated[OTPService, Depends(get_otp_service)],
     brute_force_service: Annotated[BruteForceProtectionService, Depends(get_brute_force_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> TokenPairResponse | LoginOTPChallengeResponse | JSONResponse:
     """Authenticate email/password credentials and issue JWT pair."""
     user = await user_service.get_user_by_email(db_session=db_session, email=payload.email)
@@ -224,6 +226,15 @@ async def login(
                     "retry_after": failure_decision.retry_after,
                     "distributed_attack": failure_decision.distributed_attack,
                     "attempt_count": failure_decision.attempt_count,
+                },
+            )
+            await webhook_service.emit_event(
+                event_type="user.locked",
+                data={
+                    "user_id": str(user.id),
+                    "provider": "password",
+                    "retry_after": failure_decision.retry_after,
+                    "distributed_attack": failure_decision.distributed_attack,
                 },
             )
             await audit_service.record(
@@ -385,6 +396,14 @@ async def login(
         target_id=str(session_id),
         target_type="session",
         metadata={"provider": "password"},
+    )
+    await webhook_service.emit_event(
+        event_type="session.created",
+        data={
+            "session_id": str(session_id),
+            "user_id": str(user.id),
+            "provider": "password",
+        },
     )
     await audit_service.record(
         db=db_session,
@@ -572,6 +591,7 @@ async def logout(
     signing_key_service: Annotated[SigningKeyService, Depends(get_signing_key_service)],
     session_service: Annotated[SessionService, Depends(get_session_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> Response | JSONResponse:
     """Revoke session and blocklist current access token JTI."""
     access_token = _extract_bearer_token(request)
@@ -634,6 +654,14 @@ async def logout(
         request=request,
         actor_id=str(claims.get("sub", "")),
         metadata={"provider": "password"},
+    )
+    await webhook_service.emit_event(
+        event_type="session.revoked",
+        data={
+            "user_id": str(claims.get("sub", "")),
+            "provider": "password",
+            "reason": "logout",
+        },
     )
     return Response(status_code=204)
 

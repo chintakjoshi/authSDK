@@ -28,6 +28,7 @@ ErrorCode = Literal[
     "otp_issuance_blocked",
     "reauth_required",
     "invalid_scope",
+    "invalid_webhook_url",
 ]
 
 
