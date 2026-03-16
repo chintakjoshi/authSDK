@@ -25,6 +25,7 @@ VALID_ERROR_CODES = {
     "invalid_verify_token",
     "account_locked",
     "invalid_scope",
+    "invalid_webhook_url",
 }
 
 _DEFAULT_ERROR_CODE_BY_STATUS: dict[int, str] = {

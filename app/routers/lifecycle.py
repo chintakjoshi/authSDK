@@ -30,6 +30,7 @@ from app.services.lifecycle_service import (
     LifecycleServiceError,
     get_lifecycle_service,
 )
+from app.services.webhook_service import WebhookService, get_webhook_service
 
 router = APIRouter(tags=["lifecycle"])
 
@@ -68,6 +69,7 @@ async def signup(
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     lifecycle_service: Annotated[LifecycleService, Depends(get_lifecycle_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> SignupResponse | JSONResponse:
     """Create password user and send signup verification email."""
     try:
@@ -99,6 +101,14 @@ async def signup(
         target_type="user",
         metadata={"provider": "password"},
     )
+    await webhook_service.emit_event(
+        event_type="user.created",
+        data={
+            "user_id": str(user.id),
+            "email_verified": user.email_verified,
+            "provider": "password",
+        },
+    )
     return SignupResponse(
         user_id=user.id,
         email=user.email,
@@ -113,6 +123,7 @@ async def verify_email(
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     lifecycle_service: Annotated[LifecycleService, Depends(get_lifecycle_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> VerifyEmailResponse | JSONResponse:
     """Consume verification token and mark account email as verified."""
     try:
@@ -143,6 +154,10 @@ async def verify_email(
         actor_id=str(user.id),
         target_id=str(user.id),
         target_type="user",
+    )
+    await webhook_service.emit_event(
+        event_type="user.email.verified",
+        data={"user_id": str(user.id)},
     )
     return VerifyEmailResponse(verified=True)
 
@@ -275,6 +290,7 @@ async def reset_password(
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     lifecycle_service: Annotated[LifecycleService, Depends(get_lifecycle_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> ResetPasswordResponse | JSONResponse:
     """Consume a reset token, set a new password, and revoke all active sessions."""
     user_id: str | None = None
@@ -309,6 +325,15 @@ async def reset_password(
         target_id=user_id,
         target_type="user",
     )
+    if user_id is not None:
+        await webhook_service.emit_event(
+            event_type="user.password.changed",
+            data={"user_id": user_id},
+        )
+        await webhook_service.emit_event(
+            event_type="session.revoked",
+            data={"user_id": user_id, "reason": "password_reset"},
+        )
     return ResetPasswordResponse(reset=True)
 
 
@@ -319,6 +344,7 @@ async def reauthenticate(
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     lifecycle_service: Annotated[LifecycleService, Depends(get_lifecycle_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> ReauthResponse | JSONResponse:
     """Re-verify password and issue a fresh access token with updated auth_time."""
     access_token = _extract_bearer_token(request)
@@ -358,6 +384,10 @@ async def reauthenticate(
                 target_id=user_id,
                 target_type="user",
                 failure_reason="account_locked",
+            )
+            await webhook_service.emit_event(
+                event_type="user.locked",
+                data={"user_id": user_id, "provider": "password"},
             )
         await audit_service.record(
             db=db_session,
