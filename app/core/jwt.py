@@ -17,7 +17,7 @@ from jose.exceptions import ExpiredSignatureError, JWTError
 
 from app.config import get_settings
 
-TokenType = Literal["access", "refresh", "email_verify", "otp_challenge", "action_token"]
+TokenType = Literal["access", "refresh", "email_verify", "otp_challenge", "action_token", "m2m"]
 JWT_ALGORITHM = "RS256"
 
 
@@ -162,6 +162,7 @@ class JWTService:
             or hmac.compare_digest(token_type, "email_verify")
             or hmac.compare_digest(token_type, "otp_challenge")
             or hmac.compare_digest(token_type, "action_token")
+            or hmac.compare_digest(token_type, "m2m")
         )
 
     @staticmethod

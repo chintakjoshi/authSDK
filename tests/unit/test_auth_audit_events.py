@@ -19,6 +19,7 @@ from app.routers.auth import get_user_service, router
 from app.services.api_key_service import APIKeyIntrospectionResult, get_api_key_service
 from app.services.audit_service import get_audit_service
 from app.services.brute_force_service import get_brute_force_service
+from app.services.m2m_service import ClientCredentialsTokenResult, get_m2m_service
 from app.services.otp_service import get_otp_service
 from app.services.token_service import TokenPair, get_token_service
 
@@ -198,6 +199,26 @@ class _APIKeyServiceStub:
         return APIKeyIntrospectionResult(valid=False, code="invalid_api_key")
 
 
+class _M2MServiceStub:
+    """M2M service stub for client-credentials auth events."""
+
+    async def authenticate_client_credentials(
+        self,
+        db_session: Any,
+        *,
+        client_id: str,
+        client_secret: str,
+        scope: str | None = None,
+    ) -> ClientCredentialsTokenResult:
+        del db_session, client_secret
+        return ClientCredentialsTokenResult(
+            access_token=f"m2m-access-{client_id}",
+            expires_in=3600,
+            scope=scope or "orders:read",
+            client_id=client_id,
+        )
+
+
 class _AuditServiceStub:
     """Audit service stub collecting event emissions for assertions."""
 
@@ -228,6 +249,7 @@ async def test_auth_routes_emit_required_step13_audit_events() -> None:
     app.dependency_overrides[get_jwt_service] = _JWTServiceStub
     app.dependency_overrides[get_signing_key_service] = _SigningKeyServiceStub
     app.dependency_overrides[get_api_key_service] = _APIKeyServiceStub
+    app.dependency_overrides[get_m2m_service] = _M2MServiceStub
     app.dependency_overrides[get_otp_service] = _OTPServiceStub
     app.dependency_overrides[get_brute_force_service] = _BruteForceServiceStub
     app.dependency_overrides[get_audit_service] = lambda: audit_stub
@@ -267,6 +289,19 @@ async def test_auth_routes_emit_required_step13_audit_events() -> None:
         assert introspect.status_code == 200
         assert introspect.json()["valid"] is True
 
+        m2m = await client.post(
+            "/auth/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": "worker-1",
+                "client_secret": "cs_secret",
+                "scope": "orders:read",
+            },
+            headers={"x-correlation-id": "cid-5"},
+        )
+        assert m2m.status_code == 200
+        assert m2m.json()["token_type"] == "Bearer"
+
     event_types = [event["event_type"] for event in audit_stub.events]
     assert "user.login.success" in event_types
     assert "session.created" in event_types
@@ -274,6 +309,7 @@ async def test_auth_routes_emit_required_step13_audit_events() -> None:
     assert "token.refreshed" in event_types
     assert "user.logout" in event_types
     assert "api_key.used" in event_types
+    assert "client.authenticated" in event_types
 
     serialized = str(audit_stub.events)
     assert "Password123!" not in serialized

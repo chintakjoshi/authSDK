@@ -52,21 +52,26 @@ def _build_token(
     include_jti: bool = True,
     role: str = "user",
     token_type: str = "access",
+    subject: str = "user-1",
+    scope: str = "svc:read",
 ) -> str:
     """Build RS256 JWT for middleware tests."""
     now = datetime.now(UTC)
     payload = {
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=5)).timestamp()),
-        "sub": "user-1",
+        "sub": subject,
         "type": token_type,
-        "email": email,
-        "email_verified": email_verified,
-        "email_otp_enabled": False,
         "role": role,
-        "scopes": ["svc:read"],
-        "auth_time": int(now.timestamp()),
     }
+    if token_type == "m2m":
+        payload["scope"] = scope
+    else:
+        payload["email"] = email
+        payload["email_verified"] = email_verified
+        payload["email_otp_enabled"] = False
+        payload["scopes"] = [scope]
+        payload["auth_time"] = int(now.timestamp())
     if include_jti:
         payload["jti"] = str(uuid4())
     return jwt.encode(payload, private_pem, algorithm="RS256", headers={"kid": kid})
@@ -259,3 +264,49 @@ async def test_jwt_middleware_rejects_otp_challenge_tokens() -> None:
     await auth_http_client.aclose()
     assert response.status_code == 401
     assert response.json()["code"] == "invalid_token"
+
+
+@pytest.mark.asyncio
+async def test_jwt_middleware_accepts_m2m_tokens() -> None:
+    """Protected routes accept valid M2M JWTs and inject service identity."""
+    private_pem, jwk = _generate_signing_material("kid-1")
+    token = _build_token(
+        private_pem,
+        kid="kid-1",
+        token_type="m2m",
+        role="service",
+        subject="client-123",
+        scope="billing:read billing:write",
+    )
+
+    async def auth_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/jwks.json":
+            return httpx.Response(status_code=200, json={"keys": [jwk]})
+        return httpx.Response(status_code=404, json={"detail": "not found"})
+
+    app = FastAPI()
+    transport = httpx.MockTransport(auth_handler)
+    auth_http_client = httpx.AsyncClient(base_url="https://auth.local", transport=transport)
+    auth_client = AuthClient(base_url="https://auth.local", http_client=auth_http_client)
+    app.add_middleware(
+        JWTAuthMiddleware, auth_base_url="https://auth.local", auth_client=auth_client
+    )
+
+    @app.get("/protected")
+    async def protected(request: Request) -> dict[str, object]:
+        return {"user": request.state.user}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get("/protected", headers={"authorization": f"Bearer {token}"})
+
+    await auth_http_client.aclose()
+    assert response.status_code == 200
+    assert response.json()["user"] == {
+        "type": "service",
+        "client_id": "client-123",
+        "role": "service",
+        "scopes": ["billing:read", "billing:write"],
+        "email": None,
+    }

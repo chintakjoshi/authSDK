@@ -17,23 +17,25 @@ from sdk.exceptions import (
     AuthServiceUnavailableError,
     JWTVerificationError,
 )
-from sdk.types import UserIdentity
+from sdk.types import AuthenticatedJWTIdentity, UserIdentity
 
 
-def get_current_user(request: Request) -> UserIdentity:
-    """Return authenticated user identity set by SDK middleware."""
+def get_current_user(request: Request) -> AuthenticatedJWTIdentity:
+    """Return authenticated JWT identity set by SDK middleware."""
     user = getattr(request.state, "user", None)
     if not isinstance(user, dict):
         raise HTTPException(status_code=401, detail="Invalid token.")
-    if user.get("type") != "user":
+    if user.get("type") not in {"user", "service"}:
         raise HTTPException(status_code=401, detail="Invalid token.")
     return user  # type: ignore[return-value]
 
 
-def require_role(*roles: str) -> Callable[[UserIdentity], UserIdentity]:
+def require_role(*roles: str) -> Callable[[AuthenticatedJWTIdentity], AuthenticatedJWTIdentity]:
     """Require that the authenticated user has one of the allowed roles."""
 
-    def checker(user: Annotated[UserIdentity, Depends(get_current_user)]) -> UserIdentity:
+    def checker(
+        user: Annotated[AuthenticatedJWTIdentity, Depends(get_current_user)],
+    ) -> AuthenticatedJWTIdentity:
         if user.get("role") not in roles:
             raise HTTPException(status_code=403, detail="Insufficient role")
         return user
@@ -46,14 +48,16 @@ def require_action_token(
     *,
     auth_base_url: str,
     auth_client: AuthClient | None = None,
-) -> Callable[[Request, UserIdentity], UserIdentity]:
+) -> Callable[[Request, AuthenticatedJWTIdentity], UserIdentity]:
     """Require a valid action token in X-Action-Token for the current user."""
     cache = JWKSCacheManager(auth_client=auth_client or AuthClient(base_url=auth_base_url))
 
     async def checker(
         request: Request,
-        user: Annotated[UserIdentity, Depends(get_current_user)],
+        user: Annotated[AuthenticatedJWTIdentity, Depends(get_current_user)],
     ) -> UserIdentity:
+        if user.get("type") != "user":
+            raise HTTPException(status_code=401, detail="Invalid token.")
         token = request.headers.get("x-action-token", "").strip()
         if not token:
             raise HTTPException(
@@ -77,10 +81,14 @@ def require_action_token(
     return checker
 
 
-def require_fresh_auth(max_age_seconds: int = 300) -> Callable[[UserIdentity], UserIdentity]:
+def require_fresh_auth(max_age_seconds: int = 300) -> Callable[[AuthenticatedJWTIdentity], UserIdentity]:
     """Require a recent auth_time claim for password re-authenticated actions."""
 
-    def checker(user: Annotated[UserIdentity, Depends(get_current_user)]) -> UserIdentity:
+    def checker(
+        user: Annotated[AuthenticatedJWTIdentity, Depends(get_current_user)],
+    ) -> UserIdentity:
+        if user.get("type") != "user":
+            raise HTTPException(status_code=401, detail="Invalid token.")
         auth_time = user.get("auth_time", 0)
         if not isinstance(auth_time, int) or (time.time() - auth_time) > max_age_seconds:
             raise HTTPException(
