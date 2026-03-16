@@ -81,7 +81,9 @@ def require_action_token(
     return checker
 
 
-def require_fresh_auth(max_age_seconds: int = 300) -> Callable[[AuthenticatedJWTIdentity], UserIdentity]:
+def require_fresh_auth(
+    max_age_seconds: int = 300,
+) -> Callable[[AuthenticatedJWTIdentity], UserIdentity]:
     """Require a recent auth_time claim for password re-authenticated actions."""
 
     def checker(
