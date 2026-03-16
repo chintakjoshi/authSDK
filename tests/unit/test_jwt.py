@@ -96,6 +96,22 @@ def test_issue_and_verify_email_verify_token(jwt_service: JWTService) -> None:
     assert payload["type"] == "email_verify"
 
 
+def test_issue_and_verify_m2m_token(jwt_service: JWTService) -> None:
+    """JWT service supports M2M client token type."""
+    token = jwt_service.issue_token(
+        subject="client-123",
+        token_type="m2m",
+        expires_in_seconds=60,
+        additional_claims={"role": "service", "scope": "billing:read"},
+    )
+
+    payload = jwt_service.verify_token(token, expected_type="m2m")
+    assert payload["sub"] == "client-123"
+    assert payload["type"] == "m2m"
+    assert payload["role"] == "service"
+    assert payload["scope"] == "billing:read"
+
+
 def test_jwks_returns_rsa_public_key(jwt_service: JWTService) -> None:
     """JWKS endpoint payload includes one RS256 RSA signing key."""
     jwks = jwt_service.jwks()

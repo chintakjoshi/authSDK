@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import inspect
+import json
 from typing import Annotated
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.jwt import JWTService, TokenValidationError, get_jwt_service
@@ -15,7 +18,12 @@ from app.core.signing_keys import SigningKeyService, get_signing_key_service
 from app.dependencies import get_database_session
 from app.schemas.api_key import APIKeyIntrospectRequest
 from app.schemas.otp import LoginOTPChallengeResponse
-from app.schemas.token import LogoutRequest, RefreshTokenRequest, TokenPairResponse
+from app.schemas.token import (
+    LogoutRequest,
+    OAuthAccessTokenResponse,
+    RefreshTokenRequest,
+    TokenPairResponse,
+)
 from app.schemas.user import LoginRequest
 from app.services.api_key_service import APIKeyService, get_api_key_service
 from app.services.audit_service import AuditService, get_audit_service
@@ -26,6 +34,7 @@ from app.services.brute_force_service import (
     get_brute_force_service,
     normalize_user_agent,
 )
+from app.services.m2m_service import M2MService, M2MServiceError, get_m2m_service
 from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
 from app.services.token_service import TokenService, get_token_service
 from app.services.user_service import UserService
@@ -63,6 +72,15 @@ def _extract_bearer_token(request: Request) -> str | None:
         return None
     cleaned = token.strip()
     return cleaned or None
+
+
+def _first_form_value(form_data: dict[str, list[str]], key: str) -> str | None:
+    """Return the first form value for a key or None when absent."""
+    values = form_data.get(key, [])
+    if not values:
+        return None
+    value = values[0].strip()
+    return value or None
 
 
 def _issue_token_pair(
@@ -383,16 +401,104 @@ async def login(
     )
 
 
-@router.post("/auth/token", response_model=TokenPairResponse)
-async def refresh_token(
-    payload: RefreshTokenRequest,
+@router.post("/auth/token", response_model=TokenPairResponse | OAuthAccessTokenResponse)
+async def token_endpoint(
     request: Request,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     token_service: Annotated[TokenService, Depends(get_token_service)],
     session_service: Annotated[SessionService, Depends(get_session_service)],
+    m2m_service: Annotated[M2MService, Depends(get_m2m_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
-) -> TokenPairResponse | JSONResponse:
-    """Rotate refresh token and issue a new token pair."""
+) -> TokenPairResponse | OAuthAccessTokenResponse | JSONResponse:
+    """Handle refresh-token rotation and client-credentials token issuance."""
+    content_type = request.headers.get("content-type", "").lower()
+    if "application/x-www-form-urlencoded" in content_type:
+        raw_body = await request.body()
+        form_data = parse_qs(raw_body.decode("utf-8"), keep_blank_values=True)
+        grant_type = _first_form_value(form_data, "grant_type")
+        if grant_type != "client_credentials":
+            await audit_service.record(
+                db=db_session,
+                event_type="client.auth.failure",
+                actor_type="service",
+                success=False,
+                request=request,
+                failure_reason="invalid_credentials",
+            )
+            return _error_response(
+                status_code=400,
+                detail="Unsupported grant type.",
+                code="invalid_credentials",
+            )
+
+        client_id = _first_form_value(form_data, "client_id")
+        client_secret = _first_form_value(form_data, "client_secret")
+        scope = _first_form_value(form_data, "scope")
+        if client_id is None or client_secret is None:
+            await audit_service.record(
+                db=db_session,
+                event_type="client.auth.failure",
+                actor_type="service",
+                success=False,
+                request=request,
+                failure_reason="invalid_credentials",
+                metadata={"client_id": client_id},
+            )
+            return _error_response(
+                status_code=401,
+                detail="Invalid client credentials.",
+                code="invalid_credentials",
+            )
+
+        try:
+            issued_token = await m2m_service.authenticate_client_credentials(
+                db_session=db_session,
+                client_id=client_id,
+                client_secret=client_secret,
+                scope=scope,
+            )
+        except M2MServiceError as exc:
+            await audit_service.record(
+                db=db_session,
+                event_type="client.auth.failure",
+                actor_type="service",
+                success=False,
+                request=request,
+                failure_reason=exc.code,
+                metadata={"client_id": client_id},
+            )
+            return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
+
+        await audit_service.record(
+            db=db_session,
+            event_type="client.authenticated",
+            actor_type="service",
+            success=True,
+            request=request,
+            metadata={"client_id": issued_token.client_id, "scope": issued_token.scope},
+        )
+        return OAuthAccessTokenResponse(
+            access_token=issued_token.access_token,
+            token_type="Bearer",
+            expires_in=issued_token.expires_in,
+            scope=issued_token.scope,
+        )
+
+    try:
+        payload = RefreshTokenRequest.model_validate(await request.json())
+    except json.JSONDecodeError:
+        return _error_response(
+            status_code=422,
+            detail="Invalid request payload.",
+            code="invalid_credentials",
+        )
+    except ValidationError:
+        return _error_response(
+            status_code=422,
+            detail="Invalid request payload.",
+            code="invalid_credentials",
+        )
+
     try:
 
         async def _issue_pair(

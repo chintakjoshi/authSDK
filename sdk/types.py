@@ -27,6 +27,7 @@ ErrorCode = Literal[
     "email_not_verified",
     "otp_issuance_blocked",
     "reauth_required",
+    "invalid_scope",
 ]
 
 
@@ -43,6 +44,16 @@ class UserIdentity(TypedDict):
     auth_time: int
 
 
+class ServiceIdentity(TypedDict):
+    """Authenticated machine identity injected for M2M JWT auth."""
+
+    type: Literal["service"]
+    client_id: str
+    role: Literal["service"]
+    scopes: list[str]
+    email: None
+
+
 class APIKeyIdentity(TypedDict):
     """Authenticated identity injected for API key auth."""
 
@@ -53,7 +64,8 @@ class APIKeyIdentity(TypedDict):
     email: None
 
 
-AuthenticatedIdentity = UserIdentity | APIKeyIdentity
+AuthenticatedJWTIdentity = UserIdentity | ServiceIdentity
+AuthenticatedIdentity = UserIdentity | ServiceIdentity | APIKeyIdentity
 
 
 class JWKS(TypedDict):

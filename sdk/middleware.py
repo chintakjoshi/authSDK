@@ -20,7 +20,12 @@ from sdk.exceptions import (
     AuthServiceUnavailableError,
     JWTVerificationError,
 )
-from sdk.types import APIKeyIdentity, APIKeyIntrospectionResponse, UserIdentity
+from sdk.types import (
+    APIKeyIdentity,
+    APIKeyIntrospectionResponse,
+    ServiceIdentity,
+    UserIdentity,
+)
 
 
 def _error_response(status_code: int, detail: str, code: str) -> JSONResponse:
@@ -108,11 +113,27 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         except AuthServiceResponseError:
             return _error_response(503, "Auth service unavailable.", "session_expired")
 
-        email = claims.get("email")
-        if not isinstance(email, str) or not email.strip():
-            return _error_response(401, "Invalid token.", "invalid_token")
         role = claims.get("role")
         if role not in {"admin", "user", "service"}:
+            return _error_response(401, "Invalid token.", "invalid_token")
+        token_type = str(claims.get("type", ""))
+        if token_type == "m2m":
+            scope_claim = claims.get("scope", "")
+            if role != "service" or not isinstance(scope_claim, str):
+                return _error_response(401, "Invalid token.", "invalid_token")
+            scopes = [scope for scope in scope_claim.split(" ") if scope]
+            service_identity: ServiceIdentity = {
+                "type": "service",
+                "client_id": str(claims.get("sub", "")),
+                "role": "service",
+                "scopes": scopes,
+                "email": None,
+            }
+            request.state.user = service_identity
+            return await call_next(request)
+
+        email = claims.get("email")
+        if not isinstance(email, str) or not email.strip():
             return _error_response(401, "Invalid token.", "invalid_token")
         email_verified = claims.get("email_verified")
         if not isinstance(email_verified, bool):
@@ -174,12 +195,15 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             raise JWTVerificationError("Invalid token.", "invalid_token") from exc
 
         token_type = str(claims.get("type", ""))
-        if token_type not in {"access", "refresh"}:
+        if token_type not in {"access", "refresh", "m2m"}:
             raise JWTVerificationError("Invalid token.", "invalid_token")
-        if self._required_token_type and not hmac.compare_digest(
-            token_type, self._required_token_type
-        ):
-            raise JWTVerificationError("Invalid token.", "invalid_token")
+        if self._required_token_type:
+            token_type_allowed = hmac.compare_digest(token_type, self._required_token_type) or (
+                hmac.compare_digest(self._required_token_type, "access")
+                and hmac.compare_digest(token_type, "m2m")
+            )
+            if not token_type_allowed:
+                raise JWTVerificationError("Invalid token.", "invalid_token")
         return claims
 
     @staticmethod

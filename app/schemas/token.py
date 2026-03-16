@@ -1,4 +1,4 @@
-"""Token response schemas."""
+"""Token request and response schemas."""
 
 from typing import Literal
 
@@ -11,6 +11,15 @@ class TokenPairResponse(BaseModel):
     access_token: str
     refresh_token: str
     token_type: Literal["bearer"] = "bearer"
+
+
+class OAuthAccessTokenResponse(BaseModel):
+    """OAuth2 access-token-only response payload."""
+
+    access_token: str
+    token_type: Literal["Bearer"] = "Bearer"
+    expires_in: int = Field(ge=1)
+    scope: str
 
 
 class RefreshTokenRequest(BaseModel):

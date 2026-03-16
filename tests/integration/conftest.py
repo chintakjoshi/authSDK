@@ -261,6 +261,7 @@ async def reset_state(
     from app.db.session import get_session_factory
     from app.models.api_key import APIKey
     from app.models.audit_event import AuditEvent
+    from app.models.oauth_client import OAuthClient
     from app.models.session import Session
     from app.models.signing_key import SigningKey
     from app.models.user import User, UserIdentity
@@ -275,6 +276,7 @@ async def reset_state(
         await session.execute(delete(Session))
         await session.execute(delete(SigningKey))
         await session.execute(delete(APIKey))
+        await session.execute(delete(OAuthClient))
         await session.execute(delete(User))
         await session.commit()
 

@@ -118,6 +118,32 @@ async def test_require_role_rejects_non_matching_role() -> None:
     assert response.json()["detail"] == "Insufficient role"
 
 
+async def test_require_role_allows_service_identity() -> None:
+    """Role dependency accepts M2M service identities for service-only routes."""
+    app = _build_app(
+        {
+            "type": "service",
+            "client_id": "client-1",
+            "email": None,
+            "role": "service",
+            "scopes": ["billing:read"],
+        }
+    )
+    service_dependency = Depends(require_role("service"))
+
+    @app.get("/service")
+    async def service_only(user=service_dependency):  # type: ignore[no-untyped-def]
+        return {"user": user}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get("/service")
+
+    assert response.status_code == 200
+    assert response.json()["user"]["client_id"] == "client-1"
+
+
 async def test_require_action_token_allows_matching_action_and_user() -> None:
     """Action-token dependency allows requests for the bound action and user."""
     private_pem, jwk = _generate_signing_material("kid-1")
