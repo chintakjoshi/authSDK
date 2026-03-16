@@ -41,11 +41,17 @@ def upgrade() -> None:
             nullable=False,
             server_default=sa.text("3600"),
         ),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("tenant_id", postgresql.UUID(as_uuid=True), nullable=True),
-        sa.CheckConstraint("role IN ('service')", name="ck_oauth_clients_ck_oauth_clients_role_allowed"),
+        sa.CheckConstraint(
+            "role IN ('service')", name="ck_oauth_clients_ck_oauth_clients_role_allowed"
+        ),
         sa.PrimaryKeyConstraint("id", name="pk_oauth_clients"),
         sa.UniqueConstraint("client_id", name="uq_oauth_clients_client_id"),
     )
