@@ -10,7 +10,7 @@ from app.middleware.metrics import MetricsMiddleware, build_metrics_endpoint
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.middleware.tracing import TracingMiddleware
-from app.routers import apikeys, auth, health, lifecycle, oauth, otp, saml, webhooks
+from app.routers import admin, apikeys, auth, health, lifecycle, oauth, otp, saml, webhooks
 
 
 def create_app() -> FastAPI:
@@ -38,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(saml.router)
     app.include_router(apikeys.router)
     app.include_router(webhooks.router)
+    app.include_router(admin.router)
     app.include_router(health.router)
     return app
 

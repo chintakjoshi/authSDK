@@ -93,6 +93,7 @@ class _SessionServiceStub:
     def __init__(self) -> None:
         self.revoked_user_ids: list[object] = []
         self.fail_with_redis = False
+        self.validation_error: SessionStateError | None = None
 
     async def revoke_user_sessions(
         self,
@@ -106,6 +107,17 @@ class _SessionServiceStub:
             raise SessionStateError("Session backend unavailable.", "session_expired", 503)
         self.revoked_user_ids.append((user_id, commit))
         return []
+
+    async def validate_access_token_session(
+        self,
+        db_session: Any,
+        *,
+        access_jti: str,
+    ) -> object:
+        del db_session, access_jti
+        if self.validation_error is not None:
+            raise self.validation_error
+        return object()
 
 
 class _DBSessionStub:
@@ -184,6 +196,20 @@ async def test_validate_access_token_fails_closed_when_blocklist_backend_unavail
 
     assert exc_info.value.code == "session_expired"
     assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_validate_access_token_rejects_revoked_session_binding() -> None:
+    """Lifecycle access-token validation rejects tokens bound to revoked sessions."""
+    session_service = _SessionServiceStub()
+    session_service.validation_error = SessionStateError("Session expired.", "session_expired", 401)
+    service = _build_service(_RedisStub(), session_service=session_service)
+
+    with pytest.raises(LifecycleServiceError) as exc_info:
+        await service.validate_access_token(db_session=object(), token="access-token")
+
+    assert exc_info.value.code == "session_expired"
+    assert exc_info.value.status_code == 401
 
 
 @pytest.mark.asyncio

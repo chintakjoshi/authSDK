@@ -463,3 +463,82 @@ async def test_revoke_user_sessions_rolls_back_when_redis_delete_fails() -> None
     assert exc_info.value.code == "session_expired"
     assert exc_info.value.status_code == 503
     assert db_session.rollback_count == 1
+
+
+@pytest.mark.asyncio
+async def test_validate_access_token_session_accepts_active_bound_session() -> None:
+    """Access-token validation accepts tokens still bound to an active session."""
+    redis = _FakeRedis()
+    service = SessionService(
+        redis_client=redis,
+        refresh_token_ttl_seconds=900,
+        access_token_ttl_seconds=300,
+    )
+    row = _session_row(raw_refresh_token="refresh-token-1")
+    redis.values["session_access:jti-123"] = str(row.session_id)
+    redis.values[f"session:{row.session_id}"] = (
+        '{"user_id":"u1","email":"a@example.com","role":"user","email_verified":false,"email_otp_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
+    )
+
+    async def _fake_fetch_by_session_id(
+        self: SessionService,
+        db_session: _FakeDBSession,
+        session_id,
+        *,
+        for_update: bool,
+    ) -> Session:
+        del db_session
+        assert session_id == row.session_id
+        assert for_update is False
+        return row
+
+    service._fetch_session_by_session_id = MethodType(  # type: ignore[assignment]
+        _fake_fetch_by_session_id,
+        service,
+    )
+
+    validated = await service.validate_access_token_session(
+        db_session=_FakeDBSession(),  # type: ignore[arg-type]
+        access_jti="jti-123",
+    )
+
+    assert validated == row.session_id
+
+
+@pytest.mark.asyncio
+async def test_validate_access_token_session_rejects_when_session_payload_missing() -> None:
+    """Access tokens fail once bulk revocation deletes the Redis session payload."""
+    redis = _FakeRedis()
+    service = SessionService(
+        redis_client=redis,
+        refresh_token_ttl_seconds=900,
+        access_token_ttl_seconds=300,
+    )
+    row = _session_row(raw_refresh_token="refresh-token-1")
+    redis.values["session_access:jti-123"] = str(row.session_id)
+
+    async def _fake_fetch_by_session_id(
+        self: SessionService,
+        db_session: _FakeDBSession,
+        session_id,
+        *,
+        for_update: bool,
+    ) -> Session:
+        del db_session
+        assert session_id == row.session_id
+        assert for_update is False
+        return row
+
+    service._fetch_session_by_session_id = MethodType(  # type: ignore[assignment]
+        _fake_fetch_by_session_id,
+        service,
+    )
+
+    with pytest.raises(SessionStateError) as exc_info:
+        await service.validate_access_token_session(
+            db_session=_FakeDBSession(),  # type: ignore[arg-type]
+            access_jti="jti-123",
+        )
+
+    assert exc_info.value.code == "session_expired"
+    assert exc_info.value.status_code == 401

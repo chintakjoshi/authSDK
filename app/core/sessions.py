@@ -278,6 +278,30 @@ class SessionService:
             await db_session.commit()
         return session_ids
 
+    async def validate_access_token_session(
+        self,
+        db_session: AsyncSession,
+        *,
+        access_jti: str,
+    ) -> UUID:
+        """Ensure an access token still belongs to an active, non-revoked session."""
+        session_id = await self._get_session_id_for_access_jti(access_jti)
+        session_row = await self._fetch_session_by_session_id(
+            db_session=db_session,
+            session_id=session_id,
+            for_update=False,
+        )
+        now = datetime.now(UTC)
+        if (
+            session_row is None
+            or session_row.revoked_at is not None
+            or session_row.expires_at <= now
+        ):
+            raise SessionStateError("Session expired.", "session_expired", 401)
+
+        await self._get_session_payload(session_id=session_id)
+        return session_row.session_id
+
     async def revoke_session(
         self,
         db_session: AsyncSession,

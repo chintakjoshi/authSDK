@@ -26,6 +26,7 @@ class APIKey(Base, TimestampTenantMixin):
     user_id: Mapped[UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
     service: Mapped[str] = mapped_column(String(128), nullable=False)
     hashed_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     key_prefix: Mapped[str] = mapped_column(String(8), nullable=False)

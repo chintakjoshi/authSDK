@@ -67,6 +67,8 @@ class UserService:
         new_role: AllowedRole,
         request: Request | None = None,
         audit_service: AuditService | None = None,
+        *,
+        commit: bool = True,
     ) -> User:
         """Update role for target user with admin-only and last-admin protections."""
         if actor_role != "admin":
@@ -99,7 +101,8 @@ class UserService:
 
         user.role = new_role
         await db_session.flush()
-        await db_session.commit()
+        if commit:
+            await db_session.commit()
         return user
 
     async def delete_user(
@@ -107,6 +110,8 @@ class UserService:
         db_session: AsyncSession,
         actor_role: str,
         user_id: UUID,
+        *,
+        commit: bool = True,
     ) -> User:
         """Soft-delete a user with admin-only and last-admin protections."""
         if actor_role != "admin":
@@ -121,7 +126,8 @@ class UserService:
         user.deleted_at = datetime.now(UTC)
         user.is_active = False
         await db_session.flush()
-        await db_session.commit()
+        if commit:
+            await db_session.commit()
         return user
 
     async def count_active_admins(self, db_session: AsyncSession) -> int:

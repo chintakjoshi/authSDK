@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.jwt import get_jwt_service
 from app.models.oauth_client import OAuthClient
 from app.models.session import Session
-from app.services.m2m_service import M2MService
+from app.services.m2m_service import M2MService, get_m2m_service
 
 
 async def _create_oauth_client(
@@ -175,3 +175,87 @@ async def test_client_credentials_flow_rejects_invalid_secret_and_inactive_clien
         "detail": "Invalid client credentials.",
         "code": "invalid_credentials",
     }
+
+
+@pytest.mark.asyncio
+async def test_m2m_service_management_crud_and_secret_rotation(
+    db_session: AsyncSession,
+) -> None:
+    """M2M service can create, rotate, list, and soft-delete managed clients."""
+    service = get_m2m_service()
+
+    created = await service.create_client(
+        db_session=db_session,
+        name="Billing Worker",
+        scopes=["billing:read", "billing:write"],
+        token_ttl_seconds=1800,
+    )
+
+    assert created.client_id.startswith("client_")
+    assert created.client_secret.startswith("cs_")
+
+    page = await service.list_clients_page(db_session=db_session, limit=1)
+    assert len(page.items) == 1
+    assert page.items[0].id == created.id
+
+    rotated = await service.rotate_client_secret(
+        db_session=db_session,
+        client_row_id=created.id,
+    )
+    assert rotated.client_id == created.client_id
+    assert rotated.client_secret.startswith("cs_")
+    assert rotated.client_secret != created.client_secret
+
+    deleted = await service.delete_client(
+        db_session=db_session,
+        client_row_id=created.id,
+    )
+    assert deleted.deleted_at is not None
+    assert deleted.is_active is False
+
+    remaining = await service.list_clients(db_session=db_session)
+    assert remaining == []
+
+
+@pytest.mark.asyncio
+async def test_rotated_m2m_secret_invalidates_old_secret_immediately(
+    app_factory,
+    db_session: AsyncSession,
+) -> None:
+    """Rotating a client secret immediately invalidates the old secret at /auth/token."""
+    service = get_m2m_service()
+    created = await service.create_client(
+        db_session=db_session,
+        name="Analytics Worker",
+        scopes=["analytics:read"],
+    )
+    rotated = await service.rotate_client_secret(
+        db_session=db_session,
+        client_row_id=created.id,
+    )
+    app = app_factory()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        old_secret = await client.post(
+            "/auth/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": created.client_id,
+                "client_secret": created.client_secret,
+            },
+        )
+        new_secret = await client.post(
+            "/auth/token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": created.client_id,
+                "client_secret": rotated.client_secret,
+            },
+        )
+
+    assert old_secret.status_code == 401
+    assert old_secret.json()["code"] == "invalid_credentials"
+    assert new_secret.status_code == 200

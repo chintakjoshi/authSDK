@@ -50,6 +50,7 @@ def _clear_dependency_caches() -> None:
     from app.core.signing_keys import get_signing_key_service
     from app.db.session import get_engine, get_session_factory
     from app.middleware.rate_limit import get_rate_limit_redis_client
+    from app.services.admin_service import get_admin_service
     from app.services.api_key_service import get_api_key_service
     from app.services.brute_force_service import get_brute_force_service
     from app.services.lifecycle_service import get_lifecycle_service, get_verification_email_sender
@@ -76,6 +77,7 @@ def _clear_dependency_caches() -> None:
     get_signing_key_service.cache_clear()
     get_token_service.cache_clear()
     get_api_key_service.cache_clear()
+    get_admin_service.cache_clear()
     get_brute_force_service.cache_clear()
     get_verification_email_sender.cache_clear()
     get_lifecycle_service.cache_clear()
@@ -358,6 +360,7 @@ async def api_key_row_factory(
     ) -> APIKey:
         row = APIKey(
             user_id=user_id,
+            name="svc",
             service="svc",
             hashed_key=core.hash_key(raw_key),
             key_prefix=core.key_prefix(raw_key),

@@ -31,6 +31,7 @@ from app.db.session import get_session_factory
 from app.models.webhook_delivery import WebhookDelivery, WebhookDeliveryStatus
 from app.models.webhook_endpoint import WebhookEndpoint
 from app.services.audit_service import AuditService, get_audit_service
+from app.services.pagination import CursorPage, apply_created_at_cursor, build_page, decode_cursor
 
 logger = structlog.get_logger(__name__)
 
@@ -56,6 +57,14 @@ class RegisteredWebhookEndpoint:
     events: list[str]
     is_active: bool
     created_at: datetime
+
+
+@dataclass(frozen=True)
+class DeletedWebhookEndpoint:
+    """Deleted webhook endpoint payload with abandoned-delivery metadata."""
+
+    id: UUID
+    abandoned_delivery_ids: list[UUID]
 
 
 class WebhookServiceError(Exception):
@@ -202,10 +211,129 @@ class WebhookService:
         statement = (
             select(WebhookEndpoint)
             .where(WebhookEndpoint.deleted_at.is_(None))
-            .order_by(WebhookEndpoint.created_at.desc())
+            .order_by(WebhookEndpoint.created_at.desc(), WebhookEndpoint.id.desc())
         )
         result = await db_session.execute(statement)
         return list(result.scalars().all())
+
+    async def get_endpoint(
+        self,
+        db_session: AsyncSession,
+        *,
+        endpoint_id: UUID,
+        for_update: bool = False,
+    ) -> WebhookEndpoint:
+        """Fetch one webhook endpoint or raise a stable not-found error."""
+        statement = select(WebhookEndpoint).where(
+            WebhookEndpoint.id == endpoint_id,
+            WebhookEndpoint.deleted_at.is_(None),
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        result = await db_session.execute(statement)
+        endpoint = result.scalar_one_or_none()
+        if endpoint is None:
+            raise WebhookServiceError("Webhook endpoint not found.", "invalid_credentials", 404)
+        return endpoint
+
+    async def list_endpoints_page(
+        self,
+        db_session: AsyncSession,
+        *,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> CursorPage[WebhookEndpoint]:
+        """Return one cursor-paginated page of webhook endpoints."""
+        limit = max(1, min(limit, 200))
+        cursor_position = decode_cursor(cursor) if cursor is not None else None
+        statement = (
+            select(WebhookEndpoint)
+            .where(WebhookEndpoint.deleted_at.is_(None))
+            .order_by(WebhookEndpoint.created_at.desc(), WebhookEndpoint.id.desc())
+        )
+        statement = apply_created_at_cursor(
+            statement,
+            model=WebhookEndpoint,
+            cursor=cursor_position,
+        ).limit(limit + 1)
+        result = await db_session.execute(statement)
+        return build_page(list(result.scalars().all()), limit=limit)
+
+    async def update_endpoint(
+        self,
+        db_session: AsyncSession,
+        *,
+        endpoint_id: UUID,
+        name: str | None = None,
+        url: str | None = None,
+        events: list[str] | None = None,
+        is_active: bool | None = None,
+    ) -> WebhookEndpoint:
+        """Update mutable webhook endpoint fields with SSRF revalidation."""
+        endpoint = await self.get_endpoint(
+            db_session=db_session,
+            endpoint_id=endpoint_id,
+            for_update=True,
+        )
+
+        if name is not None:
+            normalized_name = name.strip()
+            if not normalized_name:
+                raise WebhookServiceError("Invalid webhook payload.", "invalid_credentials", 400)
+            endpoint.name = normalized_name
+        if url is not None:
+            normalized_url = url.strip()
+            if not normalized_url:
+                raise WebhookServiceError("Invalid webhook payload.", "invalid_credentials", 400)
+            is_allowed = await self._is_safe_webhook_url(normalized_url)
+            if not is_allowed:
+                raise WebhookServiceError("Invalid webhook URL.", "invalid_webhook_url", 400)
+            endpoint.url = normalized_url
+        if events is not None:
+            endpoint.events = sorted(set(events))
+        if is_active is not None:
+            endpoint.is_active = is_active
+
+        await db_session.flush()
+        await db_session.commit()
+        return endpoint
+
+    async def delete_endpoint(
+        self,
+        db_session: AsyncSession,
+        *,
+        endpoint_id: UUID,
+    ) -> DeletedWebhookEndpoint:
+        """Soft-delete a webhook endpoint and abandon pending deliveries."""
+        endpoint = await self.get_endpoint(
+            db_session=db_session,
+            endpoint_id=endpoint_id,
+            for_update=True,
+        )
+        endpoint.deleted_at = datetime.now(UTC)
+        endpoint.is_active = False
+
+        delivery_statement = (
+            select(WebhookDelivery)
+            .where(
+                WebhookDelivery.endpoint_id == endpoint_id,
+                WebhookDelivery.status == WebhookDeliveryStatus.PENDING.value,
+            )
+            .with_for_update()
+        )
+        deliveries = list((await db_session.execute(delivery_statement)).scalars().all())
+        abandoned_delivery_ids: list[UUID] = []
+        for delivery in deliveries:
+            delivery.status = WebhookDeliveryStatus.ABANDONED.value
+            delivery.next_retry_at = None
+            abandoned_delivery_ids.append(delivery.id)
+
+        await db_session.flush()
+        await db_session.commit()
+        return DeletedWebhookEndpoint(
+            id=endpoint.id,
+            abandoned_delivery_ids=abandoned_delivery_ids,
+        )
 
     async def list_deliveries(
         self,
@@ -218,12 +346,39 @@ class WebhookService:
         statement = (
             select(WebhookDelivery)
             .where(WebhookDelivery.endpoint_id == endpoint_id)
-            .order_by(WebhookDelivery.created_at.desc())
+            .order_by(WebhookDelivery.created_at.desc(), WebhookDelivery.id.desc())
         )
         if status is not None:
             statement = statement.where(WebhookDelivery.status == status)
         result = await db_session.execute(statement)
         return list(result.scalars().all())
+
+    async def list_deliveries_page(
+        self,
+        db_session: AsyncSession,
+        *,
+        endpoint_id: UUID,
+        status: str | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> CursorPage[WebhookDelivery]:
+        """Return one cursor-paginated page of webhook deliveries."""
+        limit = max(1, min(limit, 200))
+        cursor_position = decode_cursor(cursor) if cursor is not None else None
+        statement = (
+            select(WebhookDelivery)
+            .where(WebhookDelivery.endpoint_id == endpoint_id)
+            .order_by(WebhookDelivery.created_at.desc(), WebhookDelivery.id.desc())
+        )
+        if status is not None:
+            statement = statement.where(WebhookDelivery.status == status)
+        statement = apply_created_at_cursor(
+            statement,
+            model=WebhookDelivery,
+            cursor=cursor_position,
+        ).limit(limit + 1)
+        result = await db_session.execute(statement)
+        return build_page(list(result.scalars().all()), limit=limit)
 
     async def retry_delivery(
         self, db_session: AsyncSession, *, delivery_id: UUID

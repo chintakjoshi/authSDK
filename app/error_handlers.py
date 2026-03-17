@@ -22,10 +22,25 @@ VALID_ERROR_CODES = {
     "oauth_state_mismatch",
     "session_expired",
     "already_verified",
+    "already_erased",
     "invalid_verify_token",
+    "invalid_reset_token",
+    "invalid_user",
+    "invalid_role",
     "account_locked",
     "invalid_scope",
     "invalid_webhook_url",
+    "insufficient_role",
+    "last_admin_protected",
+    "reauth_required",
+    "otp_required",
+    "action_token_invalid",
+    "otp_expired",
+    "invalid_otp",
+    "otp_max_attempts_exceeded",
+    "otp_action_mismatch",
+    "email_not_verified",
+    "otp_issuance_blocked",
 }
 
 _DEFAULT_ERROR_CODE_BY_STATUS: dict[int, str] = {
@@ -94,7 +109,10 @@ def _extract_user_identifier(request: Request) -> tuple[str | None, str | None]:
 def _is_auth_request_path(path: str) -> bool:
     """Return True for auth-related request paths."""
     return (
-        path.startswith("/auth") or path.startswith("/apikeys") or path == "/.well-known/jwks.json"
+        path.startswith("/auth")
+        or path.startswith("/apikeys")
+        or path.startswith("/admin")
+        or path == "/.well-known/jwks.json"
     )
 
 

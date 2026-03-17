@@ -15,6 +15,24 @@ from app.models.oauth_client import OAuthClient
 from app.services.m2m_service import M2MService, M2MServiceError
 
 
+class _FakeDBSession:
+    """Minimal DB session stub for M2M management tests."""
+
+    def __init__(self) -> None:
+        self.added: list[OAuthClient] = []
+        self.flush_count = 0
+        self.commit_count = 0
+
+    def add(self, instance: OAuthClient) -> None:
+        self.added.append(instance)
+
+    async def flush(self) -> None:
+        self.flush_count += 1
+
+    async def commit(self) -> None:
+        self.commit_count += 1
+
+
 class _SigningKeyStub:
     """Signing-key stub returning one active PEM pair."""
 
@@ -190,3 +208,100 @@ async def test_authenticate_client_credentials_rejects_invalid_secret(
 
     assert exc_info.value.code == "invalid_credentials"
     assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_create_client_returns_raw_secret_once(
+    m2m_service: tuple[M2MService, JWTService],
+) -> None:
+    """Client creation returns a raw secret and persists hashed material."""
+    service, _ = m2m_service
+    db_session = _FakeDBSession()
+
+    async def _fake_lookup(self: M2MService, db_session, *, client_id: str) -> OAuthClient | None:  # type: ignore[no-untyped-def]
+        del self, db_session, client_id
+        return None
+
+    service._get_client_by_client_id = MethodType(_fake_lookup, service)  # type: ignore[assignment]
+
+    created = await service.create_client(
+        db_session=db_session,  # type: ignore[arg-type]
+        name="Billing Worker",
+        scopes=["billing:read", "billing:read", "billing:write"],
+        token_ttl_seconds=1800,
+    )
+
+    stored = db_session.added[0]
+    assert created.client_secret.startswith("cs_")
+    assert stored.client_secret_hash != created.client_secret
+    assert stored.client_secret_prefix == created.client_secret[:8]
+    assert stored.scopes == ["billing:read", "billing:write"]
+    assert stored.name == "Billing Worker"
+    assert db_session.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_rotate_client_secret_replaces_stored_secret_hash(
+    m2m_service: tuple[M2MService, JWTService],
+) -> None:
+    """Secret rotation replaces the stored hash and returns a new raw secret."""
+    service, _ = m2m_service
+    db_session = _FakeDBSession()
+    client = _build_client("cs_old_secret", ["billing:read"])
+    original_hash = client.client_secret_hash
+
+    async def _fake_get_by_id(
+        self: M2MService,
+        db_session,
+        *,
+        client_row_id,
+        for_update: bool,
+    ) -> OAuthClient | None:  # type: ignore[no-untyped-def]
+        del self, db_session, client_row_id
+        assert for_update is True
+        return client
+
+    service._get_client_by_id = MethodType(_fake_get_by_id, service)  # type: ignore[assignment]
+
+    rotated = await service.rotate_client_secret(
+        db_session=db_session,  # type: ignore[arg-type]
+        client_row_id=client.id,
+    )
+
+    assert rotated.client_secret.startswith("cs_")
+    assert client.client_secret_hash != original_hash
+    assert client.client_secret_prefix == rotated.client_secret[:8]
+    assert db_session.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_client_soft_deletes_and_deactivates(
+    m2m_service: tuple[M2MService, JWTService],
+) -> None:
+    """Deleting a client sets deleted_at and disables further use."""
+    service, _ = m2m_service
+    db_session = _FakeDBSession()
+    client = _build_client("cs_old_secret", ["billing:read"])
+
+    async def _fake_get_by_id(
+        self: M2MService,
+        db_session,
+        *,
+        client_row_id,
+        for_update: bool,
+    ) -> OAuthClient | None:  # type: ignore[no-untyped-def]
+        del self, db_session, client_row_id
+        assert for_update is True
+        return client
+
+    service._get_client_by_id = MethodType(_fake_get_by_id, service)  # type: ignore[assignment]
+
+    deleted = await service.delete_client(
+        db_session=db_session,  # type: ignore[arg-type]
+        client_row_id=client.id,
+    )
+
+    assert deleted is client
+    assert client.deleted_at is not None
+    assert client.is_active is False
+    assert db_session.commit_count == 1

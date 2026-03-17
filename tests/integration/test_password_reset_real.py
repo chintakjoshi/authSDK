@@ -116,6 +116,14 @@ async def test_password_reset_happy_path_revokes_existing_sessions(
         assert refresh.status_code == 401
         assert refresh.json()["code"] == "session_expired"
 
+        reauth = await client.post(
+            "/auth/reauth",
+            headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+            json={"password": "NewPassword123!"},
+        )
+        assert reauth.status_code == 401
+        assert reauth.json()["code"] == "session_expired"
+
         old_login = await client.post(
             "/auth/login",
             json={"email": "reset-user@example.com", "password": "Password123!"},
