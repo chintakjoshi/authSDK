@@ -39,6 +39,9 @@ RUN python -m pip install --no-cache-dir /wheels/*.whl \
 
 COPY alembic.ini ./alembic.ini
 COPY migrations ./migrations
+COPY worker.py ./worker.py
+COPY scheduler.py ./scheduler.py
+COPY workers ./workers
 
 EXPOSE 8000
 
