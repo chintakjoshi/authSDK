@@ -8,10 +8,10 @@ from uuid import UUID
 
 from fastapi import Request
 from passlib.context import CryptContext
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user import User
+from app.models.user import User, UserIdentity
 from app.services.audit_service import AuditService
 
 AllowedRole = Literal["admin", "user", "service"]
@@ -142,6 +142,35 @@ class UserService:
         )
         result = await db_session.execute(statement)
         return int(result.scalar_one())
+
+    async def ensure_admin_removal_allowed(
+        self,
+        db_session: AsyncSession,
+        *,
+        user: User,
+    ) -> None:
+        """Raise when removing the user would violate last-admin protection."""
+        if user.role == "admin":
+            await self._ensure_last_admin_not_violated(db_session=db_session)
+
+    async def hard_delete_identities(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+        commit: bool = True,
+    ) -> int:
+        """Hard-delete all external identity rows for one user."""
+        try:
+            result = await db_session.execute(
+                delete(UserIdentity).where(UserIdentity.user_id == user_id)
+            )
+        except Exception:
+            await db_session.rollback()
+            raise
+        if commit:
+            await db_session.commit()
+        return int(result.rowcount or 0)
 
     def hash_password(self, password: str) -> str:
         """Generate a bcrypt hash for the provided password."""

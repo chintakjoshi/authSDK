@@ -62,6 +62,15 @@ class AdminUserSessionsRevokedResponse(BaseModel):
     revoked_session_count: int
 
 
+class AdminUserEraseResponse(BaseModel):
+    """Admin response for a completed GDPR erasure."""
+
+    erased_user_id: UUID
+    revoked_session_count: int
+    revoked_api_key_count: int
+    deleted_identity_count: int
+
+
 class AdminUserOTPUpdateRequest(BaseModel):
     """Admin user OTP-toggle payload."""
 

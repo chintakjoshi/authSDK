@@ -40,12 +40,18 @@ class _RedisStub:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.fail_get = False
+        self.deleted_keys: list[str] = []
 
     async def get(self, key: str) -> str | None:
         """Return blocklist state or raise backend failure."""
         if self.fail_get:
             raise RedisError("redis unavailable")
         return self.values.get(key)
+
+    async def delete(self, *keys: str) -> int:
+        """Capture deleted keys for OTP cleanup assertions."""
+        self.deleted_keys.extend(keys)
+        return len(keys)
 
 
 class _TokenServiceStub:
@@ -139,3 +145,20 @@ async def test_validate_access_token_rejects_revoked_session_binding() -> None:
 
     assert exc_info.value.code == "session_expired"
     assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_clear_user_otp_state_deletes_all_step12_keys() -> None:
+    """Step-12 cleanup removes all OTP Redis state for one user."""
+    redis_client = _RedisStub()
+    service = _build_service(redis_client)
+
+    await service.clear_user_otp_state("user-1")
+
+    assert set(redis_client.deleted_keys) == {
+        "otp:login:user-1",
+        "otp:action:user-1",
+        "otp_failed:user-1",
+        "otp_issuance_blocked:user-1",
+        "otp_resend_login:user-1",
+    }

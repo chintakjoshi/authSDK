@@ -12,6 +12,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.core.sessions import SessionService, SessionStateError, get_session_service
 from app.core.signing_keys import (
     SigningKeyRotationResult,
@@ -26,6 +27,12 @@ from app.services.brute_force_service import (
     BruteForceProtectionError,
     BruteForceProtectionService,
     get_brute_force_service,
+)
+from app.services.erasure_service import (
+    ErasedUserResult,
+    ErasureService,
+    ErasureServiceError,
+    get_erasure_service,
 )
 from app.services.m2m_service import M2MService, get_m2m_service
 from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
@@ -76,6 +83,17 @@ class DeletedUserResult:
     revoked_session_ids: list[UUID]
 
 
+@dataclass(frozen=True)
+class RetentionPurgeResult:
+    """Callable step-12 retention-purge scaffolding result."""
+
+    enabled: bool
+    audit_log_retention_days: int
+    session_log_retention_days: int
+    purged_audit_events: int
+    purged_sessions: int
+
+
 class AdminServiceError(Exception):
     """Raised for admin API validation and orchestration failures."""
 
@@ -109,6 +127,10 @@ class AdminService:
         webhook_service: WebhookService,
         audit_service: AuditService,
         signing_key_service: SigningKeyService,
+        erasure_service: ErasureService,
+        enable_retention_purge: bool,
+        audit_log_retention_days: int,
+        session_log_retention_days: int,
     ) -> None:
         self._user_service = user_service
         self._session_service = session_service
@@ -119,6 +141,10 @@ class AdminService:
         self._webhook_service = webhook_service
         self._audit_service = audit_service
         self._signing_key_service = signing_key_service
+        self._erasure_service = erasure_service
+        self._enable_retention_purge = enable_retention_purge
+        self._audit_log_retention_days = audit_log_retention_days
+        self._session_log_retention_days = session_log_retention_days
 
     async def validate_admin_access_token(
         self,
@@ -181,6 +207,33 @@ class AdminService:
                 403,
                 headers={"X-Reauth-Required": "true"},
             )
+
+    async def require_action_token(
+        self,
+        db_session: AsyncSession,
+        *,
+        claims: dict[str, object],
+        action: str,
+        action_token: str | None,
+    ) -> None:
+        """Require one valid action token for a specific admin user/action pair."""
+        user_id = str(claims.get("sub", "")).strip()
+        if not user_id:
+            raise AdminServiceError("Invalid token.", "invalid_token", 401)
+        try:
+            await self._otp_service.require_action_token_for_user(
+                db_session=db_session,
+                token=action_token,
+                expected_action=action,
+                user_id=user_id,
+            )
+        except OTPServiceError as exc:
+            raise AdminServiceError(
+                exc.detail,
+                exc.code,
+                exc.status_code,
+                headers=exc.headers,
+            ) from exc
 
     async def list_users_page(
         self,
@@ -489,6 +542,32 @@ class AdminService:
         except WebhookServiceError as exc:
             raise AdminServiceError(exc.detail, exc.code, exc.status_code) from exc
 
+    async def erase_user(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+    ) -> ErasedUserResult:
+        """Erase one user account on behalf of an admin actor."""
+        try:
+            return await self._erasure_service.erase_user(
+                db_session=db_session,
+                user_id=user_id,
+            )
+        except ErasureServiceError as exc:
+            raise AdminServiceError(exc.detail, exc.code, exc.status_code) from exc
+
+    async def run_retention_purge(self, db_session: AsyncSession) -> RetentionPurgeResult:
+        """Return callable retention-purge scaffolding without scheduling side effects."""
+        del db_session
+        return RetentionPurgeResult(
+            enabled=self._enable_retention_purge,
+            audit_log_retention_days=self._audit_log_retention_days,
+            session_log_retention_days=self._session_log_retention_days,
+            purged_audit_events=0,
+            purged_sessions=0,
+        )
+
     async def update_webhook(
         self,
         db_session: AsyncSession,
@@ -600,6 +679,7 @@ class AdminService:
 @lru_cache
 def get_admin_service() -> AdminService:
     """Create and cache the admin orchestration service dependency."""
+    settings = get_settings()
     return AdminService(
         user_service=UserService(),
         session_service=get_session_service(),
@@ -610,4 +690,8 @@ def get_admin_service() -> AdminService:
         webhook_service=get_webhook_service(),
         audit_service=get_audit_service(),
         signing_key_service=get_signing_key_service(),
+        erasure_service=get_erasure_service(),
+        enable_retention_purge=settings.retention.enable_retention_purge,
+        audit_log_retention_days=settings.retention.audit_log_retention_days,
+        session_log_retention_days=settings.retention.session_log_retention_days,
     )

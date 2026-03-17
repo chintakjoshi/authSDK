@@ -499,6 +499,22 @@ class OTPService:
             return False
         return True
 
+    async def require_action_token_for_user(
+        self,
+        db_session: AsyncSession,
+        *,
+        token: str | None,
+        expected_action: OTPAction,
+        user_id: str,
+    ) -> None:
+        """Require one valid action token for the user/action pair."""
+        await self._validate_action_token(
+            db_session=db_session,
+            token=token,
+            expected_action=expected_action,
+            user_id=user_id,
+        )
+
     async def enable_email_otp(
         self,
         db_session: AsyncSession,
@@ -548,9 +564,19 @@ class OTPService:
 
         user.email_otp_enabled = False
         await db_session.flush()
-        await self._delete_keys(self._login_otp_key(user_id), self._action_otp_key(user_id))
+        await self.clear_user_otp_state(user_id)
         await db_session.commit()
         return user
+
+    async def clear_user_otp_state(self, user_id: str) -> None:
+        """Delete all OTP-related Redis state for one user."""
+        await self._delete_keys(
+            self._login_otp_key(user_id),
+            self._action_otp_key(user_id),
+            self._failed_otp_key(user_id),
+            self._issuance_block_key(user_id),
+            self._login_resend_key(user_id),
+        )
 
     async def _validate_challenge_token(
         self,
@@ -800,6 +826,10 @@ class OTPService:
     @staticmethod
     def _issuance_block_key(user_id: str) -> str:
         return f"otp_issuance_blocked:{user_id}"
+
+    @staticmethod
+    def _login_resend_key(user_id: str) -> str:
+        return f"otp_resend_login:{user_id}"
 
 
 @lru_cache

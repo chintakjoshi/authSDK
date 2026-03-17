@@ -23,6 +23,7 @@ from app.services.admin_service import AdminService, get_admin_service
 from app.services.api_key_service import get_api_key_service
 from app.services.audit_service import AuditService, get_audit_service
 from app.services.brute_force_service import get_brute_force_service
+from app.services.erasure_service import get_erasure_service
 from app.services.m2m_service import get_m2m_service
 from app.services.otp_service import OTPService, get_otp_service
 from app.services.token_service import get_token_service
@@ -155,6 +156,10 @@ def _build_admin_service(
         webhook_service=webhook_service or get_webhook_service(),
         audit_service=get_audit_service(),
         signing_key_service=get_signing_key_service(),
+        erasure_service=get_erasure_service(),
+        enable_retention_purge=False,
+        audit_log_retention_days=90,
+        session_log_retention_days=30,
     )
 
 
