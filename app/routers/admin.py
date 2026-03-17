@@ -27,6 +27,7 @@ from app.schemas.admin import (
     AdminSigningKeyRotateResponse,
     AdminUserDeleteResponse,
     AdminUserDetail,
+    AdminUserEraseResponse,
     AdminUserListItem,
     AdminUserOTPUpdateRequest,
     AdminUserSessionsRevokedResponse,
@@ -320,6 +321,64 @@ async def delete_user(
         deleted_user_id=result.user_id,
         revoked_session_ids=result.revoked_session_ids,
         revoked_session_count=len(result.revoked_session_ids),
+    )
+
+
+@router.delete("/users/{user_id}/erase", response_model=AdminUserEraseResponse)
+async def erase_user(
+    user_id: UUID,
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    admin_service: Annotated[AdminService, Depends(get_admin_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
+) -> AdminUserEraseResponse | JSONResponse:
+    """Erase a user account on behalf of an admin actor."""
+    try:
+        claims = await _require_admin_claims(
+            request,
+            db_session=db_session,
+            admin_service=admin_service,
+        )
+        await admin_service.require_action_token(
+            db_session=db_session,
+            claims=claims,
+            action="admin_erase_user",
+            action_token=_extract_action_token(request),
+        )
+        result = await admin_service.erase_user(db_session=db_session, user_id=user_id)
+    except AdminServiceError as exc:
+        return _error_response(exc.status_code, exc.detail, exc.code, headers=exc.headers)
+
+    await audit_service.record(
+        db=db_session,
+        event_type="user.erased",
+        actor_type="admin",
+        success=True,
+        request=request,
+        actor_id=str(claims.get("sub", "")),
+        target_id=str(result.user_id),
+        target_type="user",
+        metadata={
+            "deleted_identity_count": result.deleted_identity_count,
+            "revoked_session_count": len(result.revoked_session_ids),
+            "revoked_api_key_count": len(result.revoked_api_key_ids),
+        },
+    )
+    await webhook_service.emit_event(
+        event_type="user.erased",
+        data={
+            "user_id": str(result.user_id),
+            "deleted_identity_count": result.deleted_identity_count,
+            "revoked_session_count": len(result.revoked_session_ids),
+            "revoked_api_key_count": len(result.revoked_api_key_ids),
+        },
+    )
+    return AdminUserEraseResponse(
+        erased_user_id=result.user_id,
+        revoked_session_count=len(result.revoked_session_ids),
+        revoked_api_key_count=len(result.revoked_api_key_ids),
+        deleted_identity_count=result.deleted_identity_count,
     )
 
 

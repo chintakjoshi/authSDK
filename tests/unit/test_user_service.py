@@ -34,6 +34,33 @@ class _FakeSession:
         return _FakeResult(user=self._user)
 
 
+class _DeleteResult:
+    """Simple delete-result stub exposing rowcount."""
+
+    def __init__(self, rowcount: int) -> None:
+        self.rowcount = rowcount
+
+
+class _DeletingSession:
+    """Minimal async session stub for hard-delete identity tests."""
+
+    def __init__(self, rowcount: int) -> None:
+        self.rowcount = rowcount
+        self.commit_calls = 0
+
+    async def execute(self, _statement: object) -> _DeleteResult:
+        """Return a fixed delete rowcount."""
+        return _DeleteResult(self.rowcount)
+
+    async def commit(self) -> None:
+        """Capture commit usage."""
+        self.commit_calls += 1
+
+    async def rollback(self) -> None:
+        """No-op rollback for error-path compatibility."""
+        return None
+
+
 def _build_user(password_hash: str | None) -> User:
     """Create a lightweight user model for service tests."""
     now = datetime.now(UTC)
@@ -154,3 +181,18 @@ async def test_delete_user_requires_admin_actor() -> None:
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.code == "insufficient_role"
+
+
+@pytest.mark.asyncio
+async def test_hard_delete_identities_returns_deleted_row_count() -> None:
+    """Hard-deleting identities returns the number of removed rows."""
+    service = UserService()
+    db_session = _DeletingSession(rowcount=2)
+
+    deleted_count = await service.hard_delete_identities(
+        db_session=db_session,  # type: ignore[arg-type]
+        user_id=uuid4(),
+    )
+
+    assert deleted_count == 2
+    assert db_session.commit_calls == 1

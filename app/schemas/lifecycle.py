@@ -76,3 +76,10 @@ class ReauthResponse(BaseModel):
     """Re-authentication success response."""
 
     access_token: str
+
+
+class EraseAccountResponse(BaseModel):
+    """Successful self-service erasure response."""
+
+    erased: Literal[True] = True
+    user_id: UUID

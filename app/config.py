@@ -121,6 +121,14 @@ class WebhookSettings(BaseModel):
     secret_encryption_key: SecretStr | None = None
 
 
+class RetentionSettings(BaseModel):
+    """Data-retention scaffolding for step-12 purge support."""
+
+    enable_retention_purge: bool = False
+    audit_log_retention_days: int = Field(default=90, ge=1)
+    session_log_retention_days: int = Field(default=30, ge=1)
+
+
 class Settings(BaseSettings):
     """Root application settings loaded from environment variables."""
 
@@ -141,6 +149,7 @@ class Settings(BaseSettings):
     signing_keys: SigningKeySettings = SigningKeySettings()
     email: EmailSettings = EmailSettings()
     webhook: WebhookSettings = WebhookSettings()
+    retention: RetentionSettings = RetentionSettings()
     admin_api_key: SecretStr | None = None
 
 

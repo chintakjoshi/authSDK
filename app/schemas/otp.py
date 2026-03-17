@@ -12,6 +12,7 @@ OTPAction = Literal[
     "revoke_sessions",
     "rotate_signing_key",
     "erase_account",
+    "admin_erase_user",
     "enable_otp",
     "disable_otp",
 ]

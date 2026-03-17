@@ -22,6 +22,7 @@ class _FakeDBSession:
 
     def __init__(self) -> None:
         self.added: list[APIKey] = []
+        self.commit_calls = 0
 
     def add(self, instance: APIKey) -> None:
         """Capture added model."""
@@ -37,6 +38,7 @@ class _FakeDBSession:
 
     async def commit(self) -> None:
         """No-op commit."""
+        self.commit_calls += 1
         return None
 
     async def rollback(self) -> None:
@@ -223,3 +225,37 @@ async def test_create_key_rejects_missing_name_and_service() -> None:
         )
 
     assert "Name is required." in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_revoke_user_keys_marks_all_active_keys_revoked() -> None:
+    """Bulk user-key revocation stamps revoked_at across all revocable rows."""
+    service = APIKeyService(core=APIKeyCore())
+    db_session = _FakeDBSession()
+    rows = [
+        _api_key_row(hashed_key="hash-1"),
+        _api_key_row(hashed_key="hash-2"),
+    ]
+
+    async def _fake_get_revocable_keys_for_user(
+        self: APIKeyService,
+        db_session: _FakeDBSession,
+        *,
+        user_id,
+    ) -> list[APIKey]:
+        del db_session, user_id
+        return rows
+
+    service._get_revocable_keys_for_user = MethodType(  # type: ignore[assignment]
+        _fake_get_revocable_keys_for_user,
+        service,
+    )
+
+    revoked = await service.revoke_user_keys(
+        db_session=db_session,  # type: ignore[arg-type]
+        user_id=uuid4(),
+    )
+
+    assert revoked == rows
+    assert all(row.revoked_at is not None for row in rows)
+    assert db_session.commit_calls == 1

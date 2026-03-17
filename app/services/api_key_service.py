@@ -170,6 +170,31 @@ class APIKeyService:
         await db_session.commit()
         return key_row
 
+    async def revoke_user_keys(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+        commit: bool = True,
+    ) -> list[APIKey]:
+        """Revoke all non-deleted, not-yet-revoked API keys for one user."""
+        key_rows = await self._get_revocable_keys_for_user(
+            db_session=db_session,
+            user_id=user_id,
+        )
+        revoked_at = datetime.now(UTC)
+        for key_row in key_rows:
+            key_row.revoked_at = revoked_at
+
+        try:
+            await db_session.flush()
+        except Exception:
+            await db_session.rollback()
+            raise
+        if commit:
+            await db_session.commit()
+        return key_rows
+
     async def introspect(self, db_session: AsyncSession, raw_key: str) -> APIKeyIntrospectionResult:
         """Introspect raw API key and return validity contract."""
         if not self._core.is_valid_format(raw_key):
@@ -227,6 +252,25 @@ class APIKeyService:
             statement = statement.with_for_update()
         result = await db_session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def _get_revocable_keys_for_user(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+    ) -> list[APIKey]:
+        """Fetch all user-bound API keys that still need revocation."""
+        statement = (
+            select(APIKey)
+            .where(
+                APIKey.user_id == user_id,
+                APIKey.deleted_at.is_(None),
+                APIKey.revoked_at.is_(None),
+            )
+            .with_for_update()
+        )
+        result = await db_session.execute(statement)
+        return list(result.scalars().all())
 
     @staticmethod
     def _resolve_name_and_service(

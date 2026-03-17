@@ -53,6 +53,7 @@ def _clear_dependency_caches() -> None:
     from app.services.admin_service import get_admin_service
     from app.services.api_key_service import get_api_key_service
     from app.services.brute_force_service import get_brute_force_service
+    from app.services.erasure_service import get_erasure_service
     from app.services.lifecycle_service import get_lifecycle_service, get_verification_email_sender
     from app.services.oauth_service import get_oauth_service
     from app.services.otp_service import get_otp_email_sender, get_otp_service
@@ -79,6 +80,7 @@ def _clear_dependency_caches() -> None:
     get_api_key_service.cache_clear()
     get_admin_service.cache_clear()
     get_brute_force_service.cache_clear()
+    get_erasure_service.cache_clear()
     get_verification_email_sender.cache_clear()
     get_lifecycle_service.cache_clear()
     get_otp_email_sender.cache_clear()

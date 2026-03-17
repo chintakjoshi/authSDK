@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
@@ -11,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_database_session
 from app.schemas.lifecycle import (
+    EraseAccountResponse,
     ForgotPasswordRequest,
     ForgotPasswordResponse,
     ReauthRequest,
@@ -25,11 +27,13 @@ from app.schemas.lifecycle import (
 )
 from app.services.audit_service import AuditService, get_audit_service
 from app.services.brute_force_service import extract_client_ip, normalize_user_agent
+from app.services.erasure_service import ErasureService, ErasureServiceError, get_erasure_service
 from app.services.lifecycle_service import (
     LifecycleService,
     LifecycleServiceError,
     get_lifecycle_service,
 )
+from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
 from app.services.webhook_service import WebhookService, get_webhook_service
 
 router = APIRouter(tags=["lifecycle"])
@@ -414,3 +418,90 @@ async def reauthenticate(
         actor_id=user_id,
     )
     return ReauthResponse(access_token=fresh_access_token)
+
+
+def _extract_action_token(request: Request) -> str | None:
+    """Extract action token from X-Action-Token header."""
+    token = request.headers.get("x-action-token", "").strip()
+    return token or None
+
+
+@router.post("/auth/users/me/erase", response_model=EraseAccountResponse)
+async def erase_my_account(
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    lifecycle_service: Annotated[LifecycleService, Depends(get_lifecycle_service)],
+    otp_service: Annotated[OTPService, Depends(get_otp_service)],
+    erasure_service: Annotated[ErasureService, Depends(get_erasure_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
+) -> EraseAccountResponse | JSONResponse:
+    """Erase the authenticated user's account after action-token verification."""
+    access_token = _extract_bearer_token(request)
+    if access_token is None:
+        return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
+
+    try:
+        claims = await lifecycle_service.validate_access_token(
+            db_session=db_session,
+            token=access_token,
+        )
+        user_id = str(claims.get("sub", "")).strip()
+        if not user_id:
+            return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
+        await otp_service.require_action_token_for_user(
+            db_session=db_session,
+            token=_extract_action_token(request),
+            expected_action="erase_account",
+            user_id=user_id,
+        )
+        result = await erasure_service.erase_user(
+            db_session=db_session,
+            user_id=UUID(user_id),
+        )
+    except LifecycleServiceError as exc:
+        return _error_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            headers=exc.headers,
+        )
+    except OTPServiceError as exc:
+        return _error_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            headers=exc.headers,
+        )
+    except ErasureServiceError as exc:
+        return _error_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+        )
+
+    await audit_service.record(
+        db=db_session,
+        event_type="user.erased",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=str(result.user_id),
+        target_id=str(result.user_id),
+        target_type="user",
+        metadata={
+            "deleted_identity_count": result.deleted_identity_count,
+            "revoked_session_count": len(result.revoked_session_ids),
+            "revoked_api_key_count": len(result.revoked_api_key_ids),
+        },
+    )
+    await webhook_service.emit_event(
+        event_type="user.erased",
+        data={
+            "user_id": str(result.user_id),
+            "deleted_identity_count": result.deleted_identity_count,
+            "revoked_session_count": len(result.revoked_session_ids),
+            "revoked_api_key_count": len(result.revoked_api_key_ids),
+        },
+    )
+    return EraseAccountResponse(user_id=result.user_id)
