@@ -693,7 +693,7 @@ class WebhookService:
 def get_webhook_redis_connection() -> Redis:
     """Create a sync Redis client for RQ queueing and scheduling."""
     settings = get_settings()
-    return Redis.from_url(settings.redis.url, decode_responses=True)
+    return Redis.from_url(settings.redis.url, decode_responses=False)
 
 
 @lru_cache
