@@ -258,6 +258,14 @@ class LifecycleService:
         except TokenValidationError as exc:
             raise LifecycleServiceError("Invalid token.", "invalid_token", 401) from exc
         await self._ensure_access_token_not_revoked(claims)
+        if self._session_service is not None:
+            try:
+                await self._session_service.validate_access_token_session(
+                    db_session=db_session,
+                    access_jti=str(claims.get("jti", "")).strip(),
+                )
+            except SessionStateError as exc:
+                raise LifecycleServiceError(exc.detail, exc.code, exc.status_code) from exc
         return claims
 
     async def resend_verification_email(

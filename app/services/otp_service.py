@@ -19,7 +19,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.core.jwt import JWTService, TokenValidationError, get_jwt_service
 from app.core.otp import generate_otp, hash_otp, mask_email, verify_otp
-from app.core.sessions import SessionService, get_redis_client, get_session_service
+from app.core.sessions import (
+    SessionService,
+    SessionStateError,
+    get_redis_client,
+    get_session_service,
+)
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
 from app.models.user import User
 from app.schemas.otp import OTPAction
@@ -203,6 +208,13 @@ class OTPService:
         except TokenValidationError as exc:
             raise OTPServiceError("Invalid token.", "invalid_token", 401) from exc
         await self._ensure_access_token_not_revoked(claims)
+        try:
+            await self._session_service.validate_access_token_session(
+                db_session=db_session,
+                access_jti=str(claims.get("jti", "")).strip(),
+            )
+        except SessionStateError as exc:
+            raise OTPServiceError(exc.detail, exc.code, exc.status_code) from exc
         return claims
 
     async def start_login_challenge(

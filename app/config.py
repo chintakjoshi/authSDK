@@ -141,6 +141,7 @@ class Settings(BaseSettings):
     signing_keys: SigningKeySettings = SigningKeySettings()
     email: EmailSettings = EmailSettings()
     webhook: WebhookSettings = WebhookSettings()
+    admin_api_key: SecretStr | None = None
 
 
 def _standard_log_fields(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, Any]:

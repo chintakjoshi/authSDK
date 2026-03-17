@@ -21,7 +21,7 @@ async def test_apikey_create_list_revoke_and_introspect_flow(app_factory) -> Non
         create_response = await client.post(
             "/auth/apikeys",
             json={
-                "service": "orders",
+                "name": "Orders Primary Key",
                 "scope": "orders:read",
                 "expires_at": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
             },
@@ -30,11 +30,14 @@ async def test_apikey_create_list_revoke_and_introspect_flow(app_factory) -> Non
         created = create_response.json()
         assert created["api_key"].startswith("sk_")
         assert created["key_prefix"] == created["api_key"][:8]
+        assert created["name"] == "Orders Primary Key"
+        assert created["service"] == "orders"
 
         list_response = await client.get("/auth/apikeys")
         assert list_response.status_code == 200
         listed = list_response.json()
         assert len(listed) == 1
+        assert listed[0]["name"] == "Orders Primary Key"
         assert listed[0]["service"] == "orders"
         assert "api_key" not in listed[0]
 

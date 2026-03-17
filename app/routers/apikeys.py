@@ -37,6 +37,7 @@ async def create_api_key(
     try:
         created = await api_key_service.create_key(
             db_session=db_session,
+            name=payload.name,
             service=payload.service,
             scope=payload.scope,
             user_id=payload.user_id,
@@ -52,7 +53,11 @@ async def create_api_key(
             actor_id=str(payload.user_id) if payload.user_id else None,
             target_type="api_key",
             failure_reason=exc.code,
-            metadata={"service": payload.service, "scope": payload.scope},
+            metadata={
+                "name": payload.name or payload.service,
+                "service": payload.service,
+                "scope": payload.scope,
+            },
         )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
 
@@ -65,13 +70,14 @@ async def create_api_key(
         actor_id=str(created.user_id) if created.user_id else None,
         target_id=str(created.key_id),
         target_type="api_key",
-        metadata={"service": created.service, "scope": created.scope},
+        metadata={"name": created.name, "service": created.service, "scope": created.scope},
     )
     await webhook_service.emit_event(
         event_type="api_key.created",
         data={
             "key_id": str(created.key_id),
             "user_id": str(created.user_id) if created.user_id is not None else None,
+            "name": created.name,
             "service": created.service,
             "scope": created.scope,
         },
@@ -80,6 +86,7 @@ async def create_api_key(
         key_id=created.key_id,
         api_key=created.api_key,
         key_prefix=created.key_prefix,
+        name=created.name,
         service=created.service,
         scope=created.scope,
         user_id=created.user_id,
@@ -95,13 +102,19 @@ async def list_api_keys(
     api_key_service: Annotated[APIKeyService, Depends(get_api_key_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
     user_id: Annotated[UUID | None, Query()] = None,
+    name: Annotated[str | None, Query()] = None,
     service: Annotated[str | None, Query()] = None,
+    scope: Annotated[str | None, Query()] = None,
+    active: Annotated[bool | None, Query()] = None,
 ) -> list[APIKeyListItem]:
     """List API keys without exposing raw key material."""
     keys = await api_key_service.list_keys(
         db_session=db_session,
         user_id=user_id,
+        name=name,
         service=service,
+        scope=scope,
+        active=active,
     )
     await audit_service.record(
         db=db_session,
@@ -111,12 +124,20 @@ async def list_api_keys(
         request=request,
         actor_id=str(user_id) if user_id else None,
         target_type="api_key_collection",
-        metadata={"operation": "list", "service": service, "result_count": len(keys)},
+        metadata={
+            "operation": "list",
+            "name": name,
+            "service": service,
+            "scope": scope,
+            "active": active,
+            "result_count": len(keys),
+        },
     )
     return [
         APIKeyListItem(
             key_id=row.id,
             key_prefix=row.key_prefix,
+            name=row.name,
             service=row.service,
             scope=row.scope,
             user_id=row.user_id,
@@ -162,13 +183,14 @@ async def revoke_api_key(
         actor_id=str(revoked.user_id) if revoked.user_id else None,
         target_id=str(revoked.id),
         target_type="api_key",
-        metadata={"service": revoked.service, "scope": revoked.scope},
+        metadata={"name": revoked.name, "service": revoked.service, "scope": revoked.scope},
     )
     await webhook_service.emit_event(
         event_type="api_key.revoked",
         data={
             "key_id": str(revoked.id),
             "user_id": str(revoked.user_id) if revoked.user_id is not None else None,
+            "name": revoked.name,
             "service": revoked.service,
             "scope": revoked.scope,
         },

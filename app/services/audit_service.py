@@ -10,10 +10,12 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 import structlog
 from fastapi import Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session_factory
 from app.models.audit_event import AuditActorType, AuditEvent
+from app.services.pagination import CursorPage, apply_created_at_cursor, build_page, decode_cursor
 
 logger = structlog.get_logger(__name__)
 
@@ -125,6 +127,40 @@ def _sanitize_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None
 
 class AuditService:
     """Persist immutable audit events without affecting auth outcomes."""
+
+    async def list_events_page(
+        self,
+        db_session: AsyncSession,
+        *,
+        actor_id: UUID | None = None,
+        event_type_prefix: str | None = None,
+        success: bool | None = None,
+        date_from=None,
+        date_to=None,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> CursorPage[AuditEvent]:
+        """Return one cursor-paginated audit-event page for admin inspection."""
+        limit = max(1, min(limit, 200))
+        cursor_position = decode_cursor(cursor) if cursor is not None else None
+        statement = select(AuditEvent).order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
+        if actor_id is not None:
+            statement = statement.where(AuditEvent.actor_id == actor_id)
+        if event_type_prefix is not None:
+            statement = statement.where(AuditEvent.event_type.like(f"{event_type_prefix}%"))
+        if success is not None:
+            statement = statement.where(AuditEvent.success.is_(success))
+        if date_from is not None:
+            statement = statement.where(AuditEvent.created_at >= date_from)
+        if date_to is not None:
+            statement = statement.where(AuditEvent.created_at <= date_to)
+        statement = apply_created_at_cursor(
+            statement,
+            model=AuditEvent,
+            cursor=cursor_position,
+        ).limit(limit + 1)
+        result = await db_session.execute(statement)
+        return build_page(list(result.scalars().all()), limit=limit)
 
     async def record(
         self,

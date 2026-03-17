@@ -10,11 +10,22 @@ import pytest
 
 from app.core.api_keys import APIKeyCore
 from app.models.api_key import APIKey
-from app.services.api_key_service import APIKeyIntrospectionResult, APIKeyService
+from app.services.api_key_service import (
+    APIKeyIntrospectionResult,
+    APIKeyService,
+    APIKeyServiceError,
+)
 
 
 class _FakeDBSession:
     """Minimal DB session stub for API key service tests."""
+
+    def __init__(self) -> None:
+        self.added: list[APIKey] = []
+
+    def add(self, instance: APIKey) -> None:
+        """Capture added model."""
+        self.added.append(instance)
 
     async def execute(self, _statement: object) -> object:
         """Unsupported default execute for tests."""
@@ -45,6 +56,7 @@ def _api_key_row(
     return APIKey(
         id=uuid4(),
         user_id=uuid4(),
+        name="Orders Key",
         service="service-a",
         hashed_key=hashed_key,
         key_prefix="sk_abc12",
@@ -174,3 +186,40 @@ async def test_introspect_valid_key_returns_contract_payload() -> None:
     assert result.key_id == str(row.id)
     assert result.user_id == str(row.user_id)
     assert result.scopes == ["svc:read", "svc:write"]
+
+
+@pytest.mark.asyncio
+async def test_create_key_accepts_admin_name_and_derives_service_from_scope() -> None:
+    """Admin-style name payloads are stored even when legacy service is omitted."""
+    service = APIKeyService(core=APIKeyCore())
+    db_session = _FakeDBSession()
+
+    created = await service.create_key(
+        db_session=db_session,  # type: ignore[arg-type]
+        name="Orders Primary Key",
+        service=None,
+        scope="orders:read",
+        user_id=None,
+        expires_at=None,
+    )
+
+    assert created.name == "Orders Primary Key"
+    assert created.service == "orders"
+
+
+@pytest.mark.asyncio
+async def test_create_key_rejects_missing_name_and_service() -> None:
+    """API keys still require a stable display identifier."""
+    service = APIKeyService(core=APIKeyCore())
+
+    with pytest.raises(APIKeyServiceError) as exc_info:
+        await service.create_key(
+            db_session=_FakeDBSession(),  # type: ignore[arg-type]
+            name=None,
+            service=None,
+            scope="orders:read",
+            user_id=None,
+            expires_at=None,
+        )
+
+    assert "Name is required." in str(exc_info.value)

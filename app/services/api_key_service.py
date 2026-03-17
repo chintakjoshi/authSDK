@@ -7,11 +7,12 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_keys import APIKeyCore
 from app.models.api_key import APIKey
+from app.services.pagination import CursorPage, apply_created_at_cursor, build_page, decode_cursor
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,7 @@ class CreatedAPIKey:
     key_id: UUID
     api_key: str
     key_prefix: str
+    name: str
     service: str
     scope: str
     user_id: UUID | None
@@ -59,22 +61,30 @@ class APIKeyService:
     async def create_key(
         self,
         db_session: AsyncSession,
-        service: str,
+        name: str | None,
+        service: str | None,
         scope: str,
         user_id: UUID | None,
         expires_at: datetime | None,
     ) -> CreatedAPIKey:
         """Create a scoped API key and return raw key exactly once."""
-        if not scope.strip():
+        normalized_scope = scope.strip()
+        if not normalized_scope:
             raise APIKeyServiceError("Scope is required.", "invalid_api_key", 400)
+        resolved_name, resolved_service = self._resolve_name_and_service(
+            name=name,
+            service=service,
+            scope=normalized_scope,
+        )
 
         raw_key = self._core.generate_raw_key()
         key_row = APIKey(
             user_id=user_id,
-            service=service.strip(),
+            name=resolved_name,
+            service=resolved_service,
             hashed_key=self._core.hash_key(raw_key),
             key_prefix=self._core.key_prefix(raw_key),
-            scope=scope.strip(),
+            scope=normalized_scope,
             expires_at=expires_at,
             revoked_at=None,
         )
@@ -89,6 +99,7 @@ class APIKeyService:
             key_id=key_row.id,
             api_key=raw_key,
             key_prefix=key_row.key_prefix,
+            name=key_row.name,
             service=key_row.service,
             scope=key_row.scope,
             user_id=key_row.user_id,
@@ -100,18 +111,49 @@ class APIKeyService:
         self,
         db_session: AsyncSession,
         user_id: UUID | None = None,
+        name: str | None = None,
         service: str | None = None,
+        scope: str | None = None,
+        active: bool | None = None,
     ) -> list[APIKey]:
         """List non-deleted API keys with optional filters."""
-        statement = (
-            select(APIKey).where(APIKey.deleted_at.is_(None)).order_by(APIKey.created_at.desc())
+        statement = self._build_list_statement(
+            user_id=user_id,
+            name=name,
+            service=service,
+            scope=scope,
+            active=active,
         )
-        if user_id is not None:
-            statement = statement.where(APIKey.user_id == user_id)
-        if service is not None:
-            statement = statement.where(APIKey.service == service)
         result = await db_session.execute(statement)
         return list(result.scalars().all())
+
+    async def list_keys_page(
+        self,
+        db_session: AsyncSession,
+        *,
+        cursor: str | None = None,
+        limit: int = 50,
+        user_id: UUID | None = None,
+        name: str | None = None,
+        service: str | None = None,
+        scope: str | None = None,
+        active: bool | None = None,
+    ) -> CursorPage[APIKey]:
+        """Return one cursor-paginated page of API keys."""
+        limit = max(1, min(limit, 200))
+        cursor_position = decode_cursor(cursor) if cursor is not None else None
+        statement = self._build_list_statement(
+            user_id=user_id,
+            name=name,
+            service=service,
+            scope=scope,
+            active=active,
+        )
+        statement = apply_created_at_cursor(statement, model=APIKey, cursor=cursor_position).limit(
+            limit + 1
+        )
+        result = await db_session.execute(statement)
+        return build_page(list(result.scalars().all()), limit=limit)
 
     async def revoke_key(self, db_session: AsyncSession, key_id: UUID) -> APIKey:
         """Revoke API key by key ID."""
@@ -185,6 +227,72 @@ class APIKeyService:
             statement = statement.with_for_update()
         result = await db_session.execute(statement)
         return result.scalar_one_or_none()
+
+    @staticmethod
+    def _resolve_name_and_service(
+        *,
+        name: str | None,
+        service: str | None,
+        scope: str,
+    ) -> tuple[str, str]:
+        """Resolve backward-compatible API-key display name and service identity."""
+        resolved_name = (name or service or "").strip()
+        if not resolved_name:
+            raise APIKeyServiceError("Name is required.", "invalid_api_key", 400)
+
+        resolved_service = (service or "").strip()
+        if not resolved_service:
+            resolved_service = APIKeyService._service_from_scope(scope) or resolved_name
+        return resolved_name, resolved_service
+
+    @staticmethod
+    def _service_from_scope(scope: str) -> str | None:
+        """Infer service identity from the first scope prefix when available."""
+        first_scope = scope.split(",", 1)[0].strip()
+        if not first_scope:
+            return None
+        prefix, _, _ = first_scope.partition(":")
+        normalized = prefix.strip()
+        return normalized or None
+
+    @staticmethod
+    def _build_list_statement(
+        *,
+        user_id: UUID | None,
+        name: str | None,
+        service: str | None,
+        scope: str | None,
+        active: bool | None,
+    ):
+        """Build the base filtered API-key listing query."""
+        statement = (
+            select(APIKey)
+            .where(APIKey.deleted_at.is_(None))
+            .order_by(APIKey.created_at.desc(), APIKey.id.desc())
+        )
+        if user_id is not None:
+            statement = statement.where(APIKey.user_id == user_id)
+        if name is not None:
+            statement = statement.where(APIKey.name == name)
+        if service is not None:
+            statement = statement.where(APIKey.service == service)
+        if scope is not None:
+            statement = statement.where(APIKey.scope == scope)
+        if active is True:
+            now = datetime.now(UTC)
+            statement = statement.where(
+                APIKey.revoked_at.is_(None),
+                or_(APIKey.expires_at.is_(None), APIKey.expires_at > now),
+            )
+        elif active is False:
+            now = datetime.now(UTC)
+            statement = statement.where(
+                or_(
+                    APIKey.revoked_at.is_not(None),
+                    (APIKey.expires_at.is_not(None) & (APIKey.expires_at <= now)),
+                )
+            )
+        return statement
 
 
 @lru_cache

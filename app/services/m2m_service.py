@@ -6,7 +6,9 @@ import hashlib
 import hmac
 import secrets
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import lru_cache
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.jwt import JWTService, get_jwt_service
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
 from app.models.oauth_client import OAuthClient
+from app.services.pagination import CursorPage, apply_created_at_cursor, build_page, decode_cursor
 
 
 @dataclass(frozen=True)
@@ -24,6 +27,37 @@ class ClientCredentialsTokenResult:
     expires_in: int
     scope: str
     client_id: str
+
+
+@dataclass(frozen=True)
+class ManagedOAuthClient:
+    """Management-safe OAuth client payload without raw secret material."""
+
+    id: UUID
+    client_id: str
+    client_secret_prefix: str
+    name: str
+    scopes: list[str]
+    is_active: bool
+    token_ttl_seconds: int
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class CreatedOAuthClient(ManagedOAuthClient):
+    """Created client payload including one-time raw secret."""
+
+    client_secret: str
+
+
+@dataclass(frozen=True)
+class RotatedOAuthClientSecret:
+    """Client secret rotation result returned exactly once."""
+
+    id: UUID
+    client_id: str
+    client_secret: str
+    client_secret_prefix: str
 
 
 class M2MServiceError(Exception):
@@ -100,6 +134,167 @@ class M2MService:
             client_id=client.client_id,
         )
 
+    async def create_client(
+        self,
+        db_session: AsyncSession,
+        *,
+        name: str,
+        scopes: list[str],
+        token_ttl_seconds: int = 3600,
+    ) -> CreatedOAuthClient:
+        """Create an OAuth client and return its raw secret exactly once."""
+        normalized_name = name.strip()
+        normalized_scopes = self._normalize_client_scopes(scopes)
+        if not normalized_name:
+            raise M2MServiceError("Client name is required.", "invalid_credentials", 400)
+        if not normalized_scopes:
+            raise M2MServiceError("At least one scope is required.", "invalid_scope", 400)
+        if token_ttl_seconds < 1:
+            raise M2MServiceError("Invalid token TTL.", "invalid_credentials", 400)
+
+        client_id = await self._generate_unique_client_id(db_session)
+        raw_secret = self.generate_client_secret()
+        row = OAuthClient(
+            client_id=client_id,
+            client_secret_hash=self.hash_client_secret(raw_secret),
+            client_secret_prefix=self.client_secret_prefix(raw_secret),
+            name=normalized_name,
+            scopes=normalized_scopes,
+            role="service",
+            is_active=True,
+            token_ttl_seconds=token_ttl_seconds,
+        )
+        db_session.add(row)
+        await db_session.flush()
+        await db_session.commit()
+        return CreatedOAuthClient(
+            id=row.id,
+            client_id=row.client_id,
+            client_secret=raw_secret,
+            client_secret_prefix=row.client_secret_prefix,
+            name=row.name,
+            scopes=list(row.scopes),
+            is_active=row.is_active,
+            token_ttl_seconds=row.token_ttl_seconds,
+            created_at=row.created_at,
+        )
+
+    async def list_clients(
+        self,
+        db_session: AsyncSession,
+        *,
+        active: bool | None = None,
+    ) -> list[OAuthClient]:
+        """List non-deleted OAuth clients with optional active filter."""
+        statement = self._build_client_list_statement(active=active)
+        result = await db_session.execute(statement)
+        return list(result.scalars().all())
+
+    async def list_clients_page(
+        self,
+        db_session: AsyncSession,
+        *,
+        cursor: str | None = None,
+        limit: int = 50,
+        active: bool | None = None,
+    ) -> CursorPage[OAuthClient]:
+        """Return one cursor-paginated page of OAuth clients."""
+        limit = max(1, min(limit, 200))
+        cursor_position = decode_cursor(cursor) if cursor is not None else None
+        statement = self._build_client_list_statement(active=active)
+        statement = apply_created_at_cursor(
+            statement,
+            model=OAuthClient,
+            cursor=cursor_position,
+        ).limit(limit + 1)
+        result = await db_session.execute(statement)
+        return build_page(list(result.scalars().all()), limit=limit)
+
+    async def update_client(
+        self,
+        db_session: AsyncSession,
+        *,
+        client_row_id: UUID,
+        name: str | None = None,
+        scopes: list[str] | None = None,
+        token_ttl_seconds: int | None = None,
+        is_active: bool | None = None,
+    ) -> OAuthClient:
+        """Update mutable OAuth client fields."""
+        client = await self._get_client_by_id(
+            db_session=db_session,
+            client_row_id=client_row_id,
+            for_update=True,
+        )
+        if client is None:
+            raise M2MServiceError("Client not found.", "invalid_credentials", 404)
+        if name is not None:
+            normalized_name = name.strip()
+            if not normalized_name:
+                raise M2MServiceError("Client name is required.", "invalid_credentials", 400)
+            client.name = normalized_name
+        if scopes is not None:
+            normalized_scopes = self._normalize_client_scopes(scopes)
+            if not normalized_scopes:
+                raise M2MServiceError("At least one scope is required.", "invalid_scope", 400)
+            client.scopes = normalized_scopes
+        if token_ttl_seconds is not None:
+            if token_ttl_seconds < 1:
+                raise M2MServiceError("Invalid token TTL.", "invalid_credentials", 400)
+            client.token_ttl_seconds = token_ttl_seconds
+        if is_active is not None:
+            client.is_active = is_active
+        await db_session.flush()
+        await db_session.commit()
+        return client
+
+    async def rotate_client_secret(
+        self,
+        db_session: AsyncSession,
+        *,
+        client_row_id: UUID,
+    ) -> RotatedOAuthClientSecret:
+        """Rotate client secret and invalidate the previous one immediately."""
+        client = await self._get_client_by_id(
+            db_session=db_session,
+            client_row_id=client_row_id,
+            for_update=True,
+        )
+        if client is None:
+            raise M2MServiceError("Client not found.", "invalid_credentials", 404)
+
+        raw_secret = self.generate_client_secret()
+        client.client_secret_hash = self.hash_client_secret(raw_secret)
+        client.client_secret_prefix = self.client_secret_prefix(raw_secret)
+        await db_session.flush()
+        await db_session.commit()
+        return RotatedOAuthClientSecret(
+            id=client.id,
+            client_id=client.client_id,
+            client_secret=raw_secret,
+            client_secret_prefix=client.client_secret_prefix,
+        )
+
+    async def delete_client(
+        self,
+        db_session: AsyncSession,
+        *,
+        client_row_id: UUID,
+    ) -> OAuthClient:
+        """Soft-delete an OAuth client."""
+        client = await self._get_client_by_id(
+            db_session=db_session,
+            client_row_id=client_row_id,
+            for_update=True,
+        )
+        if client is None:
+            raise M2MServiceError("Client not found.", "invalid_credentials", 404)
+        client.deleted_at = datetime.now(UTC)
+        client.is_active = False
+        await db_session.flush()
+        await db_session.commit()
+        return client
+
     async def _get_client_by_client_id(
         self,
         db_session: AsyncSession,
@@ -113,6 +308,34 @@ class M2MService:
         )
         result = await db_session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def _get_client_by_id(
+        self,
+        db_session: AsyncSession,
+        *,
+        client_row_id: UUID,
+        for_update: bool,
+    ) -> OAuthClient | None:
+        """Fetch one non-deleted OAuth client by primary key."""
+        statement = select(OAuthClient).where(
+            OAuthClient.id == client_row_id,
+            OAuthClient.deleted_at.is_(None),
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        result = await db_session.execute(statement)
+        return result.scalar_one_or_none()
+
+    async def _generate_unique_client_id(self, db_session: AsyncSession) -> str:
+        """Generate a unique random client identifier."""
+        for _ in range(10):
+            candidate = f"client_{secrets.token_urlsafe(16)}"
+            existing = await self._get_client_by_client_id(
+                db_session=db_session, client_id=candidate
+            )
+            if existing is None:
+                return candidate
+        raise RuntimeError("Unable to generate unique client ID.")
 
     @staticmethod
     def generate_client_secret() -> str:
@@ -140,6 +363,31 @@ class M2MService:
         if scope is None:
             return []
         return [item for item in scope.strip().split(" ") if item]
+
+    @staticmethod
+    def _normalize_client_scopes(scopes: list[str]) -> list[str]:
+        """Normalize and deduplicate stored client scopes while preserving order."""
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for scope in scopes:
+            item = scope.strip()
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            normalized.append(item)
+        return normalized
+
+    @staticmethod
+    def _build_client_list_statement(*, active: bool | None):
+        """Build the base OAuth client listing query."""
+        statement = (
+            select(OAuthClient)
+            .where(OAuthClient.deleted_at.is_(None))
+            .order_by(OAuthClient.created_at.desc(), OAuthClient.id.desc())
+        )
+        if active is not None:
+            statement = statement.where(OAuthClient.is_active.is_(active))
+        return statement
 
 
 @lru_cache

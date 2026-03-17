@@ -66,8 +66,8 @@ class BruteForceProtectionService:
     def __init__(self, redis_client: Redis) -> None:
         self._redis = redis_client
 
-    async def ensure_not_locked(self, user_id: str) -> None:
-        """Reject requests while an account lockout key is active."""
+    async def get_lock_status(self, user_id: str) -> tuple[bool, int | None]:
+        """Return whether an account is currently locked and the remaining TTL."""
         key = self._lockout_key(user_id)
         try:
             locked = await self._redis.get(key)
@@ -78,14 +78,19 @@ class BruteForceProtectionService:
                 "session_expired",
                 503,
             ) from exc
+        if locked is None:
+            return False, None
+        return True, ttl if ttl and ttl > 0 else 1
 
-        if locked is not None:
-            retry_after = ttl if ttl and ttl > 0 else 1
+    async def ensure_not_locked(self, user_id: str) -> None:
+        """Reject requests while an account lockout key is active."""
+        locked, retry_after = await self.get_lock_status(user_id)
+        if locked:
             raise BruteForceProtectionError(
                 "Account temporarily locked.",
                 "account_locked",
                 401,
-                headers={"Retry-After": str(retry_after)},
+                headers={"Retry-After": str(retry_after or 1)},
             )
 
     async def record_failed_password_attempt(
