@@ -11,7 +11,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_database_session
+from app.routers._admin_access import require_admin_claims
 from app.schemas.api_key import APIKeyCreateRequest, APIKeyCreateResponse, APIKeyListItem
+from app.services.admin_service import AdminService, AdminServiceError, get_admin_service
 from app.services.api_key_service import APIKeyService, APIKeyServiceError, get_api_key_service
 from app.services.audit_service import AuditService, get_audit_service
 from app.services.webhook_service import WebhookService, get_webhook_service
@@ -29,11 +31,21 @@ async def create_api_key(
     request: Request,
     payload: APIKeyCreateRequest,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    admin_service: Annotated[AdminService, Depends(get_admin_service)],
     api_key_service: Annotated[APIKeyService, Depends(get_api_key_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> APIKeyCreateResponse | JSONResponse:
     """Create API key and return raw key exactly once."""
+    try:
+        claims = await require_admin_claims(
+            request,
+            db_session=db_session,
+            admin_service=admin_service,
+        )
+    except AdminServiceError as exc:
+        return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
+
     try:
         created = await api_key_service.create_key(
             db_session=db_session,
@@ -64,13 +76,18 @@ async def create_api_key(
     await audit_service.record(
         db=db_session,
         event_type="api_key.created",
-        actor_type="user" if created.user_id else "system",
+        actor_type="admin",
         success=True,
         request=request,
-        actor_id=str(created.user_id) if created.user_id else None,
+        actor_id=str(claims.get("sub", "")) or None,
         target_id=str(created.key_id),
         target_type="api_key",
-        metadata={"name": created.name, "service": created.service, "scope": created.scope},
+        metadata={
+            "name": created.name,
+            "service": created.service,
+            "scope": created.scope,
+            "user_id": str(created.user_id) if created.user_id is not None else None,
+        },
     )
     await webhook_service.emit_event(
         event_type="api_key.created",
@@ -99,6 +116,7 @@ async def create_api_key(
 async def list_api_keys(
     request: Request,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    admin_service: Annotated[AdminService, Depends(get_admin_service)],
     api_key_service: Annotated[APIKeyService, Depends(get_api_key_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
     user_id: Annotated[UUID | None, Query()] = None,
@@ -106,8 +124,17 @@ async def list_api_keys(
     service: Annotated[str | None, Query()] = None,
     scope: Annotated[str | None, Query()] = None,
     active: Annotated[bool | None, Query()] = None,
-) -> list[APIKeyListItem]:
+) -> list[APIKeyListItem] | JSONResponse:
     """List API keys without exposing raw key material."""
+    try:
+        claims = await require_admin_claims(
+            request,
+            db_session=db_session,
+            admin_service=admin_service,
+        )
+    except AdminServiceError as exc:
+        return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
+
     keys = await api_key_service.list_keys(
         db_session=db_session,
         user_id=user_id,
@@ -119,10 +146,10 @@ async def list_api_keys(
     await audit_service.record(
         db=db_session,
         event_type="api_key.used",
-        actor_type="user" if user_id else "system",
+        actor_type="admin",
         success=True,
         request=request,
-        actor_id=str(user_id) if user_id else None,
+        actor_id=str(claims.get("sub", "")) or None,
         target_type="api_key_collection",
         metadata={
             "operation": "list",
@@ -154,11 +181,21 @@ async def revoke_api_key(
     request: Request,
     key_id: UUID,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    admin_service: Annotated[AdminService, Depends(get_admin_service)],
     api_key_service: Annotated[APIKeyService, Depends(get_api_key_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> JSONResponse:
     """Revoke API key by key ID."""
+    try:
+        claims = await require_admin_claims(
+            request,
+            db_session=db_session,
+            admin_service=admin_service,
+        )
+    except AdminServiceError as exc:
+        return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
+
     try:
         revoked = await api_key_service.revoke_key(db_session=db_session, key_id=key_id)
     except APIKeyServiceError as exc:
@@ -177,13 +214,18 @@ async def revoke_api_key(
     await audit_service.record(
         db=db_session,
         event_type="api_key.revoked",
-        actor_type="user" if revoked.user_id else "system",
+        actor_type="admin",
         success=True,
         request=request,
-        actor_id=str(revoked.user_id) if revoked.user_id else None,
+        actor_id=str(claims.get("sub", "")) or None,
         target_id=str(revoked.id),
         target_type="api_key",
-        metadata={"name": revoked.name, "service": revoked.service, "scope": revoked.scope},
+        metadata={
+            "name": revoked.name,
+            "service": revoked.service,
+            "scope": revoked.scope,
+            "user_id": str(revoked.user_id) if revoked.user_id is not None else None,
+        },
     )
     await webhook_service.emit_event(
         event_type="api_key.revoked",

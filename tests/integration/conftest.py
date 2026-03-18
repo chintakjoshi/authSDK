@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import socket
+import time
 from collections.abc import Callable, Iterator
 from datetime import datetime
 from typing import Any
@@ -15,6 +17,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from testcontainers.core.container import DockerContainer
 from testcontainers.postgres import PostgresContainer
 from testcontainers.redis import RedisContainer
 
@@ -154,6 +157,25 @@ def _postgres_async_url(postgres: PostgresContainer) -> str:
     return postgres_url.replace("postgresql://", "postgresql+asyncpg://", 1)
 
 
+def _mailhog_endpoint(mailhog: DockerContainer) -> tuple[str, int]:
+    """Return host/port endpoint for Mailhog SMTP."""
+    host = mailhog.get_container_host_ip()
+    port = int(mailhog.get_exposed_port(1025))
+    return host, port
+
+
+def _wait_for_tcp(host: str, port: int, timeout_seconds: float = 10.0) -> None:
+    """Wait until a TCP endpoint is reachable or raise timeout."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(1.0)
+            if sock.connect_ex((host, port)) == 0:
+                return
+        time.sleep(0.1)
+    raise RuntimeError(f"Timed out waiting for TCP endpoint {host}:{port}")
+
+
 def _set_env_values(env_values: dict[str, str]) -> tuple[dict[str, str], Callable[[], None]]:
     """Apply env vars and return a restore callback."""
     original: dict[str, str] = {}
@@ -183,8 +205,10 @@ def integration_env() -> Iterator[dict[str, str]]:
     try:
         postgres = PostgresContainer("postgres:16")
         redis = RedisContainer("redis:7")
+        mailhog = DockerContainer("mailhog/mailhog").with_exposed_ports(1025)
         postgres.start()
         redis.start()
+        mailhog.start()
     except DockerException as exc:
         if os.environ.get("CI", "").lower() in {"1", "true", "yes"}:
             pytest.fail(
@@ -196,6 +220,8 @@ def integration_env() -> Iterator[dict[str, str]]:
 
     database_url = _postgres_async_url(postgres)
     redis_url = _redis_connection_url(redis)
+    mailhog_host, mailhog_port = _mailhog_endpoint(mailhog)
+    _wait_for_tcp(mailhog_host, mailhog_port)
 
     env_values = {
         "APP__ENVIRONMENT": "development",
@@ -224,6 +250,9 @@ def integration_env() -> Iterator[dict[str, str]]:
         "RATE_LIMIT__DEFAULT_REQUESTS_PER_MINUTE": "10000",
         "RATE_LIMIT__LOGIN_REQUESTS_PER_MINUTE": "10000",
         "RATE_LIMIT__TOKEN_REQUESTS_PER_MINUTE": "10000",
+        "EMAIL__MAILHOG_HOST": mailhog_host,
+        "EMAIL__MAILHOG_PORT": str(mailhog_port),
+        "EMAIL__EMAIL_FROM": "auth-integration@example.com",
     }
 
     _, restore_env = _set_env_values(env_values)
@@ -240,6 +269,7 @@ def integration_env() -> Iterator[dict[str, str]]:
             _clear_dependency_caches()
         finally:
             restore_env()
+            mailhog.stop()
             postgres.stop()
             redis.stop()
 
@@ -329,12 +359,21 @@ async def user_factory(
 
     user_service = UserService()
 
-    async def _create(email: str, password: str) -> User:
+    async def _create(
+        email: str,
+        password: str,
+        *,
+        role: str = "user",
+        email_verified: bool = False,
+        email_otp_enabled: bool = False,
+    ) -> User:
         user = User(
             email=email,
             password_hash=user_service.hash_password(password),
             is_active=True,
-            role="user",
+            role=role,
+            email_verified=email_verified,
+            email_otp_enabled=email_otp_enabled,
         )
         db_session.add(user)
         await db_session.commit()

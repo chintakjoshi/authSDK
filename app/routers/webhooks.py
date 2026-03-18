@@ -5,17 +5,19 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.dependencies import get_database_session
+from app.routers._admin_access import require_admin_claims
 from app.schemas.webhook import (
     WebhookDeliveryResponse,
     WebhookEndpointCreateRequest,
     WebhookEndpointResponse,
     WebhookRetryResponse,
 )
+from app.services.admin_service import AdminService, AdminServiceError, get_admin_service
 from app.services.webhook_service import (
     WebhookService,
     WebhookServiceError,
@@ -32,11 +34,21 @@ def _error_response(status_code: int, detail: str, code: str) -> JSONResponse:
 
 @router.post("", response_model=WebhookEndpointResponse)
 async def register_webhook(
+    request: Request,
     payload: WebhookEndpointCreateRequest,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    admin_service: Annotated[AdminService, Depends(get_admin_service)],
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> WebhookEndpointResponse | JSONResponse:
     """Register one webhook endpoint for future auth-event deliveries."""
+    try:
+        await require_admin_claims(
+            request,
+            db_session=db_session,
+            admin_service=admin_service,
+        )
+    except AdminServiceError as exc:
+        return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
     try:
         endpoint = await webhook_service.register_endpoint(
             db_session=db_session,
@@ -59,10 +71,20 @@ async def register_webhook(
 
 @router.get("", response_model=list[WebhookEndpointResponse])
 async def list_webhooks(
+    request: Request,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    admin_service: Annotated[AdminService, Depends(get_admin_service)],
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
-) -> list[WebhookEndpointResponse]:
+) -> list[WebhookEndpointResponse] | JSONResponse:
     """List registered webhook endpoints."""
+    try:
+        await require_admin_claims(
+            request,
+            db_session=db_session,
+            admin_service=admin_service,
+        )
+    except AdminServiceError as exc:
+        return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
     endpoints = await webhook_service.list_endpoints(db_session=db_session)
     return [
         WebhookEndpointResponse(
@@ -80,11 +102,21 @@ async def list_webhooks(
 @router.get("/{endpoint_id}/deliveries", response_model=list[WebhookDeliveryResponse])
 async def list_webhook_deliveries(
     endpoint_id: UUID,
+    request: Request,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    admin_service: Annotated[AdminService, Depends(get_admin_service)],
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
     status: Annotated[str | None, Query()] = None,
-) -> list[WebhookDeliveryResponse]:
+) -> list[WebhookDeliveryResponse] | JSONResponse:
     """List deliveries for one webhook endpoint."""
+    try:
+        await require_admin_claims(
+            request,
+            db_session=db_session,
+            admin_service=admin_service,
+        )
+    except AdminServiceError as exc:
+        return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
     deliveries = await webhook_service.list_deliveries(
         db_session=db_session,
         endpoint_id=endpoint_id,
@@ -110,10 +142,20 @@ async def list_webhook_deliveries(
 @router.post("/deliveries/{delivery_id}/retry", response_model=WebhookRetryResponse)
 async def retry_webhook_delivery(
     delivery_id: UUID,
+    request: Request,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    admin_service: Annotated[AdminService, Depends(get_admin_service)],
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> WebhookRetryResponse | JSONResponse:
     """Reset and requeue one delivery for immediate retry."""
+    try:
+        await require_admin_claims(
+            request,
+            db_session=db_session,
+            admin_service=admin_service,
+        )
+    except AdminServiceError as exc:
+        return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
     try:
         delivery = await webhook_service.retry_delivery(
             db_session=db_session,

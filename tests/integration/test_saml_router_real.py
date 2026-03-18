@@ -8,8 +8,8 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from app.core.saml import SamlAssertion, SamlProtocolError
-from app.core.sessions import get_session_service
+from app.core.saml import SamlAssertion, SamlLoginRequest, SamlProtocolError
+from app.core.sessions import get_redis_client, get_session_service
 from app.services.saml_service import SamlService, get_saml_service
 from app.services.token_service import get_token_service
 
@@ -20,14 +20,27 @@ class _SamlCoreStub:
 
     mode: str = "success"
 
-    def login_url(self, request_data: dict[str, str], relay_state: str | None) -> str:
+    def login_url(
+        self,
+        request_data: dict[str, str],
+        relay_state: str | None,
+    ) -> SamlLoginRequest:
         """Return deterministic IdP redirect URL."""
-        del request_data, relay_state
-        return "https://idp.example.com/sso"
+        del request_data
+        return SamlLoginRequest(
+            redirect_url=f"https://idp.example.com/sso?RelayState={relay_state}",
+            request_id="request-1",
+        )
 
-    def parse_assertion(self, request_data: dict[str, str]) -> SamlAssertion:
+    def parse_assertion(
+        self,
+        request_data: dict[str, str],
+        *,
+        expected_request_id: str,
+    ) -> SamlAssertion:
         """Return normalized assertion or raise configured protocol failure."""
         del request_data
+        assert expected_request_id == "request-1"
         if self.mode == "error":
             raise SamlProtocolError("SAML assertion invalid.", "saml_assertion_invalid", 401)
         return SamlAssertion(provider_user_id="saml-user-1", email="saml-user@example.com")
@@ -43,6 +56,7 @@ def _build_saml_service(mode: str = "success") -> SamlService:
         saml_core=_SamlCoreStub(mode=mode),
         token_service=get_token_service(),
         session_service=get_session_service(),
+        redis_client=get_redis_client(),
     )
 
 
@@ -57,11 +71,11 @@ async def test_saml_login_callback_and_metadata_success(app_factory) -> None:
     ) as client:
         login_response = await client.get("/auth/saml/login")
         assert login_response.status_code == 302
-        assert login_response.headers["location"] == "https://idp.example.com/sso"
+        relay_state = login_response.headers["location"].split("RelayState=", 1)[1]
 
         callback_response = await client.post(
             "/auth/saml/callback",
-            content="SAMLResponse=fake",
+            content=f"SAMLResponse=fake&RelayState={relay_state}",
             headers={"content-type": "application/x-www-form-urlencoded"},
         )
         assert callback_response.status_code == 200
@@ -84,9 +98,11 @@ async def test_saml_callback_invalid_assertion_failure(app_factory) -> None:
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
     ) as client:
+        login_response = await client.get("/auth/saml/login")
+        relay_state = login_response.headers["location"].split("RelayState=", 1)[1]
         response = await client.post(
             "/auth/saml/callback",
-            content="SAMLResponse=fake",
+            content=f"SAMLResponse=fake&RelayState={relay_state}",
             headers={"content-type": "application/x-www-form-urlencoded"},
         )
 

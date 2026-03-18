@@ -132,6 +132,15 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             request.state.user = service_identity
             return await call_next(request)
 
+        try:
+            await self._auth_client.validate_access_token_session(token)
+        except JWTVerificationError as exc:
+            return _error_response(401, exc.detail, exc.code)
+        except AuthServiceUnavailableError:
+            return _error_response(503, "Auth service unavailable.", "session_expired")
+        except AuthServiceResponseError:
+            return _error_response(503, "Auth service unavailable.", "session_expired")
+
         email = claims.get("email")
         if not isinstance(email, str) or not email.strip():
             return _error_response(401, "Invalid token.", "invalid_token")

@@ -618,7 +618,7 @@ async def test_admin_webhook_routes_cover_listing_retry_and_delete(app_factory, 
             "/admin/webhooks",
             json={
                 "name": "Admin Hook",
-                "url": "https://hooks.example.com/admin",
+                "url": "https://example.com/admin",
                 "secret": "top-secret-hook",
                 "events": ["session.created"],
             },

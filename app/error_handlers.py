@@ -10,6 +10,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.core.client_ip import extract_client_ip
+
 VALID_ERROR_CODES = {
     "invalid_token",
     "token_expired",
@@ -87,15 +89,6 @@ def _sanitize_detail(detail: str, status_code: int, environment: str) -> str:
     return detail
 
 
-def _extract_client_ip(request: Request) -> str:
-    """Extract request client IP with forwarding-header support."""
-    forwarded_for = request.headers.get("x-forwarded-for", "").strip()
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    client = request.client
-    return client.host if client else "unknown"
-
-
 def _extract_user_identifier(request: Request) -> tuple[str | None, str | None]:
     """Extract best-effort user identifiers from request state."""
     user_state = getattr(request.state, "user", None)
@@ -143,7 +136,7 @@ def _log_auth_failure(
         user_id=user_id,
         user_identifier=user_identifier,
         provider="unknown",
-        ip_address=_extract_client_ip(request),
+        ip_address=extract_client_ip(request) or "unknown",
         success=False,
         status_code=status_code,
         code=code,

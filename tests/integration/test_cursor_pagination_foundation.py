@@ -114,14 +114,14 @@ async def test_webhook_service_list_endpoints_page_uses_cursor(
     await webhook_service.register_endpoint(
         db_session=db_session,
         name="First Endpoint",
-        url="https://hooks.example.com/first",
+        url="https://example.com/first",
         secret="first-secret-value",
         events=["session.created"],
     )
     second = await webhook_service.register_endpoint(
         db_session=db_session,
         name="Second Endpoint",
-        url="https://hooks.example.com/second",
+        url="https://example.com/second",
         secret="second-secret-value",
         events=["session.created"],
     )

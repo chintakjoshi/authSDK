@@ -118,19 +118,28 @@ async def test_webhook_registration_and_login_emit_session_created_delivery(
     app: FastAPI = app_factory()
     app.dependency_overrides[get_webhook_service] = lambda: webhook_service
     await user_factory("hook-user@example.com", "Password123!")
+    await user_factory("hook-admin@example.com", "Password123!", role="admin")
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://testserver",
     ) as client:
+        login_response = await client.post(
+            "/auth/login",
+            json={"email": "hook-admin@example.com", "password": "Password123!"},
+        )
+        assert login_response.status_code == 200
+        headers = {"authorization": f"Bearer {login_response.json()['access_token']}"}
+
         register = await client.post(
             "/webhooks",
             json={
                 "name": "session hooks",
-                "url": "https://hooks.example.com/ingest",
+                "url": "https://example.com/ingest",
                 "secret": "super-secret-hook",
                 "events": ["session.created"],
             },
+            headers=headers,
         )
         assert register.status_code == 200
         endpoint_id = register.json()["id"]
@@ -141,7 +150,10 @@ async def test_webhook_registration_and_login_emit_session_created_delivery(
         )
         assert login.status_code == 200
 
-        deliveries_response = await client.get(f"/webhooks/{endpoint_id}/deliveries")
+        deliveries_response = await client.get(
+            f"/webhooks/{endpoint_id}/deliveries",
+            headers=headers,
+        )
         assert deliveries_response.status_code == 200
         deliveries = deliveries_response.json()
         assert len(deliveries) == 1
@@ -183,7 +195,7 @@ async def test_webhook_failures_retry_with_backoff_and_abandon_after_five_attemp
     endpoint = await webhook_service.register_endpoint(
         db_session=db_session,
         name="retry hooks",
-        url="https://hooks.example.com/retry",
+        url="https://example.com/retry",
         secret="retry-secret",
         events=["session.created"],
     )
@@ -228,7 +240,10 @@ async def test_webhook_failures_retry_with_backoff_and_abandon_after_five_attemp
 
 
 @pytest.mark.asyncio
-async def test_webhook_registration_blocks_localhost_urls(app_factory) -> None:
+async def test_webhook_registration_blocks_localhost_urls(
+    app_factory,
+    user_factory,
+) -> None:
     """Webhook registration rejects localhost/private URLs to mitigate SSRF."""
     sender = _FakeSender([])
     queue = _FakeQueue()
@@ -236,11 +251,17 @@ async def test_webhook_registration_blocks_localhost_urls(app_factory) -> None:
     webhook_service = _build_webhook_service(sender=sender, queue=queue, scheduler=scheduler)
     app: FastAPI = app_factory()
     app.dependency_overrides[get_webhook_service] = lambda: webhook_service
+    await user_factory("hook-admin-block@example.com", "Password123!", role="admin")
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://testserver",
     ) as client:
+        login_response = await client.post(
+            "/auth/login",
+            json={"email": "hook-admin-block@example.com", "password": "Password123!"},
+        )
+        headers = {"authorization": f"Bearer {login_response.json()['access_token']}"}
         response = await client.post(
             "/webhooks",
             json={
@@ -249,6 +270,7 @@ async def test_webhook_registration_blocks_localhost_urls(app_factory) -> None:
                 "secret": "secret-value",
                 "events": ["session.created"],
             },
+            headers=headers,
         )
 
     assert response.status_code == 400

@@ -89,6 +89,8 @@ async def test_jwt_middleware_verifies_and_caches_jwks() -> None:
         if request.url.path == "/.well-known/jwks.json":
             jwks_calls += 1
             return httpx.Response(status_code=200, json={"keys": [jwk]})
+        if request.url.path == "/auth/validate":
+            return httpx.Response(status_code=204)
         return httpx.Response(status_code=404, json={"detail": "not found"})
 
     app = FastAPI()
@@ -133,6 +135,8 @@ async def test_jwt_middleware_refreshes_once_on_verification_failure() -> None:
             if jwks_calls == 1:
                 return httpx.Response(status_code=200, json={"keys": [stale_jwk]})
             return httpx.Response(status_code=200, json={"keys": [active_jwk]})
+        if request.url.path == "/auth/validate":
+            return httpx.Response(status_code=204)
         return httpx.Response(status_code=404, json={"detail": "not found"})
 
     app = FastAPI()
@@ -166,6 +170,8 @@ async def test_jwt_middleware_rejects_missing_required_claim() -> None:
     async def auth_handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/.well-known/jwks.json":
             return httpx.Response(status_code=200, json={"keys": [jwk]})
+        if request.url.path == "/auth/validate":
+            return httpx.Response(status_code=204)
         return httpx.Response(status_code=404, json={"detail": "not found"})
 
     app = FastAPI()
@@ -191,6 +197,44 @@ async def test_jwt_middleware_rejects_missing_required_claim() -> None:
 
 
 @pytest.mark.asyncio
+async def test_jwt_middleware_rejects_revoked_user_session() -> None:
+    """User access tokens are denied when auth-service says the session is gone."""
+    private_pem, jwk = _generate_signing_material("kid-1")
+    token = _build_token(private_pem, kid="kid-1")
+
+    async def auth_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/.well-known/jwks.json":
+            return httpx.Response(status_code=200, json={"keys": [jwk]})
+        if request.url.path == "/auth/validate":
+            return httpx.Response(
+                status_code=401,
+                json={"detail": "Session expired.", "code": "session_expired"},
+            )
+        return httpx.Response(status_code=404, json={"detail": "not found"})
+
+    app = FastAPI()
+    transport = httpx.MockTransport(auth_handler)
+    auth_http_client = httpx.AsyncClient(base_url="https://auth.local", transport=transport)
+    auth_client = AuthClient(base_url="https://auth.local", http_client=auth_http_client)
+    app.add_middleware(
+        JWTAuthMiddleware, auth_base_url="https://auth.local", auth_client=auth_client
+    )
+
+    @app.get("/protected")
+    async def protected(request: Request) -> dict[str, object]:
+        return {"user": request.state.user}
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get("/protected", headers={"authorization": f"Bearer {token}"})
+
+    await auth_http_client.aclose()
+    assert response.status_code == 401
+    assert response.json()["code"] == "session_expired"
+
+
+@pytest.mark.asyncio
 async def test_jwt_middleware_rejects_missing_role_claim() -> None:
     """JWT middleware rejects tokens without role claim."""
     private_pem, jwk = _generate_signing_material("kid-1")
@@ -207,6 +251,8 @@ async def test_jwt_middleware_rejects_missing_role_claim() -> None:
     async def auth_handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/.well-known/jwks.json":
             return httpx.Response(status_code=200, json={"keys": [jwk]})
+        if request.url.path == "/auth/validate":
+            return httpx.Response(status_code=204)
         return httpx.Response(status_code=404, json={"detail": "not found"})
 
     app = FastAPI()
@@ -242,6 +288,8 @@ async def test_jwt_middleware_rejects_otp_challenge_tokens() -> None:
     async def auth_handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/.well-known/jwks.json":
             return httpx.Response(status_code=200, json={"keys": [jwk]})
+        if request.url.path == "/auth/validate":
+            return httpx.Response(status_code=204)
         return httpx.Response(status_code=404, json={"detail": "not found"})
 
     app = FastAPI()
@@ -282,6 +330,8 @@ async def test_jwt_middleware_accepts_m2m_tokens() -> None:
     async def auth_handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/.well-known/jwks.json":
             return httpx.Response(status_code=200, json={"keys": [jwk]})
+        if request.url.path == "/auth/validate":
+            return httpx.Response(status_code=204)
         return httpx.Response(status_code=404, json={"detail": "not found"})
 
     app = FastAPI()

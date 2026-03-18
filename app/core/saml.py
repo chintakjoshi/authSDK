@@ -23,6 +23,14 @@ class SamlAssertion:
     email_verified: bool = False
 
 
+@dataclass(frozen=True)
+class SamlLoginRequest:
+    """Login initiation payload containing redirect URL and request correlation id."""
+
+    redirect_url: str
+    request_id: str
+
+
 class SamlProtocolError(Exception):
     """Raised for SAML protocol and assertion validation failures."""
 
@@ -39,21 +47,30 @@ class SamlCore:
     def __init__(self, settings_data: dict[str, Any]) -> None:
         self._settings_data = settings_data
 
-    def login_url(self, request_data: dict[str, Any], relay_state: str | None) -> str:
-        """Create IdP redirect URL for SAML login."""
+    def login_url(self, request_data: dict[str, Any], relay_state: str | None) -> SamlLoginRequest:
+        """Create IdP redirect URL and capture the generated request id."""
         auth = self._build_auth(request_data=request_data)
         try:
-            return auth.login(return_to=relay_state)
+            redirect_url = auth.login(return_to=relay_state)
+            request_id = str(auth.get_last_request_id() or "").strip()
         except Exception as exc:
             raise SamlProtocolError(
                 "SAML login initiation failed.", "saml_assertion_invalid", 400
             ) from exc
+        if not request_id:
+            raise SamlProtocolError("SAML login initiation failed.", "saml_assertion_invalid", 400)
+        return SamlLoginRequest(redirect_url=redirect_url, request_id=request_id)
 
-    def parse_assertion(self, request_data: dict[str, Any]) -> SamlAssertion:
+    def parse_assertion(
+        self,
+        request_data: dict[str, Any],
+        *,
+        expected_request_id: str,
+    ) -> SamlAssertion:
         """Validate SAML response and extract identity claims."""
         auth = self._build_auth(request_data=request_data)
         try:
-            auth.process_response()
+            auth.process_response(request_id=expected_request_id)
         except Exception as exc:
             raise SamlProtocolError(
                 "SAML assertion invalid.", "saml_assertion_invalid", 401
@@ -205,7 +222,7 @@ def _build_saml_settings_from_config() -> dict[str, Any]:
             "wantNameId": True,
             "wantXMLValidation": True,
             "wantAttributeStatement": True,
-            "rejectUnsolicitedResponsesWithInResponseTo": False,
+            "rejectUnsolicitedResponsesWithInResponseTo": True,
         },
     }
 

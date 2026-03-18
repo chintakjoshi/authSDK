@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
-import ipaddress
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING
 
+from fastapi import Request
 from redis.asyncio.client import Redis
 from redis.exceptions import RedisError
 
+from app.core.client_ip import (
+    extract_client_ip as extract_request_client_ip,
+)
+from app.core.client_ip import (
+    normalize_ip,
+)
 from app.core.sessions import get_redis_client
-
-if TYPE_CHECKING:
-    from fastapi import Request
 
 _FAILED_ATTEMPTS_TTL_SECONDS = 3600
 _DISTRIBUTED_ATTACK_TTL_SECONDS = 300
@@ -268,23 +270,7 @@ class BruteForceProtectionService:
 
 def extract_client_ip(request: Request) -> str | None:
     """Extract client IP from forwarding headers or request peer address."""
-    forwarded_for = request.headers.get("x-forwarded-for", "").strip()
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    client = request.client
-    if client is None:
-        return None
-    return client.host
-
-
-def normalize_ip(ip_address: str | None) -> str | None:
-    """Normalize IP strings to canonical form and drop malformed values."""
-    if not ip_address:
-        return None
-    try:
-        return str(ipaddress.ip_address(ip_address.strip()))
-    except ValueError:
-        return None
+    return extract_request_client_ip(request)
 
 
 def normalize_user_agent(user_agent: str | None) -> str | None:

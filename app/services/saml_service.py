@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import inspect
+import json
+import secrets
+from dataclasses import dataclass
 from functools import lru_cache
 
+from redis.asyncio.client import Redis
+from redis.exceptions import RedisError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.saml import SamlCore, SamlProtocolError, get_saml_core
-from app.core.sessions import SessionService, get_session_service
+from app.core.sessions import SessionService, get_redis_client, get_session_service
 from app.models.user import User, UserIdentity
 from app.services.token_service import TokenPair, TokenService, get_token_service
 
@@ -24,6 +29,13 @@ class SamlServiceError(Exception):
         self.status_code = status_code
 
 
+@dataclass(frozen=True)
+class SamlStateRecord:
+    """Serialized SAML request state stored in Redis."""
+
+    request_id: str
+
+
 class SamlService:
     """Coordinates SAML protocol flow with user/session issuance."""
 
@@ -32,10 +44,13 @@ class SamlService:
         saml_core: SamlCore,
         token_service: TokenService,
         session_service: SessionService,
+        redis_client: Redis,
     ) -> None:
         self._saml_core = saml_core
         self._token_service = token_service
         self._session_service = session_service
+        self._redis = redis_client
+        self._state_ttl_seconds = 600
 
     def _issue_token_pair(
         self,
@@ -76,12 +91,21 @@ class SamlService:
             kwargs["email_otp_enabled"] = email_otp_enabled
         return issue_method(**kwargs)
 
-    def create_login_url(self, request_data: dict[str, str], relay_state: str | None) -> str:
+    async def create_login_url(self, request_data: dict[str, str], relay_state: str | None) -> str:
         """Create SAML login redirect URL."""
         try:
-            return self._saml_core.login_url(request_data=request_data, relay_state=relay_state)
+            state_token = self._generate_state_token()
+            login_request = self._saml_core.login_url(
+                request_data=request_data,
+                relay_state=state_token,
+            )
         except SamlProtocolError as exc:
             raise SamlServiceError(exc.detail, exc.code, exc.status_code) from exc
+        await self._store_state(
+            state=state_token,
+            record=SamlStateRecord(request_id=login_request.request_id),
+        )
+        return login_request.redirect_url
 
     async def complete_callback(
         self,
@@ -89,8 +113,13 @@ class SamlService:
         request_data: dict[str, str],
     ) -> TokenPair:
         """Validate SAML assertion, resolve identity, and issue tokens."""
+        relay_state = self._extract_relay_state(request_data)
+        state_record = await self._consume_state(relay_state)
         try:
-            assertion = self._saml_core.parse_assertion(request_data=request_data)
+            assertion = self._saml_core.parse_assertion(
+                request_data=request_data,
+                expected_request_id=state_record.request_id,
+            )
         except SamlProtocolError as exc:
             raise SamlServiceError(exc.detail, exc.code, exc.status_code) from exc
 
@@ -205,6 +234,70 @@ class SamlService:
         result = await db_session.execute(statement)
         return result.scalar_one_or_none()
 
+    async def _store_state(self, *, state: str, record: SamlStateRecord) -> None:
+        """Persist SAML request state in Redis for callback validation."""
+        try:
+            await self._redis.setex(
+                self._state_key(state),
+                self._state_ttl_seconds,
+                json.dumps({"request_id": record.request_id}),
+            )
+        except RedisError as exc:
+            raise SamlServiceError(
+                "SAML assertion invalid.",
+                "saml_assertion_invalid",
+                503,
+            ) from exc
+
+    async def _consume_state(self, state: str) -> SamlStateRecord:
+        """Load and delete the one-time SAML request state."""
+        key = self._state_key(state)
+        try:
+            if hasattr(self._redis, "getdel"):
+                raw_payload = await self._redis.getdel(key)
+            else:
+                raw_payload = await self._redis.get(key)
+                if raw_payload is not None:
+                    await self._redis.delete(key)
+        except RedisError as exc:
+            raise SamlServiceError(
+                "SAML assertion invalid.",
+                "saml_assertion_invalid",
+                503,
+            ) from exc
+
+        if raw_payload is None:
+            raise SamlServiceError("SAML assertion invalid.", "saml_assertion_invalid", 401)
+        try:
+            payload_dict = json.loads(raw_payload)
+            return SamlStateRecord(**payload_dict)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise SamlServiceError(
+                "SAML assertion invalid.", "saml_assertion_invalid", 401
+            ) from exc
+
+    @staticmethod
+    def _generate_state_token() -> str:
+        """Generate opaque RelayState token for request correlation."""
+        return secrets.token_urlsafe(32)
+
+    @staticmethod
+    def _extract_relay_state(request_data: dict[str, object]) -> str:
+        """Extract RelayState from GET or POST request payloads."""
+        for key in ("post_data", "get_data"):
+            payload = request_data.get(key, {})
+            if not isinstance(payload, dict):
+                continue
+            relay_state = str(payload.get("RelayState", "")).strip()
+            if relay_state:
+                return relay_state
+        raise SamlServiceError("SAML assertion invalid.", "saml_assertion_invalid", 401)
+
+    @staticmethod
+    def _state_key(state: str) -> str:
+        """Build Redis key for one-time SAML request state."""
+        return f"saml_state:{state}"
+
 
 @lru_cache
 def get_saml_service() -> SamlService:
@@ -213,4 +306,5 @@ def get_saml_service() -> SamlService:
         saml_core=get_saml_core(),
         token_service=get_token_service(),
         session_service=get_session_service(),
+        redis_client=get_redis_client(),
     )

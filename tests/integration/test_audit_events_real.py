@@ -13,7 +13,7 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.saml import SamlAssertion, SamlProtocolError
+from app.core.saml import SamlAssertion, SamlLoginRequest, SamlProtocolError
 from app.core.sessions import get_redis_client, get_session_service
 from app.models.audit_event import AuditEvent
 from app.services.oauth_service import OAuthService, OAuthServiceError, get_oauth_service
@@ -97,14 +97,27 @@ class _SamlCoreStub:
 
     mode: str = "success"
 
-    def login_url(self, request_data: dict[str, str], relay_state: str | None) -> str:
-        del request_data, relay_state
+    def login_url(
+        self,
+        request_data: dict[str, str],
+        relay_state: str | None,
+    ) -> SamlLoginRequest:
+        del request_data
         if self.mode == "login_error":
             raise SamlProtocolError("SAML request invalid.", "saml_invalid_request", 400)
-        return "https://idp.example.com/sso"
+        return SamlLoginRequest(
+            redirect_url=f"https://idp.example.com/sso?RelayState={relay_state}",
+            request_id="request-1",
+        )
 
-    def parse_assertion(self, request_data: dict[str, str]) -> SamlAssertion:
+    def parse_assertion(
+        self,
+        request_data: dict[str, str],
+        *,
+        expected_request_id: str,
+    ) -> SamlAssertion:
         del request_data
+        assert expected_request_id == "request-1"
         if self.mode == "callback_error":
             raise SamlProtocolError("SAML assertion invalid.", "saml_assertion_invalid", 401)
         return SamlAssertion(provider_user_id="saml-user-1", email="saml-user@example.com")
@@ -119,6 +132,7 @@ def _build_saml_service(mode: str) -> SamlService:
         saml_core=_SamlCoreStub(mode=mode),
         token_service=get_token_service(),
         session_service=get_session_service(),
+        redis_client=get_redis_client(),
     )
 
 
@@ -131,6 +145,7 @@ async def test_auth_router_persists_success_and_failure_audit_events(
     """Password auth and API key flows store expected audit event types and outcomes."""
     app: FastAPI = app_factory()
     await user_factory("alice@example.com", "Password123!")
+    await user_factory("audit-admin@example.com", "Password123!", role="admin")
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -176,6 +191,13 @@ async def test_auth_router_persists_success_and_failure_audit_events(
         assert invalid_introspect.status_code == 200
         assert invalid_introspect.json()["valid"] is False
 
+        admin_login = await client.post(
+            "/auth/login",
+            json={"email": "audit-admin@example.com", "password": "Password123!"},
+        )
+        assert admin_login.status_code == 200
+        admin_headers = {"authorization": f"Bearer {admin_login.json()['access_token']}"}
+
         created_key = await client.post(
             "/auth/apikeys",
             json={
@@ -183,6 +205,7 @@ async def test_auth_router_persists_success_and_failure_audit_events(
                 "scope": "orders:read",
                 "expires_at": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
             },
+            headers=admin_headers,
         )
         assert created_key.status_code == 200
 
@@ -262,10 +285,11 @@ async def test_saml_routes_persist_expected_audit_events(app_factory, db_session
     ) as client:
         login = await client.get("/auth/saml/login")
         assert login.status_code == 302
+        relay_state = login.headers["location"].split("RelayState=", 1)[1]
 
         callback_success = await client.post(
             "/auth/saml/callback",
-            content="SAMLResponse=fake",
+            content=f"SAMLResponse=fake&RelayState={relay_state}",
             headers={"content-type": "application/x-www-form-urlencoded"},
         )
         assert callback_success.status_code == 200
@@ -275,9 +299,11 @@ async def test_saml_routes_persist_expected_audit_events(app_factory, db_session
         transport=ASGITransport(app=app),
         base_url="http://testserver",
     ) as client:
+        login = await client.get("/auth/saml/login")
+        relay_state = login.headers["location"].split("RelayState=", 1)[1]
         callback_failure = await client.post(
             "/auth/saml/callback",
-            content="SAMLResponse=fake",
+            content=f"SAMLResponse=fake&RelayState={relay_state}",
             headers={"content-type": "application/x-www-form-urlencoded"},
         )
         assert callback_failure.status_code == 401
@@ -300,35 +326,51 @@ async def test_saml_routes_persist_expected_audit_events(app_factory, db_session
 
 @pytest.mark.asyncio
 async def test_apikey_routes_persist_success_and_failure_audit_events(
-    app_factory, db_session
+    app_factory, db_session, user_factory
 ) -> None:
     """API key create/list/revoke paths persist expected created/used/revoked audit rows."""
     app: FastAPI = app_factory()
     missing_key_id = str(uuid4())
+    await user_factory("audit-keys-admin@example.com", "Password123!", role="admin")
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
         base_url="http://testserver",
     ) as client:
+        login_response = await client.post(
+            "/auth/login",
+            json={"email": "audit-keys-admin@example.com", "password": "Password123!"},
+        )
+        assert login_response.status_code == 200
+        headers = {"authorization": f"Bearer {login_response.json()['access_token']}"}
+
         create_failure = await client.post(
             "/auth/apikeys",
             json={"service": "orders", "scope": "   "},
+            headers=headers,
         )
         assert create_failure.status_code == 400
 
         created = await client.post(
             "/auth/apikeys",
             json={"service": "orders", "scope": "orders:read"},
+            headers=headers,
         )
         assert created.status_code == 200
 
-        listed = await client.get("/auth/apikeys")
+        listed = await client.get("/auth/apikeys", headers=headers)
         assert listed.status_code == 200
 
-        revoke_failure = await client.post(f"/auth/apikeys/{missing_key_id}/revoke")
+        revoke_failure = await client.post(
+            f"/auth/apikeys/{missing_key_id}/revoke",
+            headers=headers,
+        )
         assert revoke_failure.status_code == 404
 
-        revoke_success = await client.post(f"/auth/apikeys/{created.json()['key_id']}/revoke")
+        revoke_success = await client.post(
+            f"/auth/apikeys/{created.json()['key_id']}/revoke",
+            headers=headers,
+        )
         assert revoke_success.status_code == 200
 
     events = await _load_events(db_session)

@@ -14,6 +14,7 @@ from app.dependencies import get_database_session
 from app.routers.lifecycle import router
 from app.services.audit_service import get_audit_service
 from app.services.lifecycle_service import LifecycleServiceError, get_lifecycle_service
+from app.services.webhook_service import get_webhook_service
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,13 @@ class _AuditServiceStub:
         self.events.append({key: value for key, value in kwargs.items() if key != "db"})
 
 
+class _WebhookServiceStub:
+    """Webhook service stub swallowing emitted events."""
+
+    async def emit_event(self, *, event_type: str, data: dict[str, Any]) -> None:
+        del event_type, data
+
+
 async def _fake_db_dependency() -> Any:
     """Provide fake DB dependency object."""
     yield object()
@@ -89,6 +97,7 @@ async def test_verify_email_failure_emits_failure_audit_event() -> None:
         )
     )
     app.dependency_overrides[get_audit_service] = lambda: audit_stub
+    app.dependency_overrides[get_webhook_service] = _WebhookServiceStub
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"
@@ -118,6 +127,7 @@ async def test_resend_verification_success_and_failure_emit_audit_events() -> No
     app.dependency_overrides[get_database_session] = _fake_db_dependency
     app.dependency_overrides[get_lifecycle_service] = lambda: lifecycle_stub
     app.dependency_overrides[get_audit_service] = lambda: audit_stub
+    app.dependency_overrides[get_webhook_service] = _WebhookServiceStub
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"

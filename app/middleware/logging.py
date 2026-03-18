@@ -10,6 +10,8 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
+from app.core.client_ip import extract_client_ip
+
 SENSITIVE_KEYS = {
     "access_token",
     "api_key",
@@ -52,15 +54,6 @@ def _redact_mapping(values: dict[str, Any]) -> dict[str, Any]:
     return redacted
 
 
-def _extract_client_ip(request: Request) -> str:
-    """Extract client address using X-Forwarded-For when present."""
-    forwarded_for = request.headers.get("x-forwarded-for", "").strip()
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    client = request.client
-    return client.host if client else "unknown"
-
-
 class LoggingMiddleware(BaseHTTPMiddleware):
     """Emit one structured log per request with redacted metadata."""
 
@@ -68,7 +61,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         """Log completion metadata for each request."""
         start = perf_counter()
         query_params = _redact_mapping({key: value for key, value in request.query_params.items()})
-        client_ip = _extract_client_ip(request)
+        client_ip = extract_client_ip(request) or "unknown"
 
         try:
             response = await call_next(request)

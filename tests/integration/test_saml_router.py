@@ -33,8 +33,9 @@ class _SamlServiceStub:
         self.callback_result = callback_result
         self.metadata = metadata
 
-    def create_login_url(self, request_data: dict[str, str], relay_state: str | None) -> str:
+    async def create_login_url(self, request_data: dict[str, str], relay_state: str | None) -> str:
         """Return deterministic redirect URL."""
+        del request_data, relay_state
         return "https://idp.example.com/sso"
 
     async def complete_callback(

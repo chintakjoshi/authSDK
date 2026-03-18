@@ -8,7 +8,7 @@ from functools import lru_cache
 from typing import Any, Literal
 
 import structlog
-from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr, field_validator
+from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _LOG_CONTEXT: dict[str, str] = {"environment": "development", "service": "auth-service"}
@@ -22,6 +22,14 @@ class AppSettings(BaseModel):
     host: str = "0.0.0.0"
     port: int = 8000
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    trusted_proxy_cidrs: list[str] = Field(default_factory=list)
+    allowed_hosts: list[str] = Field(default_factory=list)
+
+    @field_validator("trusted_proxy_cidrs", "allowed_hosts")
+    @classmethod
+    def normalize_string_lists(cls, value: list[str]) -> list[str]:
+        """Drop blank entries and normalize whitespace in list settings."""
+        return [item.strip() for item in value if item and item.strip()]
 
 
 class DatabaseSettings(BaseModel):
@@ -151,6 +159,33 @@ class Settings(BaseSettings):
     webhook: WebhookSettings = WebhookSettings()
     retention: RetentionSettings = RetentionSettings()
     admin_api_key: SecretStr | None = None
+
+    @model_validator(mode="after")
+    def validate_production_constraints(self) -> Settings:
+        """Reject unsafe production deployments at process startup."""
+        if self.app.environment != "production":
+            return self
+
+        if self.admin_api_key is not None:
+            raise ValueError("admin_api_key cannot be configured in production.")
+        if not self.app.allowed_hosts:
+            raise ValueError("app.allowed_hosts must be configured in production.")
+        if any(host == "*" for host in self.app.allowed_hosts):
+            raise ValueError("app.allowed_hosts cannot include '*' in production.")
+        if self.signing_keys.encryption_key is None:
+            raise ValueError("signing_keys.encryption_key is required in production.")
+        if self.webhook.secret_encryption_key is None:
+            raise ValueError("webhook.secret_encryption_key is required in production.")
+        if self.oauth.google_redirect_uri.scheme != "https":
+            raise ValueError("oauth.google_redirect_uri must use https in production.")
+        if any(url.scheme != "https" for url in self.oauth.redirect_uri_allowlist):
+            raise ValueError("oauth.redirect_uri_allowlist entries must use https in production.")
+        if self.saml.sp_acs_url.scheme != "https":
+            raise ValueError("saml.sp_acs_url must use https in production.")
+        if self.saml.idp_sso_url.scheme != "https":
+            raise ValueError("saml.idp_sso_url must use https in production.")
+
+        return self
 
 
 def _standard_log_fields(_: Any, __: str, event_dict: dict[str, Any]) -> dict[str, Any]:

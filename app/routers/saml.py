@@ -50,7 +50,7 @@ async def saml_login(
     """Initiate SAML authentication request."""
     request_data = build_saml_request_data(request=request, get_data=_query_to_dict(request))
     try:
-        redirect_url = saml_service.create_login_url(
+        redirect_url = await saml_service.create_login_url(
             request_data=request_data, relay_state=relay_state
         )
     except SamlServiceError as exc:

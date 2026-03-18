@@ -7,6 +7,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import select
+
+from app.db.session import get_session_factory
+from app.models.user import User
 
 
 @pytest.mark.asyncio
@@ -18,6 +22,25 @@ async def test_apikey_create_list_revoke_and_introspect_flow(app_factory) -> Non
         transport=ASGITransport(app=app),
         base_url="http://testserver",
     ) as client:
+        admin_signup = await client.post(
+            "/auth/signup",
+            json={"email": "keys-admin@example.com", "password": "Password123!"},
+        )
+        assert admin_signup.status_code == 201
+        async with get_session_factory()() as session:
+            user = (
+                await session.execute(select(User).where(User.email == "keys-admin@example.com"))
+            ).scalar_one()
+            user.role = "admin"
+            await session.commit()
+
+        login_response = await client.post(
+            "/auth/login",
+            json={"email": "keys-admin@example.com", "password": "Password123!"},
+        )
+        assert login_response.status_code == 200
+        headers = {"authorization": f"Bearer {login_response.json()['access_token']}"}
+
         create_response = await client.post(
             "/auth/apikeys",
             json={
@@ -25,6 +48,7 @@ async def test_apikey_create_list_revoke_and_introspect_flow(app_factory) -> Non
                 "scope": "orders:read",
                 "expires_at": (datetime.now(UTC) + timedelta(days=2)).isoformat(),
             },
+            headers=headers,
         )
         assert create_response.status_code == 200
         created = create_response.json()
@@ -33,7 +57,7 @@ async def test_apikey_create_list_revoke_and_introspect_flow(app_factory) -> Non
         assert created["name"] == "Orders Primary Key"
         assert created["service"] == "orders"
 
-        list_response = await client.get("/auth/apikeys")
+        list_response = await client.get("/auth/apikeys", headers=headers)
         assert list_response.status_code == 200
         listed = list_response.json()
         assert len(listed) == 1
@@ -49,7 +73,10 @@ async def test_apikey_create_list_revoke_and_introspect_flow(app_factory) -> Non
         assert valid_introspect.json()["valid"] is True
         assert valid_introspect.json()["scopes"] == ["orders:read"]
 
-        revoke_response = await client.post(f"/auth/apikeys/{created['key_id']}/revoke")
+        revoke_response = await client.post(
+            f"/auth/apikeys/{created['key_id']}/revoke",
+            headers=headers,
+        )
         assert revoke_response.status_code == 200
         assert revoke_response.json()["code"] == "revoked_api_key"
 
@@ -85,6 +112,24 @@ async def test_auth_introspect_returns_expired_for_expired_key(app_factory) -> N
         transport=ASGITransport(app=app),
         base_url="http://testserver",
     ) as client:
+        admin_signup = await client.post(
+            "/auth/signup",
+            json={"email": "billing-admin@example.com", "password": "Password123!"},
+        )
+        assert admin_signup.status_code == 201
+        async with get_session_factory()() as session:
+            user = (
+                await session.execute(select(User).where(User.email == "billing-admin@example.com"))
+            ).scalar_one()
+            user.role = "admin"
+            await session.commit()
+
+        login_response = await client.post(
+            "/auth/login",
+            json={"email": "billing-admin@example.com", "password": "Password123!"},
+        )
+        headers = {"authorization": f"Bearer {login_response.json()['access_token']}"}
+
         create_response = await client.post(
             "/auth/apikeys",
             json={
@@ -92,6 +137,7 @@ async def test_auth_introspect_returns_expired_for_expired_key(app_factory) -> N
                 "scope": "billing:write",
                 "expires_at": (datetime.now(UTC) - timedelta(seconds=1)).isoformat(),
             },
+            headers=headers,
         )
         created = create_response.json()
         response = await client.post("/auth/introspect", json={"api_key": created["api_key"]})

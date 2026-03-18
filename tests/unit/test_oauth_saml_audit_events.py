@@ -47,7 +47,7 @@ class _OAuthServiceStub:
 class _SamlServiceStub:
     """SAML service stub for router audit tests."""
 
-    def create_login_url(self, request_data: dict[str, str], relay_state: str | None) -> str:
+    async def create_login_url(self, request_data: dict[str, str], relay_state: str | None) -> str:
         """Return deterministic IdP redirect URL."""
         del request_data, relay_state
         return "https://idp.example.com/sso"

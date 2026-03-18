@@ -8,9 +8,11 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from app.routers import health as health_router
 from app.routers import webhooks as webhooks_router
+from app.services.admin_service import AdminServiceError
 from app.services.webhook_service import WebhookServiceError
 
 
@@ -46,7 +48,7 @@ class _WebhookRouteStub:
             SimpleNamespace(
                 id=uuid4(),
                 name="orders",
-                url="https://hooks.example.com/orders",
+                url="https://example.com/orders",
                 events=["user.created"],
                 is_active=True,
                 created_at=datetime.now(UTC),
@@ -75,8 +77,31 @@ class _WebhookRouteStub:
         return SimpleNamespace(id=kwargs["delivery_id"])
 
 
+class _AdminServiceStub:
+    async def validate_admin_access_token(
+        self, *, db_session: object, token: str | None
+    ) -> dict[str, object]:
+        del db_session, token
+        return {"sub": "admin-1", "role": "admin", "email": "admin@example.com"}
+
+
 def _db() -> object:
     return object()
+
+
+def _request() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/webhooks",
+            "headers": [(b"authorization", b"Bearer token")],
+            "query_string": b"",
+            "server": ("testserver", 80),
+            "client": ("127.0.0.1", 12345),
+            "scheme": "http",
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -120,23 +145,32 @@ async def test_health_helpers_cover_success_and_failure_paths(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_webhook_routes_cover_success_and_error_wrappers() -> None:
+async def test_webhook_routes_cover_success_and_error_wrappers(monkeypatch) -> None:
     """Webhook router wrappers cover register, list, delivery listing, and retry errors."""
+    monkeypatch.setattr(
+        "app.routers._admin_access.get_settings",
+        lambda: SimpleNamespace(app=SimpleNamespace(environment="production"), admin_api_key=None),
+    )
     webhook_service = _WebhookRouteStub()
+    admin_service = _AdminServiceStub()
     created = await webhooks_router.register_webhook(
+        request=_request(),
         payload=webhooks_router.WebhookEndpointCreateRequest(
             name="orders",
-            url="https://hooks.example.com/orders",
+            url="https://example.com/orders",
             secret="secret123",
             events=["user.created"],
         ),
         db_session=_db(),  # type: ignore[arg-type]
+        admin_service=admin_service,  # type: ignore[arg-type]
         webhook_service=webhook_service,  # type: ignore[arg-type]
     )
     assert created.name == "orders"
 
     listed = await webhooks_router.list_webhooks(
+        request=_request(),
         db_session=_db(),  # type: ignore[arg-type]
+        admin_service=admin_service,  # type: ignore[arg-type]
         webhook_service=webhook_service,  # type: ignore[arg-type]
     )
     assert listed[0].name == "orders"
@@ -144,14 +178,18 @@ async def test_webhook_routes_cover_success_and_error_wrappers() -> None:
     endpoint_id = uuid4()
     deliveries = await webhooks_router.list_webhook_deliveries(
         endpoint_id=endpoint_id,
+        request=_request(),
         db_session=_db(),  # type: ignore[arg-type]
+        admin_service=admin_service,  # type: ignore[arg-type]
         webhook_service=webhook_service,  # type: ignore[arg-type]
     )
     assert deliveries[0].endpoint_id == endpoint_id
 
     retried = await webhooks_router.retry_webhook_delivery(
         delivery_id=endpoint_id,
+        request=_request(),
         db_session=_db(),  # type: ignore[arg-type]
+        admin_service=admin_service,  # type: ignore[arg-type]
         webhook_service=webhook_service,  # type: ignore[arg-type]
     )
     assert retried.delivery_id == endpoint_id
@@ -159,7 +197,27 @@ async def test_webhook_routes_cover_success_and_error_wrappers() -> None:
     webhook_service.error = WebhookServiceError("missing", "invalid_credentials", 404)
     failed = await webhooks_router.retry_webhook_delivery(
         delivery_id=endpoint_id,
+        request=_request(),
         db_session=_db(),  # type: ignore[arg-type]
+        admin_service=admin_service,  # type: ignore[arg-type]
         webhook_service=webhook_service,  # type: ignore[arg-type]
     )
     assert failed.status_code == 404
+
+    class _RejectingAdminService:
+        async def validate_admin_access_token(
+            self,
+            *,
+            db_session: object,
+            token: str | None,
+        ) -> dict[str, object]:
+            del db_session, token
+            raise AdminServiceError("Insufficient role.", "insufficient_role", 403)
+
+    denied = await webhooks_router.list_webhooks(
+        request=_request(),
+        db_session=_db(),  # type: ignore[arg-type]
+        admin_service=_RejectingAdminService(),  # type: ignore[arg-type]
+        webhook_service=webhook_service,  # type: ignore[arg-type]
+    )
+    assert denied.status_code == 403
