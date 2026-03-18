@@ -3,6 +3,11 @@
 This document is the step-by-step runbook to start the full auth service stack
 locally with Docker.
 
+Related docs:
+- onboarding hub: `docs/README.md`
+- SDK integration quickstart: `docs/integrate-sdk.md`
+- troubleshooting: `docs/troubleshooting.md`
+
 ## 1. Prerequisites
 
 - Docker Desktop running
