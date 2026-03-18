@@ -1,4 +1,4 @@
-# authSDK [![CI](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml)
+# authSDK [![Tests](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml) [![Docker Build](https://https://github.com/chintakjoshi/authSDK/actions/workflows/release.yml/badge.svg?branch=main)](https://github.com/chintakjoshi/authSDK/actions/workflows/release.yml)
 
 Authentication platform repository containing:
 - a central auth service you can deploy once for your organization
