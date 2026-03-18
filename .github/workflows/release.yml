@@ -1,19 +1,33 @@
-name: Release Image
+name: Publish Container
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
   workflow_dispatch:
     inputs:
-      image_tag:
-        description: "Optional manual image tag override"
+      image_name:
+        description: "Optional image name override"
         required: false
         type: string
+      publish_latest:
+        description: "Also publish the latest tag"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ghcr-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
   packages: write
+
+env:
+  REGISTRY: ghcr.io
 
 jobs:
   publish:
@@ -34,6 +48,22 @@ jobs:
             echo "ready=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Derive image reference
+        if: steps.dockerfile.outputs.ready == 'true'
+        id: image
+        shell: bash
+        run: |
+          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          IMAGE_NAME="${{ github.event.inputs.image_name }}"
+
+          if [ -z "$IMAGE_NAME" ]; then
+            IMAGE_NAME="auth-service"
+          fi
+
+          IMAGE_NAME="$(echo "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')"
+
+          echo "value=${{ env.REGISTRY }}/${OWNER}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+
       - name: Set up QEMU
         if: steps.dockerfile.outputs.ready == 'true'
         uses: docker/setup-qemu-action@v4
@@ -46,23 +76,24 @@ jobs:
         if: steps.dockerfile.outputs.ready == 'true'
         uses: docker/login-action@v4
         with:
-          registry: ghcr.io
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Derive image tag
+      - name: Extract Docker metadata
         if: steps.dockerfile.outputs.ready == 'true'
-        id: tag
-        shell: bash
-        run: |
-          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
-            TAG="${{ github.event.inputs.image_tag }}"
-          elif [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-          else
-            TAG="sha-${GITHUB_SHA::12}"
-          fi
-          echo "value=$TAG" >> "$GITHUB_OUTPUT"
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.image.outputs.value }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish_latest == 'true' }}
 
       - name: Build and push image
         if: steps.dockerfile.outputs.ready == 'true'
@@ -71,6 +102,7 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/auth-service:${{ steps.tag.outputs.value }}
-            ghcr.io/${{ github.repository_owner }}/auth-service:sha-${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

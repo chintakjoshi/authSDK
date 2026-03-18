@@ -220,14 +220,31 @@ Those endpoints are implemented by this repo's auth service.
   - Boots Postgres and Redis service containers.
   - Generates ephemeral RSA keys at runtime for `JWT__PRIVATE_KEY_PEM` and `JWT__PUBLIC_KEY_PEM`.
 
-- `Release Image` (`.github/workflows/release.yml`)
-  - Runs on tags (`v*`) and manual dispatch.
-  - Builds and pushes container image to GHCR:
-    - `ghcr.io/<owner>/auth-service:<tag>`
-    - `ghcr.io/<owner>/auth-service:sha-<commit-sha>`
+- `Publish Container` (`.github/workflows/release.yml`)
+  - Runs on pushes to `main`, tags (`v*`), and manual dispatch.
+  - Builds and pushes the auth-service container image to GHCR.
+  - Publishes branch, tag, and commit-sha tags automatically.
+  - Publishes `latest` from the default branch, or during manual dispatch when explicitly requested.
+  - Uses GitHub Actions cache for faster rebuilds.
   - If `docker/Dockerfile` is still empty, it exits with a warning and skips image publishing.
 
 ### Optional Release Input
 
-- `image_tag` in `Release Image` workflow dispatch
-  - Overrides default tag derivation when manually triggering release.
+- `image_name` in `Publish Container` workflow dispatch
+  - Overrides the default GHCR image name (`auth-service`).
+- `publish_latest` in `Publish Container` workflow dispatch
+  - Forces publication of the `latest` tag during manual runs.
+
+### Pulling From GHCR
+
+Once the workflow has published an image, you can pull it with:
+
+```bash
+docker pull ghcr.io/<owner>/auth-service:main
+```
+
+For release tags:
+
+```bash
+docker pull ghcr.io/<owner>/auth-service:v1.0.0
+```
