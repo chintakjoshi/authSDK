@@ -13,7 +13,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    """Add password reset token fields for lifecycle Step 6."""
+    """Add password reset token fields."""
     op.add_column(
         "users",
         sa.Column("password_reset_token_hash", sa.String(length=64), nullable=True),

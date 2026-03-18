@@ -145,4 +145,4 @@ async def test_fetch_active_bootstrap_revival_and_decrypt_edge_cases() -> None:
 
     assert service._decrypt_private_key("plaintext-private-key") == "plaintext-private-key"
     with pytest.raises(ValueError, match="Unable to decrypt"):
-        service._decrypt_private_key("v1:not-a-real-fernet-token")
+        service._decrypt_private_key("enc1:not-a-real-fernet-token")

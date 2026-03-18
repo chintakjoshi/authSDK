@@ -1,4 +1,4 @@
-"""Additional OTP-service edge tests for step 13 coverage."""
+"""Additional OTP-service edge tests for coverage."""
 
 from __future__ import annotations
 

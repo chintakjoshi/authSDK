@@ -6,7 +6,7 @@ locally with Docker.
 ## 1. Prerequisites
 
 - Docker Desktop running
-- Docker Compose v2 (`docker compose version`)
+- Docker Compose plugin (`docker compose version`)
 - Port `8000` (service), `5432` (Postgres), and `6379` (Redis) available
 
 ## 2. Create `.env` from sample

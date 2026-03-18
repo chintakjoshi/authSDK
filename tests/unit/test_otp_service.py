@@ -148,8 +148,8 @@ async def test_validate_access_token_rejects_revoked_session_binding() -> None:
 
 
 @pytest.mark.asyncio
-async def test_clear_user_otp_state_deletes_all_step12_keys() -> None:
-    """Step-12 cleanup removes all OTP Redis state for one user."""
+async def test_clear_user_otp_state_deletes_all_otp_keys() -> None:
+    """Cleanup removes all OTP Redis state for one user."""
     redis_client = _RedisStub()
     service = _build_service(redis_client)
 

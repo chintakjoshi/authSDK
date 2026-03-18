@@ -31,7 +31,7 @@ class _OAuthServiceStub:
     async def build_google_login_url(self, redirect_uri: str | None) -> str:
         """Return deterministic authorization URL."""
         del redirect_uri
-        return "https://accounts.google.com/o/oauth2/v2/auth?state=test-state"
+        return "https://accounts.google.com/o/oauth2/auth?state=test-state"
 
     async def complete_google_callback(
         self,

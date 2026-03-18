@@ -1,4 +1,4 @@
-"""Integration tests for Step 5 email OTP login and action flows."""
+"""Integration tests for email OTP login and action flows."""
 
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ async def _set_user_flags(
     email_verified: bool,
     email_otp_enabled: bool,
 ) -> User:
-    """Update one user's Step 5 verification flags."""
+    """Update one user's OTP-related verification flags."""
     user = (await db_session.execute(select(User).where(User.id == user_id))).scalar_one()
     user.email_verified = email_verified
     user.email_otp_enabled = email_otp_enabled

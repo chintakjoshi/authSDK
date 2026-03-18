@@ -1,4 +1,4 @@
-"""Integration tests for Step 12 GDPR erasure flows."""
+"""Integration tests for GDPR erasure flows."""
 
 from __future__ import annotations
 

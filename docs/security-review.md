@@ -1,7 +1,7 @@
-# Step 14 Security Review Checklist
+# Security Review Checklist
 
 Date: 2026-03-17  
-Scope: v2 additions across `app/`, `sdk/`, `loadtests/`, and `tests/`
+Scope: auth-service additions across `app/`, `sdk/`, `loadtests/`, and `tests/`
 
 ## Result
 

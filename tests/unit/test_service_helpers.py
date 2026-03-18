@@ -1,4 +1,4 @@
-"""Additional helper-focused service tests for step 13 coverage gaps."""
+"""Additional helper-focused service tests for coverage gaps."""
 
 from __future__ import annotations
 

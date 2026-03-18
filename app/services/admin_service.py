@@ -85,7 +85,7 @@ class DeletedUserResult:
 
 @dataclass(frozen=True)
 class RetentionPurgeResult:
-    """Callable step-12 retention-purge scaffolding result."""
+    """Callable retention-purge scaffolding result."""
 
     enabled: bool
     audit_log_retention_days: int
@@ -179,7 +179,7 @@ class AdminService:
         action: str,
         action_token: str | None,
     ) -> None:
-        """Apply the step-8 dual-gate policy for sensitive admin operations."""
+        """Apply the dual-gate policy for sensitive admin operations."""
         user_id = str(claims.get("sub", "")).strip()
         if not user_id:
             raise AdminServiceError("Invalid token.", "invalid_token", 401)

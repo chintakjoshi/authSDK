@@ -1,4 +1,4 @@
-"""Integration tests for Step 7 brute-force protection and lockout flows."""
+"""Integration tests for brute-force protection and lockout flows."""
 
 from __future__ import annotations
 

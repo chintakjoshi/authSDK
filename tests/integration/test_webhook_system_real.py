@@ -1,4 +1,4 @@
-"""Integration tests for Step 10 webhook registration and delivery flow."""
+"""Integration tests for webhook registration and delivery flow."""
 
 from __future__ import annotations
 

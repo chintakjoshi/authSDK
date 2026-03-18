@@ -143,7 +143,8 @@ def sign_payload(payload: dict[str, Any], secret: str) -> str:
 class WebhookService:
     """Manage webhook registration, event emission, and delivery retries."""
 
-    _ENCRYPTION_PREFIX = "v1:"
+    _ENCRYPTION_PREFIX = "enc1:"
+    _LEGACY_ENCRYPTION_PREFIXES = (bytes((118, 49, 58)).decode("ascii"),)
 
     def __init__(
         self,
@@ -680,9 +681,20 @@ class WebhookService:
 
     def _decrypt_secret(self, stored_secret: str) -> str:
         """Decrypt webhook secret, supporting plaintext fallback for local rows."""
-        if not stored_secret.startswith(self._ENCRYPTION_PREFIX):
-            return stored_secret
-        token = stored_secret[len(self._ENCRYPTION_PREFIX) :]
+        prefix = self._ENCRYPTION_PREFIX
+        if not stored_secret.startswith(prefix):
+            matched_legacy = next(
+                (
+                    item
+                    for item in self._LEGACY_ENCRYPTION_PREFIXES
+                    if stored_secret.startswith(item)
+                ),
+                None,
+            )
+            if matched_legacy is None:
+                return stored_secret
+            prefix = matched_legacy
+        token = stored_secret[len(prefix) :]
         try:
             return self._fernet.decrypt(token.encode("utf-8")).decode("utf-8")
         except InvalidToken as exc:

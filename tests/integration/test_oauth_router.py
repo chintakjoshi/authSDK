@@ -27,7 +27,7 @@ class _OAuthServiceStub:
 
     def __init__(
         self,
-        login_url: str = "https://accounts.google.com/o/oauth2/v2/auth?state=test-state",
+        login_url: str = "https://accounts.google.com/o/oauth2/auth?state=test-state",
         callback_result: _TokenPairStub | OAuthServiceError | None = None,
     ) -> None:
         self.login_url = login_url
@@ -69,7 +69,7 @@ async def test_google_login_redirects_to_google_url() -> None:
         response = await client.get("/auth/oauth/google/login")
 
     assert response.status_code == 302
-    assert response.headers["location"].startswith("https://accounts.google.com/o/oauth2/v2/auth")
+    assert response.headers["location"].startswith("https://accounts.google.com/o/oauth2/auth")
 
 
 @pytest.mark.asyncio

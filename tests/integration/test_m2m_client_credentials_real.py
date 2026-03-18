@@ -1,4 +1,4 @@
-"""Real integration tests for Step 9 M2M client-credentials flow."""
+"""Real integration tests for M2M client-credentials flow."""
 
 from __future__ import annotations
 

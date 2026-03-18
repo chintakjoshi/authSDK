@@ -1,4 +1,4 @@
-"""Router-level tests for Step 9 /auth/token client-credentials handling."""
+"""Router-level tests for /auth/token client-credentials handling."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Seed reusable Step 14 load-test fixtures for OTP, admin, M2M, and webhooks."""
+"""Seed reusable load-test fixtures for OTP, admin, M2M, and webhooks."""
 
 from __future__ import annotations
 
@@ -154,7 +154,7 @@ async def _register_or_reuse_webhook(
 
 
 async def seed_fixtures(args: argparse.Namespace) -> SeedSummary:
-    """Create or update all requested step-14 load-test fixtures."""
+    """Create or update all requested load-test fixtures."""
     session_factory = _session_factory(args.database_url)
     async with session_factory() as db_session:
         await _upsert_user(
@@ -228,12 +228,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--otp-email-template", default="otp-load-{index}@example.com")
     parser.add_argument("--otp-password", default="Password123!")
     parser.add_argument("--otp-user-count", type=int, default=100)
-    parser.add_argument("--m2m-name", default="locust-step14-client")
+    parser.add_argument("--m2m-name", default="locust-load-client")
     parser.add_argument("--m2m-scopes", nargs="+", default=["metrics:read"])
     parser.add_argument("--m2m-token-ttl-seconds", type=int, default=3600)
     parser.add_argument("--webhook-url")
-    parser.add_argument("--webhook-name", default="locust-step14-webhook")
-    parser.add_argument("--webhook-secret", default="step14-webhook-secret")
+    parser.add_argument("--webhook-name", default="locust-load-webhook")
+    parser.add_argument("--webhook-secret", default="load-webhook-secret")
     parser.add_argument("--webhook-events", nargs="+", default=["session.created"])
     return parser.parse_args()
 

@@ -1,4 +1,4 @@
-"""Unit tests for step-12 admin-service scaffolding helpers."""
+"""Unit tests for admin-service scaffolding helpers."""
 
 from __future__ import annotations
 

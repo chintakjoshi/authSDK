@@ -13,7 +13,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    """Add email_otp_enabled column for Step 5 OTP enrollment."""
+    """Add email_otp_enabled column for OTP enrollment."""
     op.add_column(
         "users",
         sa.Column("email_otp_enabled", sa.Boolean(), nullable=False, server_default=sa.false()),

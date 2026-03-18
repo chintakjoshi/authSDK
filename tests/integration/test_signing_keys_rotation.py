@@ -1,4 +1,4 @@
-"""Integration tests for v2 signing key rotation behavior."""
+"""Integration tests for signing key rotation behavior."""
 
 from __future__ import annotations
 
