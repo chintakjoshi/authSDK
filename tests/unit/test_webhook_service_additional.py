@@ -126,7 +126,7 @@ async def test_httpx_sender_success_and_http_error(monkeypatch) -> None:
             return _Response()
 
     monkeypatch.setattr("app.services.webhook_service.httpx.AsyncClient", lambda timeout: _Client())
-    result = await sender.send(url="https://hooks.example.com", payload={"event": "x"}, secret="s")
+    result = await sender.send(url="https://example.com", payload={"event": "x"}, secret="s")
     assert result == WebhookSendResult(status_code=202, body="acce", delivered=True)
 
     class _BadClient(_Client):
@@ -136,7 +136,7 @@ async def test_httpx_sender_success_and_http_error(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.services.webhook_service.httpx.AsyncClient", lambda timeout: _BadClient()
     )
-    result = await sender.send(url="https://hooks.example.com", payload={"event": "x"}, secret="s")
+    result = await sender.send(url="https://example.com", payload={"event": "x"}, secret="s")
     assert result.delivered is False
     assert result.status_code is None
 
@@ -156,7 +156,7 @@ async def test_register_get_update_delete_and_retry_endpoint_flows() -> None:
         await service.register_endpoint(
             db_session=db_session,  # type: ignore[arg-type]
             name=" ",
-            url="https://hooks.example.com",
+            url="https://example.com",
             secret="secret",
             events=[],
         )
@@ -164,7 +164,7 @@ async def test_register_get_update_delete_and_retry_endpoint_flows() -> None:
     endpoint = await service.register_endpoint(
         db_session=db_session,  # type: ignore[arg-type]
         name="Orders Hook",
-        url="https://hooks.example.com",
+        url="https://example.com",
         secret="top-secret",
         events=["session.created", "session.created"],
     )
@@ -173,7 +173,7 @@ async def test_register_get_update_delete_and_retry_endpoint_flows() -> None:
     assert db_session.commit_count == 1
 
     row = WebhookEndpoint(
-        name="Hook", url="https://hooks.example.com", secret="secret", events=[], is_active=True
+        name="Hook", url="https://example.com", secret="secret", events=[], is_active=True
     )
     row.id = uuid4()
     row.created_at = datetime.now(UTC)
@@ -198,7 +198,7 @@ async def test_register_get_update_delete_and_retry_endpoint_flows() -> None:
         db_session=_DBSessionStub(),  # type: ignore[arg-type]
         endpoint_id=row.id,
         name="Updated Hook",
-        url="https://hooks.example.com/next",
+        url="https://example.com/next",
         events=["user.created"],
         is_active=False,
     )
@@ -248,7 +248,7 @@ async def test_register_get_update_delete_and_retry_endpoint_flows() -> None:
 async def test_safe_url_and_secret_helpers_cover_edge_cases(monkeypatch) -> None:
     """Webhook SSRF and secret helpers reject unsafe hosts and bad ciphertext."""
     service = _service()
-    assert await service._is_safe_webhook_url("ftp://hooks.example.com") is False
+    assert await service._is_safe_webhook_url("ftp://example.com") is False
     assert await service._is_safe_webhook_url("https://localhost/path") is False
     assert await service._is_safe_webhook_url("https:///missing-host") is False
 
@@ -257,7 +257,7 @@ async def test_safe_url_and_secret_helpers_cover_edge_cases(monkeypatch) -> None
         return []
 
     service._resolve_host_ips = _resolved  # type: ignore[assignment]
-    assert await service._is_safe_webhook_url("https://hooks.example.com") is True
+    assert await service._is_safe_webhook_url("https://example.com") is False
 
     encrypted = service._encrypt_secret("secret-value")
     assert service._decrypt_secret(encrypted) == "secret-value"

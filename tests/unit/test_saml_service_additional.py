@@ -6,9 +6,9 @@ from dataclasses import dataclass
 
 import pytest
 
-from app.core.saml import SamlAssertion, SamlProtocolError
+from app.core.saml import SamlAssertion, SamlLoginRequest, SamlProtocolError
 from app.models.user import UserIdentity
-from app.services.saml_service import SamlService, SamlServiceError
+from app.services.saml_service import SamlService, SamlServiceError, SamlStateRecord
 from app.services.token_service import TokenPair
 
 
@@ -25,14 +25,27 @@ class _SamlCoreStub:
         self.parse_error: SamlProtocolError | None = None
         self.metadata_error: SamlProtocolError | None = None
 
-    def login_url(self, request_data: dict[str, str], relay_state: str | None) -> str:
+    def login_url(
+        self,
+        request_data: dict[str, str],
+        relay_state: str | None,
+    ) -> SamlLoginRequest:
         del request_data, relay_state
         if self.login_error is not None:
             raise self.login_error
-        return "https://idp.example.com/login"
+        return SamlLoginRequest(
+            redirect_url="https://idp.example.com/login",
+            request_id="request-1",
+        )
 
-    def parse_assertion(self, request_data: dict[str, str]) -> SamlAssertion:
+    def parse_assertion(
+        self,
+        request_data: dict[str, str],
+        *,
+        expected_request_id: str,
+    ) -> SamlAssertion:
         del request_data
+        assert expected_request_id == "request-1"
         if self.parse_error is not None:
             raise self.parse_error
         return self.assertion
@@ -59,6 +72,26 @@ class _SessionServiceStub:
     async def create_login_session(self, **kwargs: object) -> str:
         self.calls.append(kwargs)
         return "session-id"
+
+
+class _RedisStub:
+    """Minimal async Redis stub for SAML request-state tests."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    async def setex(self, key: str, ttl_seconds: int, value: str) -> None:
+        del ttl_seconds
+        self.values[key] = value
+
+    async def getdel(self, key: str) -> str | None:
+        return self.values.pop(key, None)
+
+    async def get(self, key: str) -> str | None:
+        return self.values.get(key)
+
+    async def delete(self, key: str) -> None:
+        self.values.pop(key, None)
 
 
 @dataclass
@@ -109,17 +142,19 @@ def _service(
         saml_core=saml_core or _SamlCoreStub(),  # type: ignore[arg-type]
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]
         session_service=session_service or _SessionServiceStub(),  # type: ignore[arg-type]
+        redis_client=_RedisStub(),  # type: ignore[arg-type]
     )
 
 
-def test_create_login_url_and_metadata_map_protocol_failures() -> None:
+@pytest.mark.asyncio
+async def test_create_login_url_and_metadata_map_protocol_failures() -> None:
     """SAML service wraps core protocol failures in service errors."""
     saml_core = _SamlCoreStub()
     saml_core.login_error = SamlProtocolError("bad login", "saml_assertion_invalid", 400)
     service = _service(saml_core=saml_core)
 
     with pytest.raises(SamlServiceError) as exc_info:
-        service.create_login_url({}, None)
+        await service.create_login_url({}, None)
     assert exc_info.value.status_code == 400
 
     saml_core.login_error = None
@@ -139,13 +174,17 @@ async def test_complete_callback_maps_parse_failures_and_creates_session() -> No
     with pytest.raises(SamlServiceError) as exc_info:
         await service.complete_callback(
             db_session=object(),  # type: ignore[arg-type]
-            request_data={"SAMLResponse": "bad"},
+            request_data={"post_data": {"SAMLResponse": "bad", "RelayState": "missing"}},
         )
     assert exc_info.value.status_code == 401
 
     saml_core.parse_error = None
     session_service = _SessionServiceStub()
     service = _service(saml_core=saml_core, session_service=session_service)
+    await service._store_state(  # type: ignore[attr-defined]
+        state="relay-state",
+        record=SamlStateRecord(request_id="request-1"),
+    )
 
     async def _upsert(**kwargs: object) -> _UserStub:
         return _UserStub(
@@ -158,7 +197,7 @@ async def test_complete_callback_maps_parse_failures_and_creates_session() -> No
     service._upsert_identity_then_resolve_user = _upsert  # type: ignore[assignment]
     result = await service.complete_callback(
         db_session=object(),  # type: ignore[arg-type]
-        request_data={"SAMLResponse": "ok"},
+        request_data={"post_data": {"SAMLResponse": "ok", "RelayState": "relay-state"}},
     )
 
     assert result == TokenPair(access_token="access-token", refresh_token="refresh-token")
@@ -179,6 +218,7 @@ async def test_issue_token_pair_and_identity_upsert_cover_remaining_paths(monkey
         saml_core=_SamlCoreStub(),  # type: ignore[arg-type]
         token_service=_LegacyTokenService(),  # type: ignore[arg-type]
         session_service=_SessionServiceStub(),  # type: ignore[arg-type]
+        redis_client=_RedisStub(),  # type: ignore[arg-type]
     )
     monkeypatch.setattr("app.services.saml_service.inspect.signature", lambda _: None)
     issued = service._issue_token_pair(

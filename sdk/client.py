@@ -6,7 +6,11 @@ from typing import Any
 
 import httpx
 
-from sdk.exceptions import AuthServiceResponseError, AuthServiceUnavailableError
+from sdk.exceptions import (
+    AuthServiceResponseError,
+    AuthServiceUnavailableError,
+    JWTVerificationError,
+)
 from sdk.types import JWKS, APIKeyIntrospectionResponse
 
 DEFAULT_TIMEOUT = httpx.Timeout(connect=2.0, read=5.0, write=5.0, pool=5.0)
@@ -74,6 +78,28 @@ class AuthClient:
             response_payload["service"] = str(payload["service"])
         return response_payload
 
+    async def validate_access_token_session(self, raw_access_token: str) -> None:
+        """Confirm the access token is still backed by an active auth-service session."""
+        try:
+            response = await self._client.get(
+                "/auth/validate",
+                headers={"authorization": f"Bearer {raw_access_token}"},
+            )
+        except httpx.RequestError as exc:
+            raise AuthServiceUnavailableError("Auth service unavailable.") from exc
+
+        if response.status_code == 204:
+            return
+        if response.status_code >= 500:
+            raise AuthServiceUnavailableError("Auth service unavailable.")
+        if response.status_code in {401, 403}:
+            detail, code = self._error_payload(response)
+            raise JWTVerificationError(detail, code)
+        raise AuthServiceResponseError(
+            f"Auth service request failed with status {response.status_code}.",
+            response.status_code,
+        )
+
     async def aclose(self) -> None:
         """Close underlying HTTP client if owned by this instance."""
         if self._owns_client:
@@ -118,3 +144,11 @@ class AuthClient:
                 "Auth service returned invalid JSON object.", response.status_code
             )
         return payload
+
+    @classmethod
+    def _error_payload(cls, response: httpx.Response) -> tuple[str, str]:
+        """Extract standardized auth error detail/code from a response payload."""
+        payload = cls._json_object(response)
+        detail = str(payload.get("detail", "Invalid token."))
+        code = str(payload.get("code", "invalid_token"))
+        return detail, code

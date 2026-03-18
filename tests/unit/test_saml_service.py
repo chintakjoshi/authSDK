@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from app.core.saml import SamlAssertion
-from app.services.saml_service import SamlService
+from app.services.saml_service import SamlService, SamlStateRecord
 from app.services.token_service import TokenPair
 
 
@@ -27,14 +27,34 @@ class _UserStub:
 class _SamlCoreStub:
     """SAML core stub returning a verified assertion."""
 
-    def parse_assertion(self, request_data: dict[str, str]) -> SamlAssertion:
+    def parse_assertion(
+        self,
+        request_data: dict[str, str],
+        *,
+        expected_request_id: str,
+    ) -> SamlAssertion:
         """Return deterministic assertion payload."""
         del request_data
+        assert expected_request_id == "request-1"
         return SamlAssertion(
             provider_user_id="saml-user-1",
             email="saml-user@example.com",
             email_verified=True,
         )
+
+
+class _RedisStub:
+    """Minimal async Redis stub for SAML request-state tests."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
+    async def setex(self, key: str, ttl_seconds: int, value: str) -> None:
+        del ttl_seconds
+        self.values[key] = value
+
+    async def getdel(self, key: str) -> str | None:
+        return self.values.pop(key, None)
 
 
 class _TokenServiceStub:
@@ -92,6 +112,7 @@ async def test_complete_callback_propagates_saml_email_verified_state() -> None:
         saml_core=_SamlCoreStub(),  # type: ignore[arg-type]
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]
         session_service=_SessionServiceStub(),  # type: ignore[arg-type]
+        redis_client=_RedisStub(),  # type: ignore[arg-type]
     )
     captured: dict[str, object] = {}
 
@@ -116,9 +137,13 @@ async def test_complete_callback_propagates_saml_email_verified_state() -> None:
 
     service._upsert_identity_then_resolve_user = MethodType(_fake_upsert, service)  # type: ignore[assignment]
 
+    await service._store_state(  # type: ignore[attr-defined]
+        state="relay-state",
+        record=SamlStateRecord(request_id="request-1"),
+    )
     result = await service.complete_callback(
         db_session=object(),  # type: ignore[arg-type]
-        request_data={"SAMLResponse": "fake"},
+        request_data={"post_data": {"SAMLResponse": "fake", "RelayState": "relay-state"}},
     )
 
     assert result.access_token == "access-token"

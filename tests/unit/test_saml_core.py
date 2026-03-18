@@ -13,8 +13,9 @@ from app.core.saml import SamlCore, SamlProtocolError
 class _InvalidSignatureAuthStub:
     """Stub auth object that simulates signature validation failure."""
 
-    def process_response(self) -> None:
+    def process_response(self, request_id: str | None = None) -> None:
         """No-op response processing."""
+        del request_id
         return None
 
     def get_errors(self) -> list[str]:
@@ -37,8 +38,9 @@ class _InvalidSignatureAuthStub:
 class _MalformedAssertionAuthStub:
     """Stub auth object that simulates malformed assertion."""
 
-    def process_response(self) -> None:
+    def process_response(self, request_id: str | None = None) -> None:
         """Raise malformed assertion error."""
+        del request_id
         raise ValueError("Malformed SAML assertion")
 
     def get_errors(self) -> list[str]:
@@ -72,7 +74,7 @@ def test_parse_assertion_rejects_invalid_signature() -> None:
 
     core._build_auth = MethodType(_fake_build_auth, core)  # type: ignore[assignment]
     with pytest.raises(SamlProtocolError) as exc_info:
-        core.parse_assertion(request_data={})
+        core.parse_assertion(request_data={}, expected_request_id="request-1")
 
     assert exc_info.value.code == "saml_assertion_invalid"
     assert exc_info.value.status_code == 401
@@ -89,7 +91,7 @@ def test_parse_assertion_rejects_malformed_response() -> None:
 
     core._build_auth = MethodType(_fake_build_auth, core)  # type: ignore[assignment]
     with pytest.raises(SamlProtocolError) as exc_info:
-        core.parse_assertion(request_data={})
+        core.parse_assertion(request_data={}, expected_request_id="request-1")
 
     assert exc_info.value.code == "saml_assertion_invalid"
     assert exc_info.value.status_code == 401

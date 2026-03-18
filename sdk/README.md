@@ -31,6 +31,8 @@ app.add_middleware(
 
 Behavior:
 - JWT verification is local using cached JWKS.
+- User access tokens are then validated against auth-service session state via `/auth/validate`.
+- Logout, password reset, and admin session revocation now take effect in SDK-protected services immediately.
 - JWKS cache TTL is 5 minutes.
 - On verification failure, middleware forces one JWKS refresh and retries once.
 

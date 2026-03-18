@@ -240,7 +240,7 @@ async def test_self_service_erasure_revokes_sessions_cleans_otp_and_scrubs_pii(
     await webhook_service.register_endpoint(
         db_session=db_session,
         name="GDPR Hook",
-        url="https://hooks.example.com/gdpr",
+        url="https://example.com/gdpr",
         secret="super-secret-hook",
         events=["user.erased"],
     )

@@ -37,7 +37,11 @@ class _AuthStub:
             raise RuntimeError("login failed")
         return self.login_url_value
 
-    def process_response(self) -> None:
+    def get_last_request_id(self) -> str:
+        return "request-1"
+
+    def process_response(self, request_id: str | None = None) -> None:
+        assert request_id == "request-1"
         if self.raise_on_process:
             raise ValueError("bad assertion")
 
@@ -82,7 +86,9 @@ def test_login_url_success_and_failure() -> None:
         return _AuthStub([], True, "", {})
 
     core._build_auth = MethodType(_build_auth, core)  # type: ignore[assignment]
-    assert core.login_url({}, "relay-state") == "https://idp.example.com/login"
+    login_request = core.login_url({}, "relay-state")
+    assert login_request.redirect_url == "https://idp.example.com/login"
+    assert login_request.request_id == "request-1"
 
     def _build_bad_auth(self: SamlCore, request_data: dict[str, Any]) -> _AuthStub:
         del request_data
@@ -111,7 +117,7 @@ def test_parse_assertion_extracts_email_and_verified_state() -> None:
         )
 
     core._build_auth = MethodType(_build_auth, core)  # type: ignore[assignment]
-    assertion = core.parse_assertion({})
+    assertion = core.parse_assertion({}, expected_request_id="request-1")
     assert assertion == SamlAssertion(
         provider_user_id="nameid@example.com",
         email="user@example.com",
@@ -129,7 +135,7 @@ def test_parse_assertion_rejects_missing_identity_or_email() -> None:
 
     core._build_auth = MethodType(_build_auth, core)  # type: ignore[assignment]
     with pytest.raises(SamlProtocolError) as exc_info:
-        core.parse_assertion({})
+        core.parse_assertion({}, expected_request_id="request-1")
     assert exc_info.value.status_code == 401
 
 

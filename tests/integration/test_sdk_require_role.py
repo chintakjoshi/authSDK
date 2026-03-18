@@ -72,6 +72,8 @@ async def test_require_role_returns_403_for_insufficient_role() -> None:
     async def auth_handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/.well-known/jwks.json":
             return httpx.Response(status_code=200, json={"keys": [jwk]})
+        if request.url.path == "/auth/validate":
+            return httpx.Response(status_code=204)
         return httpx.Response(status_code=404, json={"detail": "not found"})
 
     transport = httpx.MockTransport(auth_handler)
@@ -109,6 +111,8 @@ async def test_require_role_allows_admin_role() -> None:
     async def auth_handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/.well-known/jwks.json":
             return httpx.Response(status_code=200, json={"keys": [jwk]})
+        if request.url.path == "/auth/validate":
+            return httpx.Response(status_code=204)
         return httpx.Response(status_code=404, json={"detail": "not found"})
 
     transport = httpx.MockTransport(auth_handler)

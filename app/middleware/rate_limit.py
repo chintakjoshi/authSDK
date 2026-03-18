@@ -17,6 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
 
 from app.config import get_settings
+from app.core.client_ip import extract_client_ip
 
 logger = structlog.get_logger(__name__)
 _WINDOW_SECONDS = 60
@@ -132,8 +133,4 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     @staticmethod
     def _extract_client_id(request: Request) -> str:
         """Resolve caller identity for per-client bucketing."""
-        forwarded_for = request.headers.get("x-forwarded-for", "").strip()
-        if forwarded_for:
-            return forwarded_for.split(",")[0].strip()
-        client = request.client
-        return client.host if client else "unknown"
+        return extract_client_ip(request) or "unknown"

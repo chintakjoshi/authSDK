@@ -76,7 +76,7 @@ async def test_webhook_service_rejects_localhost_and_private_ip_urls() -> None:
     """Registration-time SSRF validation blocks localhost and private-network destinations."""
     service = _build_service()
 
-    assert await service._is_safe_webhook_url("https://hooks.example.com/ingest") is True
+    assert await service._is_safe_webhook_url("https://example.com/ingest") is True
     assert await service._is_safe_webhook_url("http://localhost:8080/hook") is False
     assert await service._is_safe_webhook_url("http://127.0.0.1:8000/hook") is False
     assert await service._is_safe_webhook_url("http://192.168.1.10/hook") is False

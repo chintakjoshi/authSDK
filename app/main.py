@@ -1,6 +1,7 @@
 """FastAPI application factory."""
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config import configure_structlog, get_settings
 from app.error_handlers import register_exception_handlers
@@ -11,6 +12,7 @@ from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.middleware.tracing import TracingMiddleware
 from app.routers import admin, apikeys, auth, health, lifecycle, oauth, otp, saml, webhooks
+from app.routers._admin_access import require_admin_access
 
 
 def create_app() -> FastAPI:
@@ -21,6 +23,8 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app.service)
     register_exception_handlers(app, environment=settings.app.environment)
 
+    if settings.app.allowed_hosts:
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.app.allowed_hosts)
     app.add_middleware(TracingMiddleware)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(LoggingMiddleware)
@@ -28,8 +32,15 @@ def create_app() -> FastAPI:
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(CorrelationIdMiddleware)
 
+    metrics_dependencies = (
+        [] if settings.app.environment == "development" else [Depends(require_admin_access)]
+    )
     app.add_api_route(
-        "/metrics", build_metrics_endpoint(), methods=["GET"], include_in_schema=False
+        "/metrics",
+        build_metrics_endpoint(),
+        methods=["GET"],
+        include_in_schema=False,
+        dependencies=metrics_dependencies,
     )
     app.include_router(auth.router)
     app.include_router(lifecycle.router)

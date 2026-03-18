@@ -22,6 +22,7 @@ from app.services.brute_force_service import get_brute_force_service
 from app.services.m2m_service import ClientCredentialsTokenResult, get_m2m_service
 from app.services.otp_service import get_otp_service
 from app.services.token_service import TokenPair, get_token_service
+from app.services.webhook_service import get_webhook_service
 
 
 @dataclass(frozen=True)
@@ -230,6 +231,13 @@ class _AuditServiceStub:
         self.events.append(event)
 
 
+class _WebhookServiceStub:
+    """Webhook service stub swallowing emitted events."""
+
+    async def emit_event(self, *, event_type: str, data: dict[str, Any]) -> None:
+        del event_type, data
+
+
 async def _fake_db_dependency() -> Any:
     """Provide fake DB dependency object."""
     yield object()
@@ -253,6 +261,7 @@ async def test_auth_routes_emit_required_step13_audit_events() -> None:
     app.dependency_overrides[get_otp_service] = _OTPServiceStub
     app.dependency_overrides[get_brute_force_service] = _BruteForceServiceStub
     app.dependency_overrides[get_audit_service] = lambda: audit_stub
+    app.dependency_overrides[get_webhook_service] = _WebhookServiceStub
 
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://testserver"

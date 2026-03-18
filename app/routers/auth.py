@@ -675,6 +675,29 @@ async def jwks(
     return await signing_key_service.get_jwks_payload(db_session)
 
 
+@router.get("/auth/validate", response_model=None)
+async def validate_access_token(
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    otp_service: Annotated[OTPService, Depends(get_otp_service)],
+) -> Response | JSONResponse:
+    """Validate that a bearer access token is still backed by an active session."""
+    access_token = _extract_bearer_token(request)
+    if access_token is None:
+        return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
+
+    try:
+        await otp_service.validate_access_token(db_session=db_session, token=access_token)
+    except OTPServiceError as exc:
+        return _error_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            headers=exc.headers,
+        )
+    return Response(status_code=204)
+
+
 @router.post("/auth/introspect")
 async def introspect_api_key(
     request: Request,

@@ -486,6 +486,22 @@ class WebhookService:
                 await db_session.commit()
                 return
 
+            if not await self._is_safe_webhook_url(endpoint.url):
+                delivery.status = WebhookDeliveryStatus.ABANDONED.value
+                delivery.next_retry_at = None
+                await db_session.commit()
+                await self._record_delivery_audit_event(
+                    event_type="webhook.failed",
+                    success=False,
+                    failure_reason="invalid_webhook_url",
+                    metadata={
+                        "delivery_id": str(delivery.id),
+                        "endpoint_id": str(endpoint.id),
+                        "event_type": delivery.event_type,
+                    },
+                )
+                return
+
             secret = self._decrypt_secret(endpoint.secret)
             send_result = await self._sender.send(
                 url=endpoint.url, payload=delivery.payload, secret=secret
@@ -617,12 +633,12 @@ class WebhookService:
         except ValueError:
             parsed_ip = None
         if parsed_ip is not None:
-            return not (parsed_ip.is_private or parsed_ip.is_loopback)
+            return not self._is_disallowed_ip(parsed_ip)
 
         resolved_ips = await self._resolve_host_ips(normalized)
         if not resolved_ips:
-            return True
-        return all(not (address.is_private or address.is_loopback) for address in resolved_ips)
+            return False
+        return all(not self._is_disallowed_ip(address) for address in resolved_ips)
 
     @staticmethod
     async def _resolve_host_ips(
@@ -644,6 +660,18 @@ class WebhookService:
             except ValueError:
                 continue
         return resolved
+
+    @staticmethod
+    def _is_disallowed_ip(address: ipaddress._BaseAddress) -> bool:
+        """Reject addresses that should never be used for outbound webhooks."""
+        return bool(
+            address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_multicast
+            or address.is_reserved
+            or address.is_unspecified
+        )
 
     def _encrypt_secret(self, raw_secret: str) -> str:
         """Encrypt webhook secret before persistence."""

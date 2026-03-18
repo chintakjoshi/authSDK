@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
 from datetime import datetime
 from typing import Annotated
 from uuid import UUID
@@ -13,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
 from app.dependencies import get_database_session
+from app.routers._admin_access import require_admin_claims as _require_admin_claims
 from app.schemas.admin import (
     AdminAPIKeyCreateRequest,
     AdminAPIKeyCreateResponse,
@@ -65,67 +65,10 @@ def _error_response(
     )
 
 
-def _extract_bearer_token(request: Request) -> str | None:
-    """Extract bearer token from Authorization header."""
-    authorization = request.headers.get("authorization", "").strip()
-    if not authorization:
-        return None
-    scheme, _, token = authorization.partition(" ")
-    if not hmac.compare_digest(scheme.lower(), "bearer"):
-        return None
-    stripped = token.strip()
-    return stripped or None
-
-
 def _extract_action_token(request: Request) -> str | None:
     """Extract action token from X-Action-Token header."""
     token = request.headers.get("x-action-token", "").strip()
     return token or None
-
-
-def _extract_admin_api_key(request: Request) -> str | None:
-    """Extract local-dev admin bootstrap key from X-Admin-API-Key."""
-    token = request.headers.get("x-admin-api-key", "").strip()
-    return token or None
-
-
-async def _require_admin_claims(
-    request: Request,
-    *,
-    db_session: AsyncSession,
-    admin_service: AdminService,
-) -> dict[str, object]:
-    """Validate bearer token and require the admin role."""
-    settings = get_settings()
-    configured_admin_api_key = settings.admin_api_key
-    supplied_admin_api_key = _extract_admin_api_key(request)
-    if (
-        settings.app.environment == "development"
-        and configured_admin_api_key is not None
-        and supplied_admin_api_key is not None
-        and hmac.compare_digest(
-            supplied_admin_api_key,
-            configured_admin_api_key.get_secret_value(),
-        )
-    ):
-        claims = {"sub": "local_admin_bootstrap", "role": "admin", "type": "bootstrap_admin"}
-        request.state.user = {
-            "user_id": None,
-            "email": None,
-            "role": "admin",
-        }
-        return claims
-
-    claims = await admin_service.validate_admin_access_token(
-        db_session=db_session,
-        token=_extract_bearer_token(request),
-    )
-    request.state.user = {
-        "user_id": str(claims.get("sub", "")) or None,
-        "email": str(claims.get("email", "")) or None,
-        "role": str(claims.get("role", "")) or None,
-    }
-    return claims
 
 
 def _user_list_item(item) -> AdminUserListItem:
