@@ -1,4 +1,4 @@
-# authSDK
+# authSDK [![CI](https://github.com/chintakjoshi/authSDK/blob/main/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chintakjoshi/authSDK/blob/main/actions/workflows/ci.yml)
 
 Authentication platform repository containing:
 - a central auth service you can deploy once for your organization
