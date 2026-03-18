@@ -42,6 +42,7 @@ app = Starlette(routes=[Route("/protected", protected)])
 app.add_middleware(
     JWTAuthMiddleware,
     auth_base_url="https://auth.example.com",
+    expected_audience="orders-api",
 )
 ```
 
@@ -102,7 +103,11 @@ async def admin_only(user=Depends(require_role("admin"))):
 @app.post("/dangerous")
 async def dangerous_op(
     user=Depends(
-        require_action_token("erase_account", auth_base_url="https://auth.example.com")
+        require_action_token(
+            "erase_account",
+            auth_base_url="https://auth.example.com",
+            expected_audience="orders-api",
+        )
     )
 ):
     return {"user_id": user["user_id"]}
@@ -117,3 +122,8 @@ async def sensitive_op(user=Depends(require_fresh_auth(300))):
 - `401`: invalid JWT/API key or invalid claims.
 - `403`: authenticated but blocked by role, action token, or stale auth.
 - `503`: auth-service unavailable for required network validation.
+
+## Audience Requirement
+
+- Set `expected_audience` to your service identifier when using JWT middleware or action-token dependencies.
+- Request that same audience from the auth service during login or client-credentials issuance so tokens are scoped to your service.

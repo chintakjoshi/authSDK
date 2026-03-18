@@ -5,11 +5,11 @@ from __future__ import annotations
 import hmac
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
@@ -20,6 +20,7 @@ from app.core.signing_keys import (
     get_signing_key_service,
 )
 from app.models.session import Session
+from app.models.audit_event import AuditEvent
 from app.models.user import User
 from app.services.api_key_service import APIKeyService, get_api_key_service
 from app.services.audit_service import AuditService, get_audit_service
@@ -558,14 +559,37 @@ class AdminService:
             raise AdminServiceError(exc.detail, exc.code, exc.status_code) from exc
 
     async def run_retention_purge(self, db_session: AsyncSession) -> RetentionPurgeResult:
-        """Return callable retention-purge scaffolding without scheduling side effects."""
-        del db_session
+        """Purge aged audit and session records according to configured retention windows."""
+        if not self._enable_retention_purge:
+            return RetentionPurgeResult(
+                enabled=False,
+                audit_log_retention_days=self._audit_log_retention_days,
+                session_log_retention_days=self._session_log_retention_days,
+                purged_audit_events=0,
+                purged_sessions=0,
+            )
+
+        audit_cutoff = datetime.now(UTC) - timedelta(days=self._audit_log_retention_days)
+        session_cutoff = datetime.now(UTC) - timedelta(days=self._session_log_retention_days)
+        try:
+            purged_audit_events = await self._purge_audit_events(
+                db_session=db_session,
+                cutoff=audit_cutoff,
+            )
+            purged_sessions = await self._purge_sessions(
+                db_session=db_session,
+                cutoff=session_cutoff,
+            )
+            await db_session.commit()
+        except Exception:
+            await db_session.rollback()
+            raise
         return RetentionPurgeResult(
-            enabled=self._enable_retention_purge,
+            enabled=True,
             audit_log_retention_days=self._audit_log_retention_days,
             session_log_retention_days=self._session_log_retention_days,
-            purged_audit_events=0,
-            purged_sessions=0,
+            purged_audit_events=purged_audit_events,
+            purged_sessions=purged_sessions,
         )
 
     async def update_webhook(
@@ -674,6 +698,34 @@ class AdminService:
             )
         )
         return int((await db_session.execute(statement)).scalar_one())
+
+    @staticmethod
+    async def _purge_audit_events(
+        db_session: AsyncSession,
+        *,
+        cutoff: datetime,
+    ) -> int:
+        """Delete immutable audit rows older than the configured retention cutoff."""
+        result = await db_session.execute(delete(AuditEvent).where(AuditEvent.created_at < cutoff))
+        return int(result.rowcount or 0)
+
+    @staticmethod
+    async def _purge_sessions(
+        db_session: AsyncSession,
+        *,
+        cutoff: datetime,
+    ) -> int:
+        """Delete inactive session rows whose terminal timestamps are older than the cutoff."""
+        result = await db_session.execute(
+            delete(Session).where(
+                or_(
+                    and_(Session.deleted_at.is_not(None), Session.deleted_at < cutoff),
+                    and_(Session.revoked_at.is_not(None), Session.revoked_at < cutoff),
+                    Session.expires_at < cutoff,
+                )
+            )
+        )
+        return int(result.rowcount or 0)
 
 
 @lru_cache

@@ -72,8 +72,9 @@ class _M2MServiceStub:
         client_id: str,
         client_secret: str,
         scope: str | None = None,
+        audience: str | None = None,
     ) -> ClientCredentialsTokenResult:
-        del db_session, client_secret
+        del db_session, client_secret, audience
         if scope == "bad:scope":
             raise M2MServiceError("Invalid scope.", "invalid_scope", 400)
         return ClientCredentialsTokenResult(

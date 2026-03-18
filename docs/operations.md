@@ -24,6 +24,10 @@ At minimum:
 
 Use `.env-sample` as a complete key map.
 
+Retention purge runs from the scheduler process when:
+- `RETENTION__ENABLE_RETENTION_PURGE=true`
+- `RETENTION__PURGE_CRON` is set to the desired cron expression
+
 ## Signing Key Rotation
 
 Rotate with:
@@ -51,6 +55,7 @@ For webhook delivery, run:
 - webhook scheduler (`python scheduler.py`)
 
 These are already modeled in `docker/docker-compose.yml`.
+The scheduler process also registers the recurring retention-purge job when retention is enabled.
 
 ## Audit and Security Validation
 

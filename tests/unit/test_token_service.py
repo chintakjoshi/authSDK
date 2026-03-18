@@ -29,6 +29,7 @@ class _JWTStub:
         token_type: str,
         expires_in_seconds: int,
         additional_claims: dict[str, object] | None = None,
+        audience: str | list[str] | None = None,
         signing_private_key_pem: str | None = None,
         signing_kid: str | None = None,
     ) -> str:
@@ -38,6 +39,7 @@ class _JWTStub:
                 "token_type": token_type,
                 "expires_in_seconds": expires_in_seconds,
                 "additional_claims": additional_claims,
+                "audience": audience,
                 "signing_private_key_pem": signing_private_key_pem,
                 "signing_kid": signing_kid,
             }
@@ -62,6 +64,7 @@ async def test_issue_token_pair_includes_expected_claims() -> None:
         signing_key_service=_SigningKeyServiceStub(),  # type: ignore[arg-type]
         access_token_ttl_seconds=300,
         refresh_token_ttl_seconds=900,
+        auth_service_audience="auth-service",
     )
     auth_time = datetime(2025, 1, 2, tzinfo=UTC)
 
@@ -73,6 +76,7 @@ async def test_issue_token_pair_includes_expected_claims() -> None:
         email_verified=True,
         email_otp_enabled=True,
         scopes=["orders:read"],
+        audience="orders-api",
         auth_time=auth_time,
     )
 
@@ -90,6 +94,8 @@ async def test_issue_token_pair_includes_expected_claims() -> None:
         "email": "user@example.com",
         "scopes": ["orders:read"],
     }
+    assert access_call["audience"] == ["auth-service", "orders-api"]
+    assert refresh_call["audience"] == "auth-service"
     assert refresh_call["additional_claims"] is None
 
 
@@ -102,6 +108,7 @@ async def test_issue_access_token_omits_optional_claims_when_absent() -> None:
         signing_key_service=_SigningKeyServiceStub(),  # type: ignore[arg-type]
         access_token_ttl_seconds=300,
         refresh_token_ttl_seconds=900,
+        auth_service_audience="auth-service",
     )
 
     result = await service.issue_access_token(
@@ -116,3 +123,4 @@ async def test_issue_access_token_omits_optional_claims_when_absent() -> None:
         "email_otp_enabled": False,
         "auth_time": pytest.approx(int(datetime.now(UTC).timestamp()), abs=3),
     }
+    assert jwt_service.calls[0]["audience"] == ["auth-service"]

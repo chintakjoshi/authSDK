@@ -9,7 +9,7 @@ from functools import lru_cache
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.core.jwt import JWTService, get_jwt_service
+from app.core.jwt import Audience, JWTService, get_jwt_service, merge_audiences
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
 
 
@@ -37,11 +37,13 @@ class TokenService:
         signing_key_service: SigningKeyService,
         access_token_ttl_seconds: int,
         refresh_token_ttl_seconds: int,
+        auth_service_audience: str,
     ) -> None:
         self._jwt_service = jwt_service
         self._signing_key_service = signing_key_service
         self._access_token_ttl_seconds = access_token_ttl_seconds
         self._refresh_token_ttl_seconds = refresh_token_ttl_seconds
+        self._auth_service_audience = auth_service_audience
 
     async def issue_token_pair(
         self,
@@ -53,10 +55,12 @@ class TokenService:
         email_otp_enabled: bool = False,
         scopes: list[str] | None = None,
         auth_time: datetime | None = None,
+        audience: Audience | None = None,
     ) -> TokenPair:
         """Issue access and refresh tokens for a user identity."""
         active_key = await self._signing_key_service.get_active_signing_key(db_session)
         resolved_auth_time = auth_time or datetime.now(UTC)
+        access_audiences = merge_audiences(self._auth_service_audience, audience)
         access_claims: dict[str, object] = {
             "role": role,
             "email_verified": email_verified,
@@ -72,6 +76,7 @@ class TokenService:
             token_type="access",
             expires_in_seconds=self._access_token_ttl_seconds,
             additional_claims=access_claims,
+            audience=access_audiences,
             signing_private_key_pem=active_key.private_key_pem,
             signing_kid=active_key.kid,
         )
@@ -79,6 +84,7 @@ class TokenService:
             subject=user_id,
             token_type="refresh",
             expires_in_seconds=self._refresh_token_ttl_seconds,
+            audience=self._auth_service_audience,
             signing_private_key_pem=active_key.private_key_pem,
             signing_kid=active_key.kid,
         )
@@ -94,10 +100,12 @@ class TokenService:
         email_otp_enabled: bool = False,
         scopes: list[str] | None = None,
         auth_time: datetime | None = None,
+        audience: Audience | None = None,
     ) -> AccessToken:
         """Issue a fresh access token without rotating the refresh token."""
         active_key = await self._signing_key_service.get_active_signing_key(db_session)
         resolved_auth_time = auth_time or datetime.now(UTC)
+        access_audiences = merge_audiences(self._auth_service_audience, audience)
         access_claims: dict[str, object] = {
             "role": role,
             "email_verified": email_verified,
@@ -113,6 +121,7 @@ class TokenService:
             token_type="access",
             expires_in_seconds=self._access_token_ttl_seconds,
             additional_claims=access_claims,
+            audience=access_audiences,
             signing_private_key_pem=active_key.private_key_pem,
             signing_kid=active_key.kid,
         )
@@ -128,4 +137,5 @@ def get_token_service() -> TokenService:
         signing_key_service=get_signing_key_service(),
         access_token_ttl_seconds=settings.jwt.access_token_ttl_seconds,
         refresh_token_ttl_seconds=settings.jwt.refresh_token_ttl_seconds,
+        auth_service_audience=settings.app.service,
     )

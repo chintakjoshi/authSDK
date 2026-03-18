@@ -17,7 +17,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.core.jwt import JWTService, TokenValidationError, get_jwt_service
+from app.core.jwt import (
+    Audience,
+    JWTService,
+    TokenValidationError,
+    get_jwt_service,
+    merge_audiences,
+    normalize_audiences,
+)
 from app.core.otp import generate_otp, hash_otp, mask_email, verify_otp
 from app.core.sessions import (
     SessionService,
@@ -178,6 +185,7 @@ class OTPService:
         otp_ttl_seconds: int,
         otp_max_attempts: int,
         action_token_ttl_seconds: int,
+        auth_service_audience: str,
     ) -> None:
         self._jwt_service = jwt_service
         self._signing_key_service = signing_key_service
@@ -191,6 +199,7 @@ class OTPService:
         self._otp_max_attempts = otp_max_attempts
         self._action_token_ttl_seconds = action_token_ttl_seconds
         self._login_resend_limit = 3
+        self._auth_service_audience = auth_service_audience
 
     async def validate_access_token(
         self,
@@ -204,6 +213,7 @@ class OTPService:
                 token,
                 expected_type="access",
                 public_keys_by_kid=verification_keys,
+                expected_audience=self._auth_service_audience,
             )
         except TokenValidationError as exc:
             raise OTPServiceError("Invalid token.", "invalid_token", 401) from exc
@@ -221,6 +231,8 @@ class OTPService:
         self,
         db_session: AsyncSession,
         user: User,
+        *,
+        requested_audience: str | None = None,
     ) -> LoginOTPChallengeResult:
         """Issue a login OTP challenge instead of immediate auth tokens."""
         user_id = str(user.id)
@@ -247,6 +259,7 @@ class OTPService:
             subject=user_id,
             token_type="otp_challenge",
             expires_in_seconds=self._otp_ttl_seconds,
+            audience=merge_audiences(self._auth_service_audience, requested_audience),
             signing_private_key_pem=active_key.private_key_pem,
             signing_kid=active_key.kid,
         )
@@ -313,6 +326,7 @@ class OTPService:
             client_ip=client_ip,
             user_agent=user_agent,
         )
+        token_audiences = normalize_audiences(challenge_claims.get("aud"))
         token_pair = await self._token_service.issue_token_pair(
             db_session=db_session,
             user_id=str(user.id),
@@ -321,6 +335,7 @@ class OTPService:
             email_verified=user.email_verified,
             email_otp_enabled=user.email_otp_enabled,
             scopes=[],
+            audience=token_audiences,
         )
         session_id = await self._session_service.create_login_session(
             db_session=db_session,
@@ -424,6 +439,8 @@ class OTPService:
         user_id: str,
         code: str,
         action: OTPAction,
+        *,
+        audience: Audience | None = None,
     ) -> ActionOTPVerificationResult:
         """Verify action OTP and return a short-lived action token."""
         await self._ensure_not_locked(user_id)
@@ -469,6 +486,7 @@ class OTPService:
             token_type="action_token",
             expires_in_seconds=self._action_token_ttl_seconds,
             additional_claims={"action": action},
+            audience=merge_audiences(self._auth_service_audience, audience),
             signing_private_key_pem=active_key.private_key_pem,
             signing_kid=active_key.kid,
         )
@@ -590,6 +608,7 @@ class OTPService:
                 token.strip(),
                 expected_type="otp_challenge",
                 public_keys_by_kid=verification_keys,
+                expected_audience=self._auth_service_audience,
             )
         except TokenValidationError as exc:
             raise OTPServiceError("Invalid token.", "invalid_token", 401) from exc
@@ -617,6 +636,7 @@ class OTPService:
                 token.strip(),
                 expected_type="action_token",
                 public_keys_by_kid=verification_keys,
+                expected_audience=self._auth_service_audience,
             )
         except TokenValidationError as exc:
             raise OTPServiceError("Invalid action token.", "action_token_invalid", 403) from exc
@@ -859,4 +879,5 @@ def get_otp_service() -> OTPService:
         otp_ttl_seconds=settings.email.otp_ttl_seconds,
         otp_max_attempts=settings.email.otp_max_attempts,
         action_token_ttl_seconds=settings.email.action_token_ttl_seconds,
+        auth_service_audience=settings.app.service,
     )

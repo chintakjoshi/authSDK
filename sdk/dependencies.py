@@ -47,9 +47,12 @@ def require_action_token(
     action: str,
     *,
     auth_base_url: str,
+    expected_audience: str | list[str],
     auth_client: AuthClient | None = None,
 ) -> Callable[[Request, AuthenticatedJWTIdentity], UserIdentity]:
     """Require a valid action token in X-Action-Token for the current user."""
+    if not _normalize_expected_audience(expected_audience):
+        raise ValueError("expected_audience must be non-empty.")
     cache = JWKSCacheManager(auth_client=auth_client or AuthClient(base_url=auth_base_url))
 
     async def checker(
@@ -66,7 +69,7 @@ def require_action_token(
                 headers={"X-OTP-Required": "true", "X-OTP-Action": action},
             )
         try:
-            claims = await _verify_action_token(token, cache)
+            claims = await _verify_action_token(token, cache, expected_audience)
         except JWTVerificationError as exc:
             raise HTTPException(status_code=403, detail=exc.detail) from exc
         except (AuthServiceUnavailableError, AuthServiceResponseError) as exc:
@@ -103,17 +106,25 @@ def require_fresh_auth(
     return checker
 
 
-async def _verify_action_token(token: str, cache: JWKSCacheManager) -> dict[str, object]:
+async def _verify_action_token(
+    token: str,
+    cache: JWKSCacheManager,
+    expected_audience: str | list[str],
+) -> dict[str, object]:
     """Verify action token using cached JWKS with one forced refresh on failure."""
     jwks = await cache.get_jwks()
     try:
-        return _decode_action_token(token, jwks)
+        return _decode_action_token(token, jwks, expected_audience)
     except JWTVerificationError:
         refreshed_jwks = await cache.get_jwks(force_refresh=True)
-        return _decode_action_token(token, refreshed_jwks)
+        return _decode_action_token(token, refreshed_jwks, expected_audience)
 
 
-def _decode_action_token(token: str, jwks: dict[str, object]) -> dict[str, object]:
+def _decode_action_token(
+    token: str,
+    jwks: dict[str, object],
+    expected_audience: str | list[str],
+) -> dict[str, object]:
     """Decode and validate a short-lived action token."""
     try:
         header = jwt.get_unverified_header(token)
@@ -142,6 +153,8 @@ def _decode_action_token(token: str, jwks: dict[str, object]) -> dict[str, objec
     except JWTError as exc:
         raise JWTVerificationError("Invalid action token", "action_token_invalid") from exc
 
+    if not _audience_matches(claims.get("aud"), expected_audience):
+        raise JWTVerificationError("Invalid action token", "action_token_invalid")
     if claims.get("type") != "action_token":
         raise JWTVerificationError("Invalid action token", "action_token_invalid")
     return claims
@@ -156,3 +169,33 @@ def _select_key(jwks: dict[str, object], kid: object) -> dict[str, str]:
         if isinstance(key, dict) and key.get("kid") == kid:
             return {str(name): str(value) for name, value in key.items()}
     raise JWTVerificationError("Invalid action token", "action_token_invalid")
+
+
+def _normalize_expected_audience(value: str | list[str]) -> list[str]:
+    """Normalize one or more expected audiences."""
+    if isinstance(value, str):
+        normalized = value.strip()
+        return [normalized] if normalized else []
+    audiences: list[str] = []
+    for item in value:
+        normalized = item.strip()
+        if normalized and normalized not in audiences:
+            audiences.append(normalized)
+    return audiences
+
+
+def _audience_matches(token_audience: object, expected_audience: str | list[str]) -> bool:
+    """Return True when the token audience covers every expected audience."""
+    required = set(_normalize_expected_audience(expected_audience))
+    if not required:
+        return True
+
+    if isinstance(token_audience, str):
+        available = {token_audience.strip()} if token_audience.strip() else set()
+    elif isinstance(token_audience, list):
+        available = {
+            item.strip() for item in token_audience if isinstance(item, str) and item.strip()
+        }
+    else:
+        available = set()
+    return required.issubset(available)

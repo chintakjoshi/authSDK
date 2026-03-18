@@ -13,7 +13,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.jwt import JWTService, get_jwt_service
+from app.config import get_settings
+from app.core.jwt import JWTService, get_jwt_service, merge_audiences
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
 from app.models.oauth_client import OAuthClient
 from app.services.pagination import CursorPage, apply_created_at_cursor, build_page, decode_cursor
@@ -77,9 +78,11 @@ class M2MService:
         self,
         jwt_service: JWTService,
         signing_key_service: SigningKeyService,
+        auth_service_audience: str,
     ) -> None:
         self._jwt_service = jwt_service
         self._signing_key_service = signing_key_service
+        self._auth_service_audience = auth_service_audience
 
     async def authenticate_client_credentials(
         self,
@@ -88,6 +91,7 @@ class M2MService:
         client_id: str,
         client_secret: str,
         scope: str | None = None,
+        audience: str | None = None,
     ) -> ClientCredentialsTokenResult:
         """Validate client credentials and issue an M2M access token."""
         normalized_client_id = client_id.strip()
@@ -124,6 +128,7 @@ class M2MService:
                 "role": client.role,
                 "scope": scope_claim,
             },
+            audience=merge_audiences(self._auth_service_audience, audience),
             signing_private_key_pem=active_key.private_key_pem,
             signing_kid=active_key.kid,
         )
@@ -393,7 +398,9 @@ class M2MService:
 @lru_cache
 def get_m2m_service() -> M2MService:
     """Create and cache M2M client-credentials service dependency."""
+    settings = get_settings()
     return M2MService(
         jwt_service=get_jwt_service(),
         signing_key_service=get_signing_key_service(),
+        auth_service_audience=settings.app.service,
     )

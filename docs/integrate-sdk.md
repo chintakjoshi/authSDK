@@ -35,6 +35,7 @@ app = FastAPI()
 app.add_middleware(
     JWTAuthMiddleware,
     auth_base_url="https://auth.example.com",
+    expected_audience="orders-api",
 )
 ```
 
@@ -58,7 +59,11 @@ async def admin_route(user=Depends(require_role("admin"))):
 @app.post("/dangerous")
 async def dangerous_route(
     user=Depends(
-        require_action_token("erase_account", auth_base_url="https://auth.example.com")
+        require_action_token(
+            "erase_account",
+            auth_base_url="https://auth.example.com",
+            expected_audience="orders-api",
+        )
     )
 ):
     return {"ok": True}
@@ -94,7 +99,7 @@ After middleware succeeds, `request.state.user` contains:
 
 ## 7. Validate End-to-End
 
-1. Obtain access token from `/auth/login`.
+1. Obtain an access token from `/auth/login`, passing `{"audience":"orders-api"}` for routes protected by your service.
 2. Call one protected route with `Authorization: Bearer <token>`.
 3. Confirm expected `401` for invalid token and `403` for role/action/fresh-auth failures.
 

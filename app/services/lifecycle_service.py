@@ -21,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.core.jwt import JWTService, TokenValidationError, get_jwt_service
+from app.core.jwt import JWTService, TokenValidationError, get_jwt_service, normalize_audiences
 from app.core.sessions import (
     SessionService,
     SessionStateError,
@@ -136,6 +136,7 @@ class LifecycleService:
         password_reset_ttl_seconds: int = 3600,
         token_service: TokenService | None = None,
         brute_force_service: BruteForceProtectionService | None = None,
+        auth_service_audience: str = "auth-service",
     ) -> None:
         self._jwt_service = jwt_service
         self._signing_key_service = signing_key_service
@@ -150,6 +151,7 @@ class LifecycleService:
         self._resend_limit_ttl_seconds = 3600
         self._resend_limit_count = 3
         self._dummy_password_hash = self._user_service.hash_password("auth-service-dummy-password")
+        self._auth_service_audience = auth_service_audience
 
     async def signup_password(
         self,
@@ -254,6 +256,7 @@ class LifecycleService:
                 token,
                 expected_type="access",
                 public_keys_by_kid=verification_keys,
+                expected_audience=self._auth_service_audience,
             )
         except TokenValidationError as exc:
             raise LifecycleServiceError("Invalid token.", "invalid_token", 401) from exc
@@ -478,6 +481,7 @@ class LifecycleService:
                 else []
             ),
             auth_time=auth_time,
+            audience=normalize_audiences(claims.get("aud")),
         )
         if self._session_service is None:
             raise RuntimeError("LifecycleService requires session_service for re-authentication.")
@@ -503,6 +507,7 @@ class LifecycleService:
             subject=user_id,
             token_type="email_verify",
             expires_in_seconds=self._email_verify_ttl_seconds,
+            audience=self._auth_service_audience,
             signing_private_key_pem=active_key.private_key_pem,
             signing_kid=active_key.kid,
         )
@@ -517,6 +522,7 @@ class LifecycleService:
                 token,
                 expected_type="email_verify",
                 public_keys_by_kid=verification_keys,
+                expected_audience=self._auth_service_audience,
             )
         except TokenValidationError as exc:
             if exc.code in {"invalid_token", "token_expired"}:
@@ -667,4 +673,5 @@ def get_lifecycle_service() -> LifecycleService:
         email_sender=get_verification_email_sender(),
         email_verify_ttl_seconds=settings.email.email_verify_ttl_seconds,
         password_reset_ttl_seconds=settings.email.password_reset_ttl_seconds,
+        auth_service_audience=settings.app.service,
     )

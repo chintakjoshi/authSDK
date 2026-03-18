@@ -22,8 +22,14 @@ class _JWTStub:
     def __init__(self) -> None:
         self.error: TokenValidationError | None = None
 
-    def verify_token(self, token: str, expected_type: str, public_keys_by_kid=None):  # type: ignore[no-untyped-def]
-        del token, expected_type, public_keys_by_kid
+    def verify_token(  # type: ignore[no-untyped-def]
+        self,
+        token: str,
+        expected_type: str,
+        public_keys_by_kid=None,
+        expected_audience=None,
+    ):
+        del token, expected_type, public_keys_by_kid, expected_audience
         if self.error is not None:
             raise self.error
         return {

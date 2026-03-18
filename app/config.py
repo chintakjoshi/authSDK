@@ -135,6 +135,16 @@ class RetentionSettings(BaseModel):
     enable_retention_purge: bool = False
     audit_log_retention_days: int = Field(default=90, ge=1)
     session_log_retention_days: int = Field(default=30, ge=1)
+    purge_cron: str = "0 3 * * *"
+
+    @field_validator("purge_cron")
+    @classmethod
+    def normalize_purge_cron(cls, value: str) -> str:
+        """Require a non-empty cron expression for scheduled retention runs."""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("retention.purge_cron must be non-empty.")
+        return normalized
 
 
 class Settings(BaseSettings):

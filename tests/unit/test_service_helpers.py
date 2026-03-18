@@ -149,6 +149,7 @@ async def test_m2m_service_validation_and_listing_helpers_cover_edge_cases(monke
     service = M2MService(
         jwt_service=JWTService(private_key_pem=private_pem, public_key_pem=public_pem),
         signing_key_service=_M2MSigningKeyStub(),  # type: ignore[arg-type]
+        auth_service_audience="auth-service",
     )
 
     with pytest.raises(M2MServiceError, match="Invalid client credentials"):

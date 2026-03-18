@@ -155,6 +155,7 @@ def _service(email_sender: _EmailSenderStub | None = None) -> OTPService:
         otp_ttl_seconds=600,
         otp_max_attempts=5,
         action_token_ttl_seconds=300,
+        auth_service_audience="auth-service",
     )
 
 

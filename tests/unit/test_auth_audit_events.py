@@ -162,11 +162,12 @@ class _JWTServiceStub:
         token: str,
         expected_type: str,
         public_keys_by_kid: dict[str, str] | None = None,
+        expected_audience=None,
     ) -> dict[str, Any]:
         """Return deterministic claims payload."""
         del token
         assert expected_type == "access"
-        del public_keys_by_kid
+        del public_keys_by_kid, expected_audience
         return {
             "jti": str(uuid4()),
             "exp": int((datetime.now(UTC) + timedelta(minutes=5)).timestamp()),
@@ -210,8 +211,9 @@ class _M2MServiceStub:
         client_id: str,
         client_secret: str,
         scope: str | None = None,
+        audience: str | None = None,
     ) -> ClientCredentialsTokenResult:
-        del db_session, client_secret
+        del db_session, client_secret, audience
         return ClientCredentialsTokenResult(
             access_token=f"m2m-access-{client_id}",
             expires_in=3600,

@@ -20,8 +20,14 @@ class _JWTStub:
     def issue_token(self, **kwargs):  # type: ignore[no-untyped-def]
         return "issued-jwt"
 
-    def verify_token(self, token: str, expected_type: str, public_keys_by_kid=None):  # type: ignore[no-untyped-def]
-        del token, expected_type, public_keys_by_kid
+    def verify_token(  # type: ignore[no-untyped-def]
+        self,
+        token: str,
+        expected_type: str,
+        public_keys_by_kid=None,
+        expected_audience=None,
+    ):
+        del token, expected_type, public_keys_by_kid, expected_audience
         if self.error is not None:
             raise self.error
         return {"sub": "user-1", "jti": "access-jti", "type": "access"}
@@ -144,6 +150,7 @@ def _service(
         otp_ttl_seconds=600,
         otp_max_attempts=5,
         action_token_ttl_seconds=300,
+        auth_service_audience="auth-service",
     )
 
 

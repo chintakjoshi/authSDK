@@ -13,6 +13,7 @@ from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.client_ip import extract_client_ip as extract_trusted_client_ip
 from app.db.session import get_session_factory
 from app.models.audit_event import AuditActorType, AuditEvent
 from app.services.pagination import CursorPage, apply_created_at_cursor, build_page, decode_cursor
@@ -70,21 +71,6 @@ def _coerce_ip(value: str | None) -> str | None:
         return str(ipaddress.ip_address(value.strip()))
     except ValueError:
         return None
-
-
-def _extract_client_ip(request: Request) -> str | None:
-    """Extract canonical client IP from forwarding headers or peer address."""
-    forwarded_for = request.headers.get("x-forwarded-for", "").strip()
-    if forwarded_for:
-        first_hop = forwarded_for.split(",")[0].strip()
-        parsed = _coerce_ip(first_hop)
-        if parsed is not None:
-            return parsed
-
-    client = request.client
-    if client is None:
-        return None
-    return _coerce_ip(client.host)
 
 
 def _extract_correlation_id(request: Request) -> UUID | None:
@@ -187,7 +173,7 @@ class AuditService:
             actor_type=normalized_actor_type,
             target_id=_coerce_uuid(target_id),
             target_type=target_type.strip() if target_type else None,
-            ip_address=_extract_client_ip(request),
+            ip_address=_coerce_ip(extract_trusted_client_ip(request)),
             user_agent=request.headers.get("user-agent"),
             correlation_id=_extract_correlation_id(request),
             success=success,
