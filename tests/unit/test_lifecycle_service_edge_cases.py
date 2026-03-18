@@ -1,4 +1,4 @@
-"""Additional lifecycle-service edge tests for step 13 coverage."""
+"""Additional lifecycle-service edge tests for coverage."""
 
 from __future__ import annotations
 

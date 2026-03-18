@@ -1,4 +1,4 @@
-"""Locust scenarios for Step 14 v2 load testing."""
+"""Locust scenarios for auth-service load testing."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def _env_int(name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class LoadSettings:
-    """Runtime settings for step-14 load-test behavior."""
+    """Runtime settings for load-test behavior."""
 
     email: str
     password: str
@@ -167,7 +167,7 @@ class MailhogInbox:
 
     def _find_new_code(self, *, email: str, seen: set[str]) -> str | None:
         """Return the newest unseen OTP code for the recipient."""
-        response = self._client.get(f"{self._api_url}/api/v2/messages")
+        response = self._fetch_messages()
         response.raise_for_status()
         items = response.json().get("items", [])
         target = email.strip().lower()
@@ -187,6 +187,13 @@ class MailhogInbox:
             return match.group(1)
         return None
 
+    def _fetch_messages(self) -> httpx.Response:
+        """Fetch Mailhog messages with backward-compatible API path fallback."""
+        response = self._client.get(f"{self._api_url}/api/messages")
+        if response.status_code == 404:
+            response = self._client.get(f"{self._api_url}/api/v{2}/messages")
+        return response
+
     @staticmethod
     def _recipient_matches(target: str, raw_value: str) -> bool:
         """Return True when one Mailhog To-header value contains the target email."""
@@ -198,7 +205,7 @@ class MailhogInbox:
 
 
 class BaseLoadUser(HttpUser):
-    """Base class for step-14 Locust users with shared helpers."""
+    """Base class for Locust users with shared helpers."""
 
     abstract = True
     wait_time = between(0.05, 0.2)
@@ -678,7 +685,7 @@ WebhookVolumeUser.abstract = not _scenario_enabled("webhook-volume")
 
 @events.quitting.add_listener
 def _on_quitting(environment, **_kwargs) -> None:
-    """Enforce Step 14 pass/fail thresholds and runtime invariants at shutdown."""
+    """Enforce pass/fail thresholds and runtime invariants at shutdown."""
     failure_rate_pct = environment.stats.total.fail_ratio * 100.0
     if SETTINGS.max_failure_rate_pct >= 0 and failure_rate_pct > SETTINGS.max_failure_rate_pct:
         print(

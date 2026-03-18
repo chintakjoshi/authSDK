@@ -1,4 +1,4 @@
-"""Unit tests for Step 9 M2M client-credentials service."""
+"""Unit tests for M2M client-credentials service."""
 
 from __future__ import annotations
 

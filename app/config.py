@@ -130,7 +130,7 @@ class WebhookSettings(BaseModel):
 
 
 class RetentionSettings(BaseModel):
-    """Data-retention scaffolding for step-12 purge support."""
+    """Data-retention settings for purge support."""
 
     enable_retention_purge: bool = False
     audit_log_retention_days: int = Field(default=90, ge=1)

@@ -48,7 +48,9 @@ class _OAuthClientStub:
     ) -> str:
         """Return deterministic OAuth authorization URL."""
         del nonce, code_verifier
-        return f"https://accounts.google.com/o/oauth2/v2/auth?state={state}&redirect_uri={redirect_uri}"
+        return (
+            f"https://accounts.google.com/o/oauth2/auth?state={state}&redirect_uri={redirect_uri}"
+        )
 
     async def exchange_code_for_tokens(
         self,

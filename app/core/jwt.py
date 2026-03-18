@@ -155,7 +155,7 @@ class JWTService:
         }
 
     def _is_supported_token_type(self, token_type: str) -> bool:
-        """Check whether token type is one of the supported v2 JWT classes."""
+        """Check whether token type is one of the supported JWT classes."""
         return (
             hmac.compare_digest(token_type, "access")
             or hmac.compare_digest(token_type, "refresh")

@@ -1,4 +1,4 @@
-"""Integration tests for Step 11 admin API routes."""
+"""Integration tests for admin API routes."""
 
 from __future__ import annotations
 
@@ -565,11 +565,11 @@ async def test_admin_client_routes_cover_crud_flow(app_factory, db_session) -> N
 
         updated = await client.patch(
             f"/admin/clients/{created_payload['id']}",
-            json={"name": "Billing Worker v2", "scopes": ["billing:read", "billing:write"]},
+            json={"name": "Billing Worker Updated", "scopes": ["billing:read", "billing:write"]},
             headers=headers,
         )
         assert updated.status_code == 200
-        assert updated.json()["name"] == "Billing Worker v2"
+        assert updated.json()["name"] == "Billing Worker Updated"
 
         rotated = await client.post(
             f"/admin/clients/{created_payload['id']}/rotate-secret",

@@ -1,4 +1,4 @@
-"""Integration tests for Step 8 middleware stack behavior."""
+"""Integration tests for middleware stack behavior."""
 
 from __future__ import annotations
 

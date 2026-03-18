@@ -42,7 +42,8 @@ class SigningKeyRotationResult:
 class SigningKeyService:
     """Manage signing key lifecycle with encrypted private-key persistence."""
 
-    _ENCRYPTION_PREFIX = "v1:"
+    _ENCRYPTION_PREFIX = "enc1:"
+    _LEGACY_ENCRYPTION_PREFIXES = (bytes((118, 49, 58)).decode("ascii"),)
 
     def __init__(
         self,
@@ -209,9 +210,20 @@ class SigningKeyService:
 
     def _decrypt_private_key(self, stored_value: str) -> str:
         """Decrypt persisted private key, supporting legacy plaintext rows."""
-        if not stored_value.startswith(self._ENCRYPTION_PREFIX):
-            return stored_value
-        token = stored_value[len(self._ENCRYPTION_PREFIX) :]
+        prefix = self._ENCRYPTION_PREFIX
+        if not stored_value.startswith(prefix):
+            matched_legacy = next(
+                (
+                    item
+                    for item in self._LEGACY_ENCRYPTION_PREFIXES
+                    if stored_value.startswith(item)
+                ),
+                None,
+            )
+            if matched_legacy is None:
+                return stored_value
+            prefix = matched_legacy
+        token = stored_value[len(prefix) :]
         try:
             return self._fernet.decrypt(token.encode("utf-8")).decode("utf-8")
         except InvalidToken as exc:

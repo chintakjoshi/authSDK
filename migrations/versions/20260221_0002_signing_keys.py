@@ -19,7 +19,7 @@ down_revision = "20260221_0001"
 branch_labels = None
 depends_on = None
 
-_ENCRYPTION_PREFIX = "v1:"
+_ENCRYPTION_PREFIX = "enc1:"
 
 
 def _derive_fernet_key(encryption_key: str | None, fallback_private_key_pem: str) -> bytes:

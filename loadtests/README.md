@@ -1,6 +1,6 @@
-# Step 14 Load Tests (Locust)
+# Load Tests (Locust)
 
-This folder now covers the full v2 Step 14 load-test surface:
+This folder covers the current load-test surface:
 - sustained `POST /auth/login`
 - sustained `POST /auth/token` refresh
 - OTP login flow under load, including one-time challenge isolation checks
@@ -23,9 +23,9 @@ docker compose -f docker/docker-compose.yml up -d
 set DATABASE__URL=postgresql+asyncpg://postgres@localhost:5432/auth_service
 ```
 
-3. Seed the step-14 fixtures:
+3. Seed the load-test fixtures:
 ```bash
-uv run --extra dev python -m loadtests.seed_step14_fixtures
+uv run --extra dev python -m loadtests.seed_load_fixtures
 ```
 
 This creates:
@@ -36,7 +36,7 @@ This creates:
 
 Optional webhook fixture:
 ```bash
-uv run --extra dev python -m loadtests.seed_step14_fixtures --webhook-url https://webhook.site/<your-id>
+uv run --extra dev python -m loadtests.seed_load_fixtures --webhook-url https://webhook.site/<your-id>
 ```
 
 Because SSRF protection intentionally blocks `localhost` and private IP ranges, the webhook-volume scenario needs a publicly reachable receiver.

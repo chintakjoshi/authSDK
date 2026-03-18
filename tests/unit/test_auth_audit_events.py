@@ -1,4 +1,4 @@
-"""Unit tests for Step 13 auth audit event wiring."""
+"""Unit tests for auth audit event wiring."""
 
 from __future__ import annotations
 
@@ -244,7 +244,7 @@ async def _fake_db_dependency() -> Any:
 
 
 @pytest.mark.asyncio
-async def test_auth_routes_emit_required_step13_audit_events() -> None:
+async def test_auth_routes_emit_required_audit_events() -> None:
     """Auth router emits login, issuance, refresh, logout, and API key usage events."""
     app = FastAPI()
     app.include_router(router)

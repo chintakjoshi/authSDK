@@ -42,7 +42,7 @@ class _OAuthClientStub:
         redirect_uri: str,
     ) -> str:
         """Return deterministic authorization URL."""
-        return f"https://accounts.google.com/o/oauth2/v2/auth?state={state}&nonce={nonce}"
+        return f"https://accounts.google.com/o/oauth2/auth?state={state}&nonce={nonce}"
 
     async def exchange_code_for_tokens(
         self,
