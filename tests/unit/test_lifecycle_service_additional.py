@@ -30,8 +30,14 @@ class _JWTServiceStub:
     def __init__(self) -> None:
         self.raise_error: TokenValidationError | None = None
 
-    def verify_token(self, token: str, expected_type: str, public_keys_by_kid=None):  # type: ignore[no-untyped-def]
-        del token, expected_type, public_keys_by_kid
+    def verify_token(  # type: ignore[no-untyped-def]
+        self,
+        token: str,
+        expected_type: str,
+        public_keys_by_kid=None,
+        expected_audience=None,
+    ):
+        del token, expected_type, public_keys_by_kid, expected_audience
         if self.raise_error is not None:
             raise self.raise_error
         return {"sub": "user-1", "jti": "jti-1", "auth_time": int(datetime.now(UTC).timestamp())}

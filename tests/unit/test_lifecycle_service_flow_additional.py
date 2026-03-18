@@ -27,8 +27,14 @@ class _UserRecord:
 
 
 class _JWTServiceStub:
-    def verify_token(self, token: str, expected_type: str, public_keys_by_kid=None):  # type: ignore[no-untyped-def]
-        del token, expected_type, public_keys_by_kid
+    def verify_token(  # type: ignore[no-untyped-def]
+        self,
+        token: str,
+        expected_type: str,
+        public_keys_by_kid=None,
+        expected_audience=None,
+    ):
+        del token, expected_type, public_keys_by_kid, expected_audience
         return {"sub": "user-1", "jti": "access-jti", "scopes": ["orders:read"]}
 
     def issue_token(self, **kwargs):  # type: ignore[no-untyped-def]

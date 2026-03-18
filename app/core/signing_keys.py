@@ -97,6 +97,7 @@ class SigningKeyService:
             raise ValueError("Generated key collides with current active key ID.")
 
         current_active.status = SigningKeyStatus.RETIRING
+        current_active.updated_at = now
         new_row = SigningKey(
             kid=new_kid,
             public_key=new_public_pem,
@@ -131,6 +132,7 @@ class SigningKeyService:
         now = datetime.now(UTC)
         for row in rows:
             row.status = SigningKeyStatus.RETIRED
+            row.updated_at = now
             row.retired_at = now
             retired_kids.append(row.kid)
         if rows:

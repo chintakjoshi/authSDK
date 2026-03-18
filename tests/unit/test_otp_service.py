@@ -19,9 +19,10 @@ class _JWTServiceStub:
         token: str,
         expected_type: str,
         public_keys_by_kid: dict[str, str] | None = None,
+        expected_audience=None,
     ) -> dict[str, object]:
         """Return one synthetic access-token payload."""
-        del token, expected_type, public_keys_by_kid
+        del token, expected_type, public_keys_by_kid, expected_audience
         return {"sub": "user-1", "type": "access", "jti": "jti-456"}
 
 
@@ -102,6 +103,7 @@ def _build_service(
         otp_ttl_seconds=600,
         otp_max_attempts=5,
         action_token_ttl_seconds=300,
+        auth_service_audience="auth-service",
     )
 
 

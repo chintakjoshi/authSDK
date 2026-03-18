@@ -21,6 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.core.jwt import normalize_audiences
 from app.models.session import Session
 from app.models.user import User
 
@@ -35,6 +36,7 @@ class SessionPayload:
     email_verified: bool
     email_otp_enabled: bool
     scopes: list[str]
+    audiences: list[str]
     issued_at: str
     auth_time: str
 
@@ -67,6 +69,7 @@ class TokenIssuer(Protocol):
         email_verified: bool | None = None,
         email_otp_enabled: bool | None = None,
         scopes: list[str] | None = None,
+        audiences: list[str] | None = None,
         auth_time: datetime | None = None,
     ) -> TokenPairLike | Awaitable[TokenPairLike]: ...
 
@@ -101,6 +104,7 @@ class SessionService:
         access_claims = self._extract_access_claims(raw_access_token)
         auth_time = self._extract_auth_time(access_claims, fallback=now)
         access_jti = self._extract_access_jti(access_claims)
+        audiences = normalize_audiences(access_claims.get("aud"))
         session_row = Session(
             user_id=user_id,
             hashed_refresh_token=self._hash_token(raw_refresh_token),
@@ -115,6 +119,7 @@ class SessionService:
             email_verified=email_verified,
             email_otp_enabled=email_otp_enabled,
             scopes=scopes,
+            audiences=audiences,
             issued_at=now.isoformat(),
             auth_time=auth_time.isoformat(),
         )
@@ -166,6 +171,7 @@ class SessionService:
                 email_verified=user.email_verified,
                 email_otp_enabled=user.email_otp_enabled,
                 scopes=payload.scopes,
+                audiences=payload.audiences,
                 issued_at=payload.issued_at,
                 auth_time=session_row.auth_time.isoformat(),
             )
@@ -177,6 +183,7 @@ class SessionService:
                 email_verified=payload.email_verified,
                 email_otp_enabled=payload.email_otp_enabled,
                 scopes=payload.scopes,
+                audiences=payload.audiences,
                 auth_time=session_row.auth_time,
             )
             token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
@@ -230,6 +237,7 @@ class SessionService:
                 email_verified=payload.email_verified,
                 email_otp_enabled=payload.email_otp_enabled,
                 scopes=payload.scopes,
+                audiences=payload.audiences,
                 issued_at=payload.issued_at,
                 auth_time=auth_time.isoformat(),
             )
@@ -407,6 +415,7 @@ class SessionService:
         payload_dict.setdefault("role", "user")
         payload_dict.setdefault("email_verified", False)
         payload_dict.setdefault("email_otp_enabled", False)
+        payload_dict["audiences"] = normalize_audiences(payload_dict.get("audiences"))
         payload_dict.setdefault(
             "auth_time", payload_dict.get("issued_at", datetime.now(UTC).isoformat())
         )
@@ -433,6 +442,7 @@ class SessionService:
                         "email_verified": payload.email_verified,
                         "email_otp_enabled": payload.email_otp_enabled,
                         "scopes": payload.scopes,
+                        "audiences": payload.audiences,
                         "issued_at": payload.issued_at,
                         "auth_time": payload.auth_time,
                     }
@@ -496,6 +506,7 @@ class SessionService:
         email_verified: bool,
         email_otp_enabled: bool,
         scopes: list[str],
+        audiences: list[str],
         auth_time: datetime,
     ) -> TokenPairLike | Awaitable[TokenPairLike]:
         """Call token issuer while supporting legacy callbacks."""
@@ -508,6 +519,10 @@ class SessionService:
             kwargs["email_verified"] = email_verified
         if signature and "email_otp_enabled" in signature.parameters:
             kwargs["email_otp_enabled"] = email_otp_enabled
+        if signature and "audiences" in signature.parameters:
+            kwargs["audiences"] = audiences
+        elif signature and "audience" in signature.parameters:
+            kwargs["audience"] = audiences
         if signature and "auth_time" in signature.parameters:
             kwargs["auth_time"] = auth_time
         return token_issuer(user_id, **kwargs)

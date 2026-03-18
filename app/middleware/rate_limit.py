@@ -21,6 +21,16 @@ from app.core.client_ip import extract_client_ip
 
 logger = structlog.get_logger(__name__)
 _WINDOW_SECONDS = 60
+_FAIL_CLOSED_EXACT_PATHS = {
+    "/auth/login",
+    "/auth/token",
+}
+_FAIL_CLOSED_PREFIXES = (
+    "/auth/otp/",
+    "/auth/password/",
+    "/auth/verify-email",
+    "/auth/reauth",
+)
 
 
 class SlidingWindowRedis(Protocol):
@@ -108,12 +118,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             await self._redis.zadd(bucket_key, {member: now_ms})
             await self._redis.expire(bucket_key, math.ceil(self._window_milliseconds / 1000) + 1)
         except RedisError:
-            # If Redis is unavailable, keep the service available and emit telemetry.
+            # Fail closed for sensitive auth routes, but keep non-sensitive traffic available.
             logger.warning(
                 "rate_limit_backend_unavailable",
                 path=request.url.path,
                 method=request.method,
             )
+            if self._should_fail_closed(request.url.path):
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "detail": "Rate limit backend unavailable.",
+                        "code": "rate_limit_unavailable",
+                    },
+                )
 
         return await call_next(request)
 
@@ -129,6 +147,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         """Build Redis key using route and caller network identity."""
         client_id = self._extract_client_id(request)
         return f"rate_limit:{request.url.path}:{client_id}"
+
+    @staticmethod
+    def _should_fail_closed(path: str) -> bool:
+        """Return True when a Redis outage should block a sensitive auth route."""
+        if path in _FAIL_CLOSED_EXACT_PATHS:
+            return True
+        return any(path.startswith(prefix) for prefix in _FAIL_CLOSED_PREFIXES)
 
     @staticmethod
     def _extract_client_id(request: Request) -> str:

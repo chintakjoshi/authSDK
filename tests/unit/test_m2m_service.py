@@ -80,6 +80,7 @@ def m2m_service() -> tuple[M2MService, JWTService]:
     service = M2MService(
         jwt_service=jwt_service,
         signing_key_service=_SigningKeyStub(private_pem, public_pem),  # type: ignore[arg-type]
+        auth_service_audience="auth-service",
     )
     return service, jwt_service
 
@@ -124,14 +125,20 @@ async def test_authenticate_client_credentials_issues_m2m_token(
         client_id="client-123",
         client_secret="cs_test_secret",
         scope="billing:read",
+        audience="billing-api",
     )
 
-    claims = jwt_service.verify_token(result.access_token, expected_type="m2m")
+    claims = jwt_service.verify_token(
+        result.access_token,
+        expected_type="m2m",
+        expected_audience="billing-api",
+    )
     assert claims["sub"] == "client-123"
     assert claims["role"] == "service"
     assert claims["scope"] == "billing:read"
     assert result.expires_in == 1200
     assert result.scope == "billing:read"
+    assert claims["aud"] == ["auth-service", "billing-api"]
 
 
 @pytest.mark.asyncio

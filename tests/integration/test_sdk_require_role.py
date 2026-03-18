@@ -59,6 +59,7 @@ def _build_token(private_pem: str, kid: str, role: str) -> str:
         "role": role,
         "scopes": ["svc:read"],
         "auth_time": int(now.timestamp()),
+        "aud": ["auth-service", "orders-api"],
     }
     return jwt.encode(payload, private_pem, algorithm="RS256", headers={"kid": kid})
 
@@ -84,6 +85,7 @@ async def test_require_role_returns_403_for_insufficient_role() -> None:
     app.add_middleware(
         JWTAuthMiddleware,
         auth_base_url="https://auth.local",
+        expected_audience="orders-api",
         auth_client=auth_client,
     )
     admin_dependency = Depends(require_role("admin"))
@@ -123,6 +125,7 @@ async def test_require_role_allows_admin_role() -> None:
     app.add_middleware(
         JWTAuthMiddleware,
         auth_base_url="https://auth.local",
+        expected_audience="orders-api",
         auth_client=auth_client,
     )
     admin_dependency = Depends(require_role("admin"))

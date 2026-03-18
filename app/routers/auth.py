@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.core.jwt import JWTService, TokenValidationError, get_jwt_service
 from app.core.sessions import SessionService, SessionStateError, get_session_service
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
@@ -41,6 +42,14 @@ from app.services.user_service import UserService
 from app.services.webhook_service import WebhookService, get_webhook_service
 
 router = APIRouter(tags=["auth"])
+
+
+def _auth_service_audience() -> str:
+    """Resolve the auth service audience with a safe default for lightweight tests."""
+    try:
+        return get_settings().app.service
+    except Exception:
+        return "auth-service"
 
 
 def get_user_service() -> UserService:
@@ -93,6 +102,7 @@ def _issue_token_pair(
     email_verified: bool | None = None,
     email_otp_enabled: bool | None = None,
     scopes: list[str] | None = None,
+    audience=None,
     auth_time=None,
 ):
     """Issue token pair while supporting legacy test doubles without db_session arg."""
@@ -114,6 +124,10 @@ def _issue_token_pair(
             kwargs["email_verified"] = email_verified
         if email_otp_enabled is not None and "email_otp_enabled" in signature.parameters:
             kwargs["email_otp_enabled"] = email_otp_enabled
+        if audience is not None and "audience" in signature.parameters:
+            kwargs["audience"] = audience
+        if audience is not None and "audiences" in signature.parameters:
+            kwargs["audiences"] = audience
         if auth_time is not None and "auth_time" in signature.parameters:
             kwargs["auth_time"] = auth_time
         return issue_method(**kwargs)
@@ -124,6 +138,10 @@ def _issue_token_pair(
         kwargs["email_verified"] = email_verified
     if signature and email_otp_enabled is not None and "email_otp_enabled" in signature.parameters:
         kwargs["email_otp_enabled"] = email_otp_enabled
+    if signature and audience is not None and "audience" in signature.parameters:
+        kwargs["audience"] = audience
+    if signature and audience is not None and "audiences" in signature.parameters:
+        kwargs["audiences"] = audience
     if signature and auth_time is not None and "auth_time" in signature.parameters:
         kwargs["auth_time"] = auth_time
     return issue_method(**kwargs)
@@ -274,7 +292,11 @@ async def login(
         getattr(user, "email_otp_enabled", False)
     ):
         try:
-            challenge = await otp_service.start_login_challenge(db_session=db_session, user=user)
+            challenge = await otp_service.start_login_challenge(
+                db_session=db_session,
+                user=user,
+                requested_audience=payload.audience,
+            )
         except OTPServiceError as exc:
             return _error_response(
                 status_code=exc.status_code,
@@ -340,6 +362,7 @@ async def login(
         email_verified=bool(getattr(user, "email_verified", False)),
         email_otp_enabled=bool(getattr(user, "email_otp_enabled", False)),
         scopes=[],
+        audience=payload.audience,
     )
     token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
     try:
@@ -453,6 +476,7 @@ async def token_endpoint(
         client_id = _first_form_value(form_data, "client_id")
         client_secret = _first_form_value(form_data, "client_secret")
         scope = _first_form_value(form_data, "scope")
+        audience = _first_form_value(form_data, "audience")
         if client_id is None or client_secret is None:
             await audit_service.record(
                 db=db_session,
@@ -475,6 +499,7 @@ async def token_endpoint(
                 client_id=client_id,
                 client_secret=client_secret,
                 scope=scope,
+                audience=audience,
             )
         except M2MServiceError as exc:
             await audit_service.record(
@@ -527,6 +552,7 @@ async def token_endpoint(
             email_verified: bool | None = None,
             email_otp_enabled: bool | None = None,
             scopes: list[str] | None = None,
+            audiences=None,
             auth_time=None,
         ):
             issued = _issue_token_pair(
@@ -538,6 +564,7 @@ async def token_endpoint(
                 email_verified=email_verified,
                 email_otp_enabled=email_otp_enabled,
                 scopes=scopes,
+                audience=audiences,
                 auth_time=auth_time,
             )
             return await issued if inspect.isawaitable(issued) else issued
@@ -613,6 +640,7 @@ async def logout(
             access_token,
             expected_type="access",
             public_keys_by_kid=verification_keys,
+            expected_audience=_auth_service_audience(),
         )
     except TokenValidationError as exc:
         await audit_service.record(

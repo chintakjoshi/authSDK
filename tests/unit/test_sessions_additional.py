@@ -104,6 +104,7 @@ async def test_get_session_payload_applies_defaults_and_handles_backend_failures
         email_verified=False,
         email_otp_enabled=False,
         scopes=[],
+        audiences=[],
         issued_at="2025-01-01T00:00:00+00:00",
         auth_time="2025-01-01T00:00:00+00:00",
     )
@@ -154,6 +155,7 @@ async def test_binding_lookup_and_redis_write_helpers_fail_closed() -> None:
                 email_verified=False,
                 email_otp_enabled=False,
                 scopes=[],
+                audiences=[],
                 issued_at="now",
                 auth_time="now",
             ),
@@ -180,8 +182,8 @@ def test_extract_access_claims_invoke_token_issuer_and_ttl_helpers() -> None:
     assert SessionService._extract_auth_time({}, fallback=fallback) == fallback
 
     issued = SessionService._invoke_token_issuer(
-        lambda user_id, email=None, role=None, scopes=None: TokenPair(
-            access_token=f"{user_id}:{email}:{role}:{scopes}",
+        lambda user_id, email=None, role=None, scopes=None, audiences=None: TokenPair(
+            access_token=f"{user_id}:{email}:{role}:{scopes}:{audiences}",
             refresh_token="refresh-token",
         ),
         "user-1",
@@ -190,9 +192,13 @@ def test_extract_access_claims_invoke_token_issuer_and_ttl_helpers() -> None:
         True,
         False,
         ["orders:read"],
+        ["auth-service", "orders-api"],
         fallback,
     )
-    assert issued.access_token == "user-1:user@example.com:admin:['orders:read']"
+    assert (
+        issued.access_token
+        == "user-1:user@example.com:admin:['orders:read']:['auth-service', 'orders-api']"
+    )
 
     assert SessionService._remaining_lifetime_seconds(int(datetime.now(UTC).timestamp()) - 10) == 1
     assert SessionService._remaining_session_ttl(datetime.now(UTC) - timedelta(seconds=5)) == 1
@@ -246,6 +252,7 @@ async def test_rotate_refresh_session_rejects_missing_user_and_expired_session()
             email_verified=False,
             email_otp_enabled=False,
             scopes=[],
+            audiences=[],
             issued_at="now",
             auth_time="now",
         )

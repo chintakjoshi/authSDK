@@ -297,6 +297,7 @@ async def verify_action_otp(
             user_id=user_id,
             code=payload.code,
             action=payload.action,
+            audience=claims.get("aud"),
         )
     except OTPServiceError as exc:
         await _record_failure_events(

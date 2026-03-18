@@ -39,8 +39,13 @@ def test_issue_and_verify_access_token(jwt_service: JWTService) -> None:
         token_type="access",
         expires_in_seconds=60,
         additional_claims={"role": "admin"},
+        audience=["auth-service", "orders-api"],
     )
-    payload = jwt_service.verify_token(token, expected_type="access")
+    payload = jwt_service.verify_token(
+        token,
+        expected_type="access",
+        expected_audience="orders-api",
+    )
 
     assert payload["sub"] == "user-123"
     assert payload["type"] == "access"
@@ -49,6 +54,26 @@ def test_issue_and_verify_access_token(jwt_service: JWTService) -> None:
     assert isinstance(payload["exp"], int)
     assert payload["role"] == "admin"
     assert payload["exp"] > int(datetime.now(UTC).timestamp())
+    assert payload["aud"] == ["auth-service", "orders-api"]
+
+
+def test_verify_token_rejects_wrong_audience(jwt_service: JWTService) -> None:
+    """Token verification fails when the expected audience is missing."""
+    token = jwt_service.issue_token(
+        subject="user-123",
+        token_type="access",
+        expires_in_seconds=60,
+        audience=["auth-service", "orders-api"],
+    )
+
+    with pytest.raises(TokenValidationError) as exc_info:
+        jwt_service.verify_token(
+            token,
+            expected_type="access",
+            expected_audience="billing-api",
+        )
+
+    assert exc_info.value.code == "invalid_token"
 
 
 def test_verify_token_rejects_wrong_type(jwt_service: JWTService) -> None:

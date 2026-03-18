@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
 
+import app.core.client_ip as client_ip_module
 from app.services import audit_service as audit_module
 from app.services.audit_service import AuditService
 
@@ -133,3 +134,28 @@ async def test_record_logs_and_swallows_write_failures(monkeypatch) -> None:
     assert payload["event_type"] == "user.login.failure"
     assert payload["actor_type"] == "system"
     assert payload["success"] is False
+
+
+async def test_record_ignores_forwarded_for_from_untrusted_peer(monkeypatch) -> None:
+    """Audit IP extraction ignores XFF values unless the peer is a trusted proxy."""
+    monkeypatch.setattr(client_ip_module, "get_trusted_proxy_networks", lambda: ())
+
+    service = AuditService()
+    session = _SessionStub()
+    request = _RequestStub(
+        headers={
+            "user-agent": "pytest-agent/1.0",
+            "x-forwarded-for": "198.51.100.44",
+        },
+        client_host="10.0.0.7",
+    )
+
+    await service.record(
+        db=session,  # type: ignore[arg-type]
+        event_type="user.login.success",
+        actor_type="user",
+        success=True,
+        request=request,  # type: ignore[arg-type]
+    )
+
+    assert session.added[0].ip_address == "10.0.0.7"

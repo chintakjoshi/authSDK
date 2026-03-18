@@ -123,6 +123,7 @@ def _build_otp_service(sender: _CapturingOTPEmailSender) -> OTPService:
         otp_ttl_seconds=settings.email.otp_ttl_seconds,
         otp_max_attempts=settings.email.otp_max_attempts,
         action_token_ttl_seconds=settings.email.action_token_ttl_seconds,
+        auth_service_audience=settings.app.service,
     )
 
 

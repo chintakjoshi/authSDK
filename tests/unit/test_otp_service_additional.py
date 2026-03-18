@@ -19,8 +19,14 @@ class _JWTStub:
         self.raise_error: TokenValidationError | None = None
         self.claims: dict[str, object] = {"sub": "user-1", "action": "enable_otp"}
 
-    def verify_token(self, token: str, expected_type: str, public_keys_by_kid=None):  # type: ignore[no-untyped-def]
-        del token, expected_type, public_keys_by_kid
+    def verify_token(  # type: ignore[no-untyped-def]
+        self,
+        token: str,
+        expected_type: str,
+        public_keys_by_kid=None,
+        expected_audience=None,
+    ):
+        del token, expected_type, public_keys_by_kid, expected_audience
         if self.raise_error is not None:
             raise self.raise_error
         return self.claims
@@ -191,6 +197,7 @@ def _service(
         otp_ttl_seconds=600,
         otp_max_attempts=5,
         action_token_ttl_seconds=300,
+        auth_service_audience="auth-service",
     )
 
 

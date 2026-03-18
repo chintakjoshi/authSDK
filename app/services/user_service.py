@@ -86,6 +86,11 @@ class UserService:
         if user.role == "admin" and new_role != "admin":
             await self._ensure_last_admin_not_violated(db_session=db_session)
 
+        previous_role = user.role
+        user.role = new_role
+        await db_session.flush()
+        if commit:
+            await db_session.commit()
         if request is not None and audit_service is not None:
             await audit_service.record(
                 db=db_session,
@@ -96,13 +101,8 @@ class UserService:
                 actor_id=actor_id,
                 target_id=str(user.id),
                 target_type="user",
-                metadata={"old_role": user.role, "new_role": new_role},
+                metadata={"old_role": previous_role, "new_role": new_role},
             )
-
-        user.role = new_role
-        await db_session.flush()
-        if commit:
-            await db_session.commit()
         return user
 
     async def delete_user(

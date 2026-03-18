@@ -22,9 +22,10 @@ class _JWTServiceStub:
         token: str,
         expected_type: str,
         public_keys_by_kid: dict[str, str] | None = None,
+        expected_audience=None,
     ) -> dict[str, object]:
         """Return one synthetic access-token payload."""
-        del token, expected_type, public_keys_by_kid
+        del token, expected_type, public_keys_by_kid, expected_audience
         return {"sub": "user-1", "type": "access", "jti": "jti-123"}
 
 

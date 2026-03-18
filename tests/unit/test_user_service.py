@@ -61,6 +61,36 @@ class _DeletingSession:
         return None
 
 
+class _MutatingSession:
+    """AsyncSession-like stub for successful role updates."""
+
+    def __init__(self, user: User) -> None:
+        self._user = user
+        self.flush_calls = 0
+        self.commit_calls = 0
+
+    async def execute(self, _statement: object) -> _FakeResult:
+        return _FakeResult(user=self._user)
+
+    async def flush(self) -> None:
+        self.flush_calls += 1
+
+    async def commit(self) -> None:
+        self.commit_calls += 1
+
+
+class _AuditRecorder:
+    """Audit stub that records calls for ordering assertions."""
+
+    def __init__(self, session: _MutatingSession) -> None:
+        self._session = session
+        self.calls: list[dict[str, object]] = []
+
+    async def record(self, **kwargs: object) -> None:
+        assert self._session.commit_calls == 1
+        self.calls.append(kwargs)
+
+
 def _build_user(password_hash: str | None) -> User:
     """Create a lightweight user model for service tests."""
     now = datetime.now(UTC)
@@ -166,6 +196,31 @@ async def test_update_role_requires_admin_actor() -> None:
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.code == "insufficient_role"
+
+
+@pytest.mark.asyncio
+async def test_update_role_commits_before_recording_success_audit() -> None:
+    """Successful role changes commit the mutation before writing the success audit."""
+    service = UserService()
+    user = _build_user(password_hash=service.hash_password("Password123!"))
+    user.role = "user"
+    db_session = _MutatingSession(user)
+    audit_service = _AuditRecorder(db_session)
+
+    updated = await service.update_role(
+        db_session=db_session,  # type: ignore[arg-type]
+        actor_role="admin",
+        actor_id=str(uuid4()),
+        user_id=user.id,
+        new_role="admin",
+        request=object(),  # type: ignore[arg-type]
+        audit_service=audit_service,  # type: ignore[arg-type]
+    )
+
+    assert updated.role == "admin"
+    assert db_session.flush_calls == 1
+    assert db_session.commit_calls == 1
+    assert audit_service.calls[0]["metadata"] == {"old_role": "user", "new_role": "admin"}
 
 
 @pytest.mark.asyncio

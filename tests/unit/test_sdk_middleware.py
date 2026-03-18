@@ -54,6 +54,7 @@ def _build_token(
     token_type: str = "access",
     subject: str = "user-1",
     scope: str = "svc:read",
+    audience: str | list[str] = ("auth-service", "orders-api"),
 ) -> str:
     """Build RS256 JWT for middleware tests."""
     now = datetime.now(UTC)
@@ -63,6 +64,7 @@ def _build_token(
         "sub": subject,
         "type": token_type,
         "role": role,
+        "aud": list(audience) if not isinstance(audience, str) else audience,
     }
     if token_type == "m2m":
         payload["scope"] = scope
@@ -98,7 +100,10 @@ async def test_jwt_middleware_verifies_and_caches_jwks() -> None:
     auth_http_client = httpx.AsyncClient(base_url="https://auth.local", transport=transport)
     auth_client = AuthClient(base_url="https://auth.local", http_client=auth_http_client)
     app.add_middleware(
-        JWTAuthMiddleware, auth_base_url="https://auth.local", auth_client=auth_client
+        JWTAuthMiddleware,
+        auth_base_url="https://auth.local",
+        expected_audience="orders-api",
+        auth_client=auth_client,
     )
 
     @app.get("/protected")
@@ -144,7 +149,10 @@ async def test_jwt_middleware_refreshes_once_on_verification_failure() -> None:
     auth_http_client = httpx.AsyncClient(base_url="https://auth.local", transport=transport)
     auth_client = AuthClient(base_url="https://auth.local", http_client=auth_http_client)
     app.add_middleware(
-        JWTAuthMiddleware, auth_base_url="https://auth.local", auth_client=auth_client
+        JWTAuthMiddleware,
+        auth_base_url="https://auth.local",
+        expected_audience="orders-api",
+        auth_client=auth_client,
     )
 
     @app.get("/protected")
@@ -179,7 +187,10 @@ async def test_jwt_middleware_rejects_missing_required_claim() -> None:
     auth_http_client = httpx.AsyncClient(base_url="https://auth.local", transport=transport)
     auth_client = AuthClient(base_url="https://auth.local", http_client=auth_http_client)
     app.add_middleware(
-        JWTAuthMiddleware, auth_base_url="https://auth.local", auth_client=auth_client
+        JWTAuthMiddleware,
+        auth_base_url="https://auth.local",
+        expected_audience="orders-api",
+        auth_client=auth_client,
     )
 
     @app.get("/protected")
@@ -217,7 +228,10 @@ async def test_jwt_middleware_rejects_revoked_user_session() -> None:
     auth_http_client = httpx.AsyncClient(base_url="https://auth.local", transport=transport)
     auth_client = AuthClient(base_url="https://auth.local", http_client=auth_http_client)
     app.add_middleware(
-        JWTAuthMiddleware, auth_base_url="https://auth.local", auth_client=auth_client
+        JWTAuthMiddleware,
+        auth_base_url="https://auth.local",
+        expected_audience="orders-api",
+        auth_client=auth_client,
     )
 
     @app.get("/protected")
@@ -260,7 +274,10 @@ async def test_jwt_middleware_rejects_missing_role_claim() -> None:
     auth_http_client = httpx.AsyncClient(base_url="https://auth.local", transport=transport)
     auth_client = AuthClient(base_url="https://auth.local", http_client=auth_http_client)
     app.add_middleware(
-        JWTAuthMiddleware, auth_base_url="https://auth.local", auth_client=auth_client
+        JWTAuthMiddleware,
+        auth_base_url="https://auth.local",
+        expected_audience="orders-api",
+        auth_client=auth_client,
     )
 
     @app.get("/protected")
@@ -297,7 +314,10 @@ async def test_jwt_middleware_rejects_otp_challenge_tokens() -> None:
     auth_http_client = httpx.AsyncClient(base_url="https://auth.local", transport=transport)
     auth_client = AuthClient(base_url="https://auth.local", http_client=auth_http_client)
     app.add_middleware(
-        JWTAuthMiddleware, auth_base_url="https://auth.local", auth_client=auth_client
+        JWTAuthMiddleware,
+        auth_base_url="https://auth.local",
+        expected_audience="orders-api",
+        auth_client=auth_client,
     )
 
     @app.get("/protected")
@@ -339,7 +359,10 @@ async def test_jwt_middleware_accepts_m2m_tokens() -> None:
     auth_http_client = httpx.AsyncClient(base_url="https://auth.local", transport=transport)
     auth_client = AuthClient(base_url="https://auth.local", http_client=auth_http_client)
     app.add_middleware(
-        JWTAuthMiddleware, auth_base_url="https://auth.local", auth_client=auth_client
+        JWTAuthMiddleware,
+        auth_base_url="https://auth.local",
+        expected_audience="orders-api",
+        auth_client=auth_client,
     )
 
     @app.get("/protected")

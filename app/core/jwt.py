@@ -7,6 +7,7 @@ import hashlib
 import hmac
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
+from collections.abc import Iterable
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -19,6 +20,7 @@ from app.config import get_settings
 
 TokenType = Literal["access", "refresh", "email_verify", "otp_challenge", "action_token", "m2m"]
 JWT_ALGORITHM = "RS256"
+Audience = str | list[str] | tuple[str, ...] | set[str]
 
 
 class TokenValidationError(Exception):
@@ -44,6 +46,7 @@ class JWTService:
         token_type: TokenType,
         expires_in_seconds: int,
         additional_claims: dict[str, Any] | None = None,
+        audience: Audience | None = None,
         signing_private_key_pem: str | None = None,
         signing_kid: str | None = None,
     ) -> str:
@@ -57,6 +60,9 @@ class JWTService:
             "sub": subject,
             "type": token_type,
         }
+        normalized_audience = normalize_audiences(audience)
+        if normalized_audience:
+            payload["aud"] = audience_claim_value(normalized_audience)
         if additional_claims:
             for key, value in additional_claims.items():
                 if key in payload:
@@ -74,6 +80,7 @@ class JWTService:
         token: str,
         expected_type: TokenType | None = None,
         public_keys_by_kid: dict[str, str] | None = None,
+        expected_audience: Audience | None = None,
     ) -> dict[str, Any]:
         """Verify token signature and required claims."""
         try:
@@ -93,6 +100,7 @@ class JWTService:
             if not verification_key:
                 raise TokenValidationError("Invalid token.", "invalid_token")
 
+        normalized_expected_audience = normalize_audiences(expected_audience)
         try:
             payload = jwt.decode(
                 token,
@@ -116,6 +124,11 @@ class JWTService:
             raise TokenValidationError("Invalid token type.", "invalid_token")
         if expected_type and not hmac.compare_digest(token_type, expected_type):
             raise TokenValidationError("Invalid token type.", "invalid_token")
+        if normalized_expected_audience and not audience_matches(
+            token_audience=payload.get("aud"),
+            expected_audiences=normalized_expected_audience,
+        ):
+            raise TokenValidationError("Invalid token.", "invalid_token")
         return payload
 
     def jwks(
@@ -191,3 +204,52 @@ def get_jwt_service() -> JWTService:
         private_key_pem=settings.jwt.private_key_pem.get_secret_value(),
         public_key_pem=settings.jwt.public_key_pem.get_secret_value(),
     )
+
+
+def normalize_audiences(value: object) -> list[str]:
+    """Normalize JWT audience input/claims into an ordered list of strings."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        normalized = value.strip()
+        return [normalized] if normalized else []
+    if not isinstance(value, Iterable):
+        return []
+
+    audiences: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        normalized = item.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        audiences.append(normalized)
+    return audiences
+
+
+def merge_audiences(
+    primary_audience: str, additional_audiences: Audience | None = None
+) -> list[str]:
+    """Return a de-duplicated audience list with the service audience first."""
+    primary = primary_audience.strip()
+    if not primary:
+        raise ValueError("primary_audience must be non-empty.")
+    return normalize_audiences([primary, *normalize_audiences(additional_audiences)])
+
+
+def audience_claim_value(audiences: list[str]) -> str | list[str]:
+    """Render a normalized audience list as a JWT aud claim value."""
+    if len(audiences) == 1:
+        return audiences[0]
+    return list(audiences)
+
+
+def audience_matches(token_audience: object, expected_audiences: Audience | None) -> bool:
+    """Return True when token audiences contain every expected audience."""
+    required = set(normalize_audiences(expected_audiences))
+    if not required:
+        return True
+    available = set(normalize_audiences(token_audience))
+    return required.issubset(available)

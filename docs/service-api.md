@@ -27,12 +27,13 @@ All errors follow:
 - `POST /auth/signup`
   - request: `{"email":"user@example.com","password":"Password123!"}`
 - `POST /auth/login`
-  - request: `{"email":"user@example.com","password":"Password123!"}`
+  - request: `{"email":"user@example.com","password":"Password123!","audience":"orders-api"}`
+  - `audience` is optional and scopes the issued access token to a downstream service
   - response: token pair or OTP challenge
 - `POST /auth/token`
   - refresh flow request: `{"refresh_token":"..."}`
   - client credentials flow:
-    `grant_type=client_credentials&client_id=...&client_secret=...`
+    `grant_type=client_credentials&client_id=...&client_secret=...&audience=orders-api`
 - `POST /auth/logout`
   - request: `{"refresh_token":"..."}`
   - requires bearer access token

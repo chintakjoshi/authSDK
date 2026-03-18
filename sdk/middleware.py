@@ -86,17 +86,21 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         self,
         app,
         auth_base_url: str,
+        expected_audience: str | list[str],
         auth_client: AuthClient | None = None,
         jwks_cache: JWKSCacheManager | None = None,
         required_token_type: str = "access",
     ) -> None:
         """Initialize middleware with auth client and JWKS cache."""
         super().__init__(app)
+        if not _normalize_expected_audience(expected_audience):
+            raise ValueError("expected_audience must be non-empty.")
         self._auth_client = auth_client or AuthClient(base_url=auth_base_url)
         self._jwks_cache = jwks_cache or JWKSCacheManager(
             auth_client=self._auth_client, ttl_seconds=300
         )
         self._required_token_type = required_token_type
+        self._expected_audience = expected_audience
 
     async def dispatch(self, request: Request, call_next) -> Response:
         """Verify JWT and inject user identity into request state."""
@@ -190,18 +194,25 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         kid = header.get("kid")
         key = self._select_key(jwks=jwks, kid=str(kid) if kid is not None else None)
         options = {
-            "verify_aud": False,
             "require_jti": True,
             "require_iat": True,
             "require_exp": True,
             "require_sub": True,
         }
         try:
-            claims = jwt.decode(token, key, algorithms=["RS256"], options=options)
+            claims = jwt.decode(
+                token,
+                key,
+                algorithms=["RS256"],
+                options=options | {"verify_aud": False},
+            )
         except ExpiredSignatureError as exc:
             raise JWTVerificationError("Token has expired.", "token_expired") from exc
         except JWTError as exc:
             raise JWTVerificationError("Invalid token.", "invalid_token") from exc
+
+        if not _audience_matches(claims.get("aud"), self._expected_audience):
+            raise JWTVerificationError("Invalid token.", "invalid_token")
 
         token_type = str(claims.get("type", ""))
         if token_type not in {"access", "refresh", "m2m"}:
@@ -309,3 +320,33 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if code == "revoked_api_key":
             return "API key revoked."
         return "Invalid API key."
+
+
+def _normalize_expected_audience(value: str | list[str]) -> list[str]:
+    """Normalize one or more expected audiences."""
+    if isinstance(value, str):
+        normalized = value.strip()
+        return [normalized] if normalized else []
+    audiences: list[str] = []
+    for item in value:
+        normalized = item.strip()
+        if normalized and normalized not in audiences:
+            audiences.append(normalized)
+    return audiences
+
+
+def _audience_matches(token_audience: Any, expected_audience: str | list[str]) -> bool:
+    """Return True when the token audience covers every expected audience."""
+    required = set(_normalize_expected_audience(expected_audience))
+    if not required:
+        return True
+
+    if isinstance(token_audience, str):
+        available = {token_audience.strip()} if token_audience.strip() else set()
+    elif isinstance(token_audience, list):
+        available = {
+            item.strip() for item in token_audience if isinstance(item, str) and item.strip()
+        }
+    else:
+        available = set()
+    return required.issubset(available)

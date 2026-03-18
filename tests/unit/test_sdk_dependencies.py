@@ -46,7 +46,13 @@ def _generate_signing_material(kid: str) -> tuple[str, dict[str, str]]:
     return private_pem, jwk
 
 
-def _build_action_token(private_pem: str, kid: str, sub: str, action: str) -> str:
+def _build_action_token(
+    private_pem: str,
+    kid: str,
+    sub: str,
+    action: str,
+    audience: str | list[str] = ("auth-service", "orders-api"),
+) -> str:
     now = datetime.now(UTC)
     payload = {
         "iat": int(now.timestamp()),
@@ -55,6 +61,7 @@ def _build_action_token(private_pem: str, kid: str, sub: str, action: str) -> st
         "type": "action_token",
         "action": action,
         "jti": str(uuid4()),
+        "aud": list(audience) if not isinstance(audience, str) else audience,
     }
     return jwt.encode(payload, private_pem, algorithm="RS256", headers={"kid": kid})
 
@@ -175,6 +182,7 @@ async def test_require_action_token_allows_matching_action_and_user() -> None:
         require_action_token(
             "erase_account",
             auth_base_url="https://auth.local",
+            expected_audience="orders-api",
             auth_client=auth_client,
         )
     )
@@ -206,7 +214,13 @@ async def test_require_action_token_sets_headers_when_missing() -> None:
         "scopes": [],
         "auth_time": int(datetime.now(UTC).timestamp()),
     }
-    dependency = Depends(require_action_token("erase_account", auth_base_url="https://auth.local"))
+    dependency = Depends(
+        require_action_token(
+            "erase_account",
+            auth_base_url="https://auth.local",
+            expected_audience="orders-api",
+        )
+    )
 
     @app.post("/dangerous")
     async def dangerous(user=dependency):  # type: ignore[no-untyped-def]
