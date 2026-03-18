@@ -3,6 +3,12 @@
 Authentication service + SDK workspace for local development, testing, and load
 validation.
 
+## Start Here
+
+- New engineer onboarding path: `docs/README.md`
+- Local stack setup: `DEVELOPMENT.md`
+- SDK middleware usage: `sdk/README.md`
+
 ## Local Docker Quick Start
 
 1. Copy environment template:
@@ -24,6 +30,13 @@ Full step-by-step guide: `DEVELOPMENT.md`.
 
 The service is exposed at `http://localhost:8000`.
 Mailhog is exposed at `http://localhost:8025` for verification-email inspection.
+
+## Common Next Steps
+
+- Integrate SDK in a service: `docs/integrate-sdk.md`
+- Review auth endpoint contracts: `docs/service-api.md`
+- Review production operations: `docs/operations.md`
+- Debug common integration issues: `docs/troubleshooting.md`
 
 ## Signing Key Rotation CLI
 
