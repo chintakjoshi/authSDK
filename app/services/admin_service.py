@@ -19,8 +19,8 @@ from app.core.signing_keys import (
     SigningKeyService,
     get_signing_key_service,
 )
-from app.models.session import Session
 from app.models.audit_event import AuditEvent
+from app.models.session import Session
 from app.models.user import User
 from app.services.api_key_service import APIKeyService, get_api_key_service
 from app.services.audit_service import AuditService, get_audit_service

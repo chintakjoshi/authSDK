@@ -5,9 +5,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from collections.abc import Iterable
 from typing import Any, Literal
 from uuid import uuid4
 
