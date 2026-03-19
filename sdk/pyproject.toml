@@ -4,13 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "auth-service-sdk"
-version = "0.1.0"
+version = "1.0.2"
 description = "SDK middleware and client for auth-service token and API key verification."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Auth Service Team" }]
 dependencies = [
+  "fastapi==0.129.2",
   "httpx==0.28.1",
   "python-jose[cryptography]==3.5.0",
   "cachetools==5.5.2",
@@ -18,4 +19,15 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["."]
+only-include = [
+  "__init__.py",
+  "cache.py",
+  "client.py",
+  "dependencies.py",
+  "exceptions.py",
+  "middleware.py",
+  "types.py",
+]
+
+[tool.hatch.build.targets.wheel.sources]
+"" = "sdk"

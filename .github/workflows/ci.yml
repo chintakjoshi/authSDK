@@ -122,3 +122,32 @@ jobs:
 
       - name: Build SDK package
         run: python -m build sdk
+
+      - name: Smoke test SDK wheel imports
+        shell: bash
+        run: |
+          rm -rf /tmp/sdk-wheel-test
+          python -m pip install --no-deps --target /tmp/sdk-wheel-test sdk/dist/auth_service_sdk-*.whl
+          python - <<'PY'
+          import os
+          import sys
+
+          target = "/tmp/sdk-wheel-test"
+          repo_root = os.getcwd()
+          sys.path = [
+              target,
+              *[
+                  path
+                  for path in sys.path
+                  if os.path.abspath(path or repo_root) != repo_root
+              ],
+          ]
+
+          import sdk
+          from sdk import APIKeyAuthMiddleware, AuthClient, JWTAuthMiddleware
+          from sdk.cache import JWKSCacheManager
+
+          assert sdk.__file__.startswith(target), sdk.__file__
+          print("SDK wheel import smoke test passed")
+          print(AuthClient, JWTAuthMiddleware, APIKeyAuthMiddleware, JWKSCacheManager)
+          PY
