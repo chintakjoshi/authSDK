@@ -72,6 +72,7 @@ async def test_apikey_create_list_revoke_and_introspect_flow(app_factory) -> Non
         assert valid_introspect.status_code == 200
         assert valid_introspect.json()["valid"] is True
         assert valid_introspect.json()["scopes"] == ["orders:read"]
+        assert valid_introspect.json()["service"] == "orders"
 
         revoke_response = await client.post(
             f"/auth/apikeys/{created['key_id']}/revoke",

@@ -188,6 +188,7 @@ async def test_introspect_valid_key_returns_contract_payload() -> None:
     assert result.key_id == str(row.id)
     assert result.user_id == str(row.user_id)
     assert result.scopes == ["svc:read", "svc:write"]
+    assert result.service == row.service
 
 
 @pytest.mark.asyncio

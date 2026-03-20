@@ -40,6 +40,7 @@ class APIKeyIntrospectionResult:
     scopes: list[str] | None = None
     key_id: str | None = None
     expires_at: str | None = None
+    service: str | None = None
 
 
 class APIKeyServiceError(Exception):
@@ -222,6 +223,7 @@ class APIKeyService:
             scopes=scopes,
             key_id=str(key_row.id),
             expires_at=key_row.expires_at.isoformat() if key_row.expires_at else None,
+            service=key_row.service,
         )
 
     async def _get_key_by_hash(

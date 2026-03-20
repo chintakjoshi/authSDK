@@ -765,5 +765,6 @@ async def introspect_api_key(
             "scopes": result.scopes or [],
             "key_id": result.key_id,
             "expires_at": result.expires_at,
+            "service": result.service,
         },
     )
