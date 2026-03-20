@@ -29,6 +29,7 @@ async def test_api_key_middleware_caches_valid_introspection_for_60s() -> None:
                     "key_id": "key-1",
                     "scopes": ["svc:read"],
                     "user_id": None,
+                    "service": "svc",
                 },
             )
         return httpx.Response(status_code=404, json={"detail": "not found"})
@@ -59,6 +60,7 @@ async def test_api_key_middleware_caches_valid_introspection_for_60s() -> None:
     assert second.status_code == 200
     assert first.json()["identity"]["type"] == "api_key"
     assert first.json()["identity"]["email"] is None
+    assert first.json()["identity"]["service"] == "svc"
     assert introspect_calls == 1
 
 

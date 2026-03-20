@@ -42,6 +42,7 @@ async def test_introspect_api_key_returns_valid_payload() -> None:
                 "scopes": ["svc:read"],
                 "key_id": "key-1",
                 "expires_at": None,
+                "service": "svc",
             },
         )
 
@@ -53,6 +54,7 @@ async def test_introspect_api_key_returns_valid_payload() -> None:
     assert payload["valid"] is True
     assert payload["key_id"] == "key-1"
     assert payload["scopes"] == ["svc:read"]
+    assert payload["service"] == "svc"
 
 
 @pytest.mark.asyncio
