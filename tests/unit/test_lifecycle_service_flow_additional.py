@@ -176,6 +176,7 @@ def _service(
         password_reset_ttl_seconds=1800,
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]
         brute_force_service=brute_force_service or _BruteForceStub(),  # type: ignore[arg-type]
+        public_base_url="http://localhost:8000",
     )
 
 

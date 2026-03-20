@@ -29,6 +29,12 @@ class VerifyEmailResponse(BaseModel):
     verified: Literal[True] = True
 
 
+class ResendVerifyEmailRequest(BaseModel):
+    """Public resend-verification request payload."""
+
+    email: str = Field(min_length=3, max_length=320)
+
+
 class ResendVerifyEmailResponse(BaseModel):
     """Resend verification email success response."""
 

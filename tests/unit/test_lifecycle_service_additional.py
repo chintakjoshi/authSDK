@@ -67,6 +67,10 @@ class _UserServiceStub:
     def hash_password(self, password: str) -> str:
         return f"hashed::{password}"
 
+    def verify_password(self, password: str, password_hash: str) -> bool:
+        del password, password_hash
+        return False
+
 
 class _RedisStub:
     def __init__(self) -> None:
@@ -148,6 +152,7 @@ def _service(
         email_verify_ttl_seconds=3600,
         session_service=_SessionServiceStub(),  # type: ignore[arg-type]
         password_reset_ttl_seconds=1800,
+        public_base_url="http://localhost:8000",
     )
 
 
@@ -199,7 +204,9 @@ async def test_signup_password_success_sends_verification_and_commits() -> None:
 
     assert user.email == "new@example.com"
     assert user.password_hash == "hashed::Password123!"
-    assert sender.verification_links == ["/auth/verify-email?token=verify-token"]
+    assert sender.verification_links == [
+        "http://localhost:8000/auth/verify-email?token=verify-token"
+    ]
     assert db_session.commit_count == 1
 
 
@@ -268,6 +275,60 @@ async def test_resend_verification_email_handles_invalid_states_and_rate_limit_b
     with pytest.raises(LifecycleServiceError) as exc_info:
         await service._enforce_resend_rate_limit("user-1")
     assert exc_info.value.code == "session_expired"
+
+
+@pytest.mark.asyncio
+async def test_request_verification_email_resend_hides_account_state_and_resends_unverified() -> (
+    None
+):
+    """Public resend hides unknown/verified accounts and resends only for unverified users."""
+    user_service = _UserServiceStub()
+    sender = _EmailSenderStub()
+    service = _service(user_service=user_service, email_sender=sender)
+
+    missing = await service.request_verification_email_resend(
+        db_session=_DBSessionStub(),  # type: ignore[arg-type]
+        email="missing@example.com",
+    )
+    assert missing is None
+    assert sender.verification_links == []
+
+    user_service.users_by_email["verified@example.com"] = _UserRecord(
+        id=uuid4(),
+        email="verified@example.com",
+        email_verified=True,
+    )
+    verified = await service.request_verification_email_resend(
+        db_session=_DBSessionStub(),  # type: ignore[arg-type]
+        email="verified@example.com",
+    )
+    assert verified is None
+    assert sender.verification_links == []
+
+    unverified_user = _UserRecord(
+        id=uuid4(),
+        email="pending@example.com",
+        email_verified=False,
+    )
+    user_service.users_by_email[unverified_user.email] = unverified_user
+
+    async def _issue_token(db_session, user_id: str):  # type: ignore[no-untyped-def]
+        del db_session, user_id
+        return "verify-token", datetime.now(UTC) + timedelta(hours=1)
+
+    service._issue_email_verify_token = _issue_token  # type: ignore[assignment]
+    db_session = _DBSessionStub()
+
+    resent_user_id = await service.request_verification_email_resend(
+        db_session=db_session,  # type: ignore[arg-type]
+        email="pending@example.com",
+    )
+
+    assert resent_user_id == str(unverified_user.id)
+    assert sender.verification_links == [
+        "http://localhost:8000/auth/verify-email?token=verify-token"
+    ]
+    assert db_session.commit_count == 1
 
 
 @pytest.mark.asyncio

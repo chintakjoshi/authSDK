@@ -253,6 +253,7 @@ def integration_env() -> Iterator[dict[str, str]]:
         "EMAIL__MAILHOG_HOST": mailhog_host,
         "EMAIL__MAILHOG_PORT": str(mailhog_port),
         "EMAIL__EMAIL_FROM": "auth-integration@example.com",
+        "EMAIL__PUBLIC_BASE_URL": "http://localhost:8000",
     }
 
     _, restore_env = _set_env_values(env_values)

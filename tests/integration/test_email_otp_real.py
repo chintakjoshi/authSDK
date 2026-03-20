@@ -363,7 +363,7 @@ async def test_action_otp_request_requires_verified_email(
     user_factory,
     db_session,
 ) -> None:
-    """Users with unverified email cannot start the action OTP flow for enrollment."""
+    """Users with unverified email cannot reach authenticated OTP enrollment flows."""
     app: FastAPI = app_factory()
     sender = _CapturingOTPEmailSender()
     app.dependency_overrides[get_otp_service] = lambda: _build_otp_service(sender)
@@ -384,15 +384,9 @@ async def test_action_otp_request_requires_verified_email(
             "/auth/login",
             json={"email": "unverified-action@example.com", "password": "Password123!"},
         )
-        access_token = login.json()["access_token"]
-        request_action = await client.post(
-            "/auth/otp/request/action",
-            json={"action": "enable_otp"},
-            headers={"authorization": f"Bearer {access_token}"},
-        )
+        assert login.status_code == 400
+        assert login.json()["code"] == "email_not_verified"
 
-    assert request_action.status_code == 400
-    assert request_action.json()["code"] == "email_not_verified"
     app.dependency_overrides.clear()
 
 

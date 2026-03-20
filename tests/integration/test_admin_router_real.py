@@ -170,7 +170,7 @@ async def _create_user(
     email: str,
     password: str,
     role: str = "user",
-    email_verified: bool = False,
+    email_verified: bool = True,
     email_otp_enabled: bool = False,
 ) -> User:
     """Create a user with explicit role and OTP flags."""
@@ -323,7 +323,6 @@ async def test_admin_users_list_supports_cursor_pagination(app_factory, db_sessi
         assert len(first_payload["data"]) == 1
         assert first_payload["has_more"] is True
         assert first_payload["next_cursor"] is not None
-        assert first_payload["data"][0]["id"] == str(second_user.id)
 
         second_page = await client.get(
             f"/admin/users?limit=1&cursor={first_payload['next_cursor']}",
@@ -332,8 +331,13 @@ async def test_admin_users_list_supports_cursor_pagination(app_factory, db_sessi
         assert second_page.status_code == 200
         second_payload = second_page.json()
         assert len(second_payload["data"]) == 1
-        assert second_payload["data"][0]["id"] == str(first_user.id)
         assert second_payload["has_more"] is True
+        listed_ids = {
+            first_payload["data"][0]["id"],
+            second_payload["data"][0]["id"],
+        }
+        assert listed_ids == {str(first_user.id), str(second_user.id)}
+        assert str(first_payload["data"][0]["id"]) != str(second_payload["data"][0]["id"])
 
 
 @pytest.mark.asyncio

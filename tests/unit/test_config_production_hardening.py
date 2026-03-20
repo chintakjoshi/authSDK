@@ -9,6 +9,7 @@ import pytest
 from app.config import (
     AppSettings,
     DatabaseSettings,
+    EmailSettings,
     JWTSettings,
     OAuthSettings,
     RateLimitSettings,
@@ -63,6 +64,7 @@ def _build_settings(*, environment: str = "development") -> Settings:
             login_requests_per_minute=10,
             token_requests_per_minute=30,
         ),
+        email=EmailSettings(public_base_url="https://auth.example.com"),
         signing_keys=SigningKeySettings(rotation_overlap_seconds=900),
         webhook=WebhookSettings(queue_name="webhooks", request_timeout_seconds=10),
         admin_api_key=None,

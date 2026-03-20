@@ -147,6 +147,11 @@ def _issue_token_pair(
     return issue_method(**kwargs)
 
 
+def _password_login_requires_verified_email() -> bool:
+    """Return whether password login is blocked until email verification completes."""
+    return bool(get_settings().auth.require_verified_email_for_password_login)
+
+
 @router.post("/auth/login", response_model=TokenPairResponse | LoginOTPChallengeResponse)
 async def login(
     payload: LoginRequest,
@@ -286,6 +291,25 @@ async def login(
             status_code=401,
             detail="Invalid email or password.",
             code="invalid_credentials",
+        )
+
+    if _password_login_requires_verified_email() and not bool(
+        getattr(user, "email_verified", False)
+    ):
+        await audit_service.record(
+            db=db_session,
+            event_type="user.login.failure",
+            actor_type="user",
+            success=False,
+            request=request,
+            actor_id=str(user.id),
+            failure_reason="email_not_verified",
+            metadata={"provider": "password"},
+        )
+        return _error_response(
+            status_code=400,
+            detail="Email is not verified.",
+            code="email_not_verified",
         )
 
     if bool(getattr(user, "email_verified", False)) and bool(

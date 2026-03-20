@@ -11,6 +11,7 @@ from email.message import EmailMessage
 from functools import lru_cache
 from hashlib import sha256
 from typing import Protocol
+from urllib.parse import urljoin
 from uuid import UUID
 
 import structlog
@@ -83,12 +84,15 @@ class MailhogVerificationEmailSender:
     async def send_verification_email(self, to_email: str, verification_link: str) -> None:
         """Send a signup verification email through SMTP."""
         subject = "Verify your email"
-        body = f"Open this link to verify your account: {verification_link}"
         await asyncio.to_thread(
             self._send_blocking,
             to_email=to_email,
             subject=subject,
-            body=body,
+            body=f"Open this link to verify your account: {verification_link}",
+            html_body=(
+                "<p>Open this link to verify your account:</p>"
+                f'<p><a href="{verification_link}">{verification_link}</a></p>'
+            ),
         )
 
     async def send_password_reset_email(self, to_email: str, reset_link: str) -> None:
@@ -98,6 +102,10 @@ class MailhogVerificationEmailSender:
             to_email=to_email,
             subject="Reset your password",
             body=f"Open this link to reset your password: {reset_link}",
+            html_body=(
+                "<p>Open this link to reset your password:</p>"
+                f'<p><a href="{reset_link}">{reset_link}</a></p>'
+            ),
         )
 
     async def send_password_reset_confirmation_email(self, to_email: str) -> None:
@@ -109,13 +117,21 @@ class MailhogVerificationEmailSender:
             body="Your password was reset successfully. If this was not you, contact support.",
         )
 
-    def _send_blocking(self, to_email: str, subject: str, body: str) -> None:
+    def _send_blocking(
+        self,
+        to_email: str,
+        subject: str,
+        body: str,
+        html_body: str | None = None,
+    ) -> None:
         """Send plaintext email using stdlib SMTP client."""
         message = EmailMessage()
         message["From"] = self.email_from
         message["To"] = to_email
         message["Subject"] = subject
         message.set_content(body)
+        if html_body is not None:
+            message.add_alternative(html_body, subtype="html")
 
         with smtplib.SMTP(self.host, self.port, timeout=10) as smtp:
             smtp.send_message(message)
@@ -137,6 +153,7 @@ class LifecycleService:
         token_service: TokenService | None = None,
         brute_force_service: BruteForceProtectionService | None = None,
         auth_service_audience: str = "auth-service",
+        public_base_url: str = "http://localhost:8000",
     ) -> None:
         self._jwt_service = jwt_service
         self._signing_key_service = signing_key_service
@@ -152,6 +169,7 @@ class LifecycleService:
         self._resend_limit_count = 3
         self._dummy_password_hash = self._user_service.hash_password("auth-service-dummy-password")
         self._auth_service_audience = auth_service_audience
+        self._public_base_url = public_base_url.rstrip("/")
 
     async def signup_password(
         self,
@@ -297,24 +315,44 @@ class LifecycleService:
             raise LifecycleServiceError("Invalid token.", "invalid_token", 401)
         if user.email_verified:
             raise LifecycleServiceError("Email is already verified.", "already_verified", 400)
-        await self._enforce_resend_rate_limit(normalized_user_id)
-
-        verification_token, expires_at = await self._issue_email_verify_token(
+        await self._enforce_resend_rate_limit(f"user:{normalized_user_id}")
+        await self._resend_verification_email_for_user(
             db_session=db_session,
+            user=user,
             user_id=normalized_user_id,
         )
-        user.email_verify_token_hash = self._hash_verification_token(verification_token)
-        user.email_verify_token_expires = expires_at
-        try:
-            await db_session.flush()
-            await self._email_sender.send_verification_email(
-                to_email=user.email,
-                verification_link=self._verification_link(verification_token),
-            )
-            await db_session.commit()
-        except Exception:
-            await db_session.rollback()
-            raise
+
+    async def request_verification_email_resend(
+        self,
+        db_session: AsyncSession,
+        email: str,
+    ) -> str | None:
+        """Request a verification-email resend using only the email address."""
+        normalized_email = self._normalize_email(email)
+        if not normalized_email:
+            self._perform_dummy_password_workload("missing-user")
+            return None
+
+        await self._enforce_resend_rate_limit(
+            f"email:{self._hash_public_resend_identifier(normalized_email)}"
+        )
+        user = await self._user_service.get_user_by_email(
+            db_session=db_session,
+            email=normalized_email,
+        )
+        if user is None:
+            self._perform_dummy_password_workload(normalized_email)
+            return None
+        if user.email_verified:
+            return None
+
+        user_id = str(user.id)
+        await self._resend_verification_email_for_user(
+            db_session=db_session,
+            user=user,
+            user_id=user_id,
+        )
+        return user_id
 
     async def request_password_reset(
         self,
@@ -533,9 +571,9 @@ class LifecycleService:
                 ) from exc
             raise
 
-    async def _enforce_resend_rate_limit(self, user_id: str) -> None:
-        """Allow at most 3 resend requests per user each hour."""
-        key = f"email_verify_resend:{user_id}"
+    async def _enforce_resend_rate_limit(self, subject: str) -> None:
+        """Allow at most 3 resend requests per subject each hour."""
+        key = f"email_verify_resend:{subject}"
         try:
             count = await self._redis.incr(key)
             if count == 1:
@@ -553,6 +591,31 @@ class LifecycleService:
                 "rate_limited",
                 429,
             )
+
+    async def _resend_verification_email_for_user(
+        self,
+        db_session: AsyncSession,
+        *,
+        user: User,
+        user_id: str,
+    ) -> None:
+        """Issue, persist, and send a fresh verification link for one user."""
+        verification_token, expires_at = await self._issue_email_verify_token(
+            db_session=db_session,
+            user_id=user_id,
+        )
+        user.email_verify_token_hash = self._hash_verification_token(verification_token)
+        user.email_verify_token_expires = expires_at
+        try:
+            await db_session.flush()
+            await self._email_sender.send_verification_email(
+                to_email=user.email,
+                verification_link=self._verification_link(verification_token),
+            )
+            await db_session.commit()
+        except Exception:
+            await db_session.rollback()
+            raise
 
     async def _ensure_access_token_not_revoked(self, claims: dict[str, object]) -> None:
         """Reject access tokens that have been blocklisted on logout."""
@@ -637,14 +700,22 @@ class LifecycleService:
         self._user_service.verify_password(candidate, self._dummy_password_hash)
 
     @staticmethod
-    def _verification_link(token: str) -> str:
-        """Build signup verification endpoint path."""
-        return f"/auth/verify-email?token={token}"
+    def _normalize_email(email: str) -> str:
+        """Normalize an email for case-insensitive comparisons."""
+        return email.strip().lower()
 
     @staticmethod
-    def _password_reset_link(token: str) -> str:
+    def _hash_public_resend_identifier(value: str) -> str:
+        """Hash public resend identifiers before using them in Redis keys."""
+        return sha256(value.encode("utf-8")).hexdigest()
+
+    def _verification_link(self, token: str) -> str:
+        """Build signup verification endpoint path."""
+        return urljoin(f"{self._public_base_url}/", f"auth/verify-email?token={token}")
+
+    def _password_reset_link(self, token: str) -> str:
         """Build password reset validation endpoint path."""
-        return f"/auth/password/reset?token={token}"
+        return urljoin(f"{self._public_base_url}/", f"auth/password/reset?token={token}")
 
 
 @lru_cache
@@ -674,4 +745,5 @@ def get_lifecycle_service() -> LifecycleService:
         email_verify_ttl_seconds=settings.email.email_verify_ttl_seconds,
         password_reset_ttl_seconds=settings.email.password_reset_ttl_seconds,
         auth_service_audience=settings.app.service,
+        public_base_url=str(settings.email.public_base_url),
     )

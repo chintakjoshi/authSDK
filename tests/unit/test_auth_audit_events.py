@@ -33,7 +33,7 @@ class _UserStub:
     email: str
     password_hash: str = "hashed-password"
     role: str = "user"
-    email_verified: bool = False
+    email_verified: bool = True
     email_otp_enabled: bool = False
 
 
