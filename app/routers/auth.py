@@ -757,14 +757,16 @@ async def introspect_api_key(
         target_id=result.key_id,
         target_type="api_key",
     )
+    response_content = {
+        "valid": True,
+        "user_id": result.user_id,
+        "scopes": result.scopes or [],
+        "key_id": result.key_id,
+        "expires_at": result.expires_at,
+    }
+    if result.service:
+        response_content["service"] = result.service
     return JSONResponse(
         status_code=200,
-        content={
-            "valid": True,
-            "user_id": result.user_id,
-            "scopes": result.scopes or [],
-            "key_id": result.key_id,
-            "expires_at": result.expires_at,
-            "service": result.service,
-        },
+        content=response_content,
     )
