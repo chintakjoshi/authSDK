@@ -62,6 +62,39 @@ async def test_auth_introspect_returns_valid_payload() -> None:
 
 
 @pytest.mark.asyncio
+async def test_auth_introspect_includes_service_when_present() -> None:
+    """Returns service identity when available on the introspection result."""
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_database_session] = _fake_db_dependency
+    app.dependency_overrides[get_api_key_service] = lambda: _APIKeyServiceStub(
+        result=APIKeyIntrospectionResult(
+            valid=True,
+            user_id="user-1",
+            scopes=["svc:read"],
+            key_id="key-1",
+            expires_at="2030-01-01T00:00:00+00:00",
+            service="svc",
+        )
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post("/auth/introspect", json={"api_key": "sk_test_key"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "valid": True,
+        "user_id": "user-1",
+        "scopes": ["svc:read"],
+        "key_id": "key-1",
+        "expires_at": "2030-01-01T00:00:00+00:00",
+        "service": "svc",
+    }
+
+
+@pytest.mark.asyncio
 async def test_auth_introspect_returns_invalid_payload() -> None:
     """Returns failure contract for invalid key."""
     app = FastAPI()
