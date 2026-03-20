@@ -47,7 +47,7 @@ async def test_password_login_locks_after_fifth_failure(app_factory, user_factor
 async def test_successful_login_clears_failed_attempt_counter(app_factory, user_factory) -> None:
     """A successful login resets accumulated failed attempts for the account."""
     app: FastAPI = app_factory()
-    await user_factory("counter-reset@example.com", "Password123!")
+    await user_factory("counter-reset@example.com", "Password123!", email_verified=True)
 
     async with AsyncClient(
         transport=ASGITransport(app=app),

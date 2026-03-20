@@ -197,6 +197,7 @@ def _service(
         password_reset_ttl_seconds=1800,
         token_service=token_service,  # type: ignore[arg-type]
         brute_force_service=brute_force_service,  # type: ignore[arg-type]
+        public_base_url="http://localhost:8000",
     )
 
 
@@ -232,6 +233,7 @@ async def test_mailhog_sender_covers_to_thread_and_smtp(monkeypatch) -> None:
     await sender.send_password_reset_confirmation_email("user@example.com")
     assert len(messages) == 2
     assert messages[0]["Subject"] == "Verify your email"
+    assert messages[0].is_multipart()
     assert messages[1]["Subject"] == "Your password has been reset"
 
 

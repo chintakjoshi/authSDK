@@ -32,6 +32,7 @@ async def test_apikey_create_list_revoke_and_introspect_flow(app_factory) -> Non
                 await session.execute(select(User).where(User.email == "keys-admin@example.com"))
             ).scalar_one()
             user.role = "admin"
+            user.email_verified = True
             await session.commit()
 
         login_response = await client.post(
@@ -123,6 +124,7 @@ async def test_auth_introspect_returns_expired_for_expired_key(app_factory) -> N
                 await session.execute(select(User).where(User.email == "billing-admin@example.com"))
             ).scalar_one()
             user.role = "admin"
+            user.email_verified = True
             await session.commit()
 
         login_response = await client.post(

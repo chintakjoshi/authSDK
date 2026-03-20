@@ -117,8 +117,13 @@ async def test_webhook_registration_and_login_emit_session_created_delivery(
 
     app: FastAPI = app_factory()
     app.dependency_overrides[get_webhook_service] = lambda: webhook_service
-    await user_factory("hook-user@example.com", "Password123!")
-    await user_factory("hook-admin@example.com", "Password123!", role="admin")
+    await user_factory("hook-user@example.com", "Password123!", email_verified=True)
+    await user_factory(
+        "hook-admin@example.com",
+        "Password123!",
+        role="admin",
+        email_verified=True,
+    )
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -251,7 +256,12 @@ async def test_webhook_registration_blocks_localhost_urls(
     webhook_service = _build_webhook_service(sender=sender, queue=queue, scheduler=scheduler)
     app: FastAPI = app_factory()
     app.dependency_overrides[get_webhook_service] = lambda: webhook_service
-    await user_factory("hook-admin-block@example.com", "Password123!", role="admin")
+    await user_factory(
+        "hook-admin-block@example.com",
+        "Password123!",
+        role="admin",
+        email_verified=True,
+    )
 
     async with AsyncClient(
         transport=ASGITransport(app=app),

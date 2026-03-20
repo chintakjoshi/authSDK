@@ -146,8 +146,13 @@ async def test_auth_router_persists_success_and_failure_audit_events(
 ) -> None:
     """Password auth and API key flows store expected audit event types and outcomes."""
     app: FastAPI = app_factory()
-    await user_factory("alice@example.com", "Password123!")
-    await user_factory("audit-admin@example.com", "Password123!", role="admin")
+    await user_factory("alice@example.com", "Password123!", email_verified=True)
+    await user_factory(
+        "audit-admin@example.com",
+        "Password123!",
+        role="admin",
+        email_verified=True,
+    )
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -333,7 +338,12 @@ async def test_apikey_routes_persist_success_and_failure_audit_events(
     """API key create/list/revoke paths persist expected created/used/revoked audit rows."""
     app: FastAPI = app_factory()
     missing_key_id = str(uuid4())
-    await user_factory("audit-keys-admin@example.com", "Password123!", role="admin")
+    await user_factory(
+        "audit-keys-admin@example.com",
+        "Password123!",
+        role="admin",
+        email_verified=True,
+    )
 
     async with AsyncClient(
         transport=ASGITransport(app=app),

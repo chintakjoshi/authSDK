@@ -15,6 +15,7 @@ from app.config import get_settings
 from app.core.jwt import get_jwt_service
 from app.core.sessions import get_redis_client
 from app.core.signing_keys import get_signing_key_service
+from app.models.session import Session
 from app.models.user import User
 from app.services.lifecycle_service import LifecycleService, get_lifecycle_service
 from app.services.user_service import UserService
@@ -48,6 +49,7 @@ def _build_lifecycle_service(sender: _CapturingEmailSender) -> LifecycleService:
         redis_client=get_redis_client(),
         email_sender=sender,
         email_verify_ttl_seconds=settings.email.email_verify_ttl_seconds,
+        public_base_url=str(settings.email.public_base_url),
     )
 
 
@@ -75,6 +77,9 @@ async def test_verify_email_happy_path_marks_user_verified(app_factory, db_sessi
         assert signup.status_code == 201
         assert signup.json()["email_verified"] is False
         assert len(sender.messages) == 1
+        assert sender.messages[0].verification_link.startswith(
+            "http://localhost:8000/auth/verify-email?token="
+        )
         token = _extract_token(sender.messages[0].verification_link)
 
         verify = await client.get("/auth/verify-email", params={"token": token})
@@ -156,8 +161,8 @@ async def test_verify_email_rejects_already_used_link(app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_verify_email_resend_rate_limit_enforced_per_user(app_factory) -> None:
-    """Resend endpoint allows 3 requests per hour and blocks the 4th."""
+async def test_signup_login_requires_email_verification(app_factory, db_session) -> None:
+    """New password users cannot log in until they verify their email."""
     app: FastAPI = app_factory()
     sender = _CapturingEmailSender()
     app.dependency_overrides[get_lifecycle_service] = lambda: _build_lifecycle_service(sender)
@@ -176,16 +181,193 @@ async def test_verify_email_resend_rate_limit_enforced_per_user(app_factory) -> 
             "/auth/login",
             json={"email": "resend@example.com", "password": "Password123!"},
         )
+        assert login.status_code == 400
+        assert login.json() == {
+            "detail": "Email is not verified.",
+            "code": "email_not_verified",
+        }
+
+    user = (
+        await db_session.execute(
+            select(User).where(User.email == "resend@example.com", User.deleted_at.is_(None))
+        )
+    ).scalar_one()
+    sessions = (
+        (
+            await db_session.execute(
+                select(Session).where(Session.user_id == user.id, Session.deleted_at.is_(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert sessions == []
+    assert len(sender.messages) == 1
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_public_resend_verification_email_resends_for_unverified_user(app_factory) -> None:
+    """Public resend issues a fresh verification link for an unverified account."""
+    app: FastAPI = app_factory()
+    sender = _CapturingEmailSender()
+    app.dependency_overrides[get_lifecycle_service] = lambda: _build_lifecycle_service(sender)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        signup = await client.post(
+            "/auth/signup",
+            json={"email": "pending@example.com", "password": "Password123!"},
+        )
+        assert signup.status_code == 201
+        assert len(sender.messages) == 1
+
+        resend = await client.post(
+            "/auth/verify-email/resend/request",
+            json={"email": "pending@example.com"},
+        )
+        assert resend.status_code == 200
+        assert resend.json() == {"sent": True}
+        assert len(sender.messages) == 2
+        assert sender.messages[-1].verification_link.startswith(
+            "http://localhost:8000/auth/verify-email?token="
+        )
+
+        token = _extract_token(sender.messages[-1].verification_link)
+        verify = await client.get("/auth/verify-email", params={"token": token})
+        assert verify.status_code == 200
+        assert verify.json() == {"verified": True}
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_resend_rotates_verification_link_and_only_latest_link_succeeds(
+    app_factory,
+    db_session,
+) -> None:
+    """A resend replaces the previous verification token and login succeeds after verification."""
+    app: FastAPI = app_factory()
+    sender = _CapturingEmailSender()
+    app.dependency_overrides[get_lifecycle_service] = lambda: _build_lifecycle_service(sender)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        signup = await client.post(
+            "/auth/signup",
+            json={"email": "rotate@example.com", "password": "Password123!"},
+        )
+        assert signup.status_code == 201
+
+        first_token = _extract_token(sender.messages[0].verification_link)
+        resend = await client.post(
+            "/auth/verify-email/resend/request",
+            json={"email": "rotate@example.com"},
+        )
+        assert resend.status_code == 200
+        second_token = _extract_token(sender.messages[-1].verification_link)
+        assert second_token != first_token
+
+        stale_verify = await client.get("/auth/verify-email", params={"token": first_token})
+        assert stale_verify.status_code == 400
+        assert stale_verify.json()["code"] == "invalid_verify_token"
+
+        fresh_verify = await client.get("/auth/verify-email", params={"token": second_token})
+        assert fresh_verify.status_code == 200
+        assert fresh_verify.json() == {"verified": True}
+
+        login = await client.post(
+            "/auth/login",
+            json={"email": "rotate@example.com", "password": "Password123!"},
+        )
         assert login.status_code == 200
-        access_token = login.json()["access_token"]
-        headers = {"authorization": f"Bearer {access_token}"}
+        assert "access_token" in login.json()
+
+    user = (
+        await db_session.execute(
+            select(User).where(User.email == "rotate@example.com", User.deleted_at.is_(None))
+        )
+    ).scalar_one()
+    assert user.email_verified is True
+    assert user.email_verify_token_hash is None
+    assert user.email_verify_token_expires is None
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_public_resend_hides_unknown_and_verified_account_state(app_factory) -> None:
+    """Public resend returns the same success response for missing and already-verified emails."""
+    app: FastAPI = app_factory()
+    sender = _CapturingEmailSender()
+    app.dependency_overrides[get_lifecycle_service] = lambda: _build_lifecycle_service(sender)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        missing = await client.post(
+            "/auth/verify-email/resend/request",
+            json={"email": "missing-user@example.com"},
+        )
+        assert missing.status_code == 200
+        assert missing.json() == {"sent": True}
+        assert sender.messages == []
+
+        signup = await client.post(
+            "/auth/signup",
+            json={"email": "verified-again@example.com", "password": "Password123!"},
+        )
+        assert signup.status_code == 201
+        token = _extract_token(sender.messages[0].verification_link)
+
+        verify = await client.get("/auth/verify-email", params={"token": token})
+        assert verify.status_code == 200
+        assert len(sender.messages) == 1
+
+        verified = await client.post(
+            "/auth/verify-email/resend/request",
+            json={"email": "verified-again@example.com"},
+        )
+        assert verified.status_code == 200
+        assert verified.json() == {"sent": True}
+        assert len(sender.messages) == 1
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_public_resend_verification_email_rate_limit_is_enforced(app_factory) -> None:
+    """Public resend endpoint allows 3 requests per hour and blocks the 4th."""
+    app: FastAPI = app_factory()
+    sender = _CapturingEmailSender()
+    app.dependency_overrides[get_lifecycle_service] = lambda: _build_lifecycle_service(sender)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        signup = await client.post(
+            "/auth/signup",
+            json={"email": "rate-limit@example.com", "password": "Password123!"},
+        )
+        assert signup.status_code == 201
 
         for _ in range(3):
-            resend = await client.post("/auth/verify-email/resend", headers=headers)
+            resend = await client.post(
+                "/auth/verify-email/resend/request",
+                json={"email": "rate-limit@example.com"},
+            )
             assert resend.status_code == 200
             assert resend.json() == {"sent": True}
 
-        limited = await client.post("/auth/verify-email/resend", headers=headers)
+        limited = await client.post(
+            "/auth/verify-email/resend/request",
+            json={"email": "rate-limit@example.com"},
+        )
         assert limited.status_code == 429
         assert limited.json()["code"] == "rate_limited"
 

@@ -168,6 +168,7 @@ def _build_service(
         email_sender=email_sender or _EmailSenderStub(),  # type: ignore[arg-type]
         email_verify_ttl_seconds=86400,
         password_reset_ttl_seconds=3600,
+        public_base_url="http://localhost:8000",
     )
 
 

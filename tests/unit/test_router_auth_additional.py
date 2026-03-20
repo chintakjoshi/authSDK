@@ -171,6 +171,8 @@ def _db() -> object:
 @pytest.mark.asyncio
 async def test_auth_helpers_and_login_fail_closed_branches(monkeypatch) -> None:
     """Auth helpers and login cover missing-user and brute-force failure wrappers."""
+    monkeypatch.setattr(auth_router, "_password_login_requires_verified_email", lambda: True)
+
     assert auth_router._extract_bearer_token(_request(path="/auth/logout")) is None
     assert (
         auth_router._extract_bearer_token(
@@ -225,7 +227,7 @@ async def test_auth_helpers_and_login_fail_closed_branches(monkeypatch) -> None:
         id=uuid4(),
         email="user@example.com",
         password_hash="hashed",
-        email_verified=False,
+        email_verified=True,
         email_otp_enabled=False,
         role="user",
     )
@@ -262,6 +264,38 @@ async def test_auth_helpers_and_login_fail_closed_branches(monkeypatch) -> None:
         webhook_service=_WebhookStub(),  # type: ignore[arg-type]
     )
     assert login_backend_error.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_login_allows_unverified_user_when_policy_disabled(monkeypatch) -> None:
+    """Config can explicitly allow password login before email verification."""
+    user_service = _UserServiceStub()
+    user_service.user = SimpleNamespace(
+        id=uuid4(),
+        email="user@example.com",
+        password_hash="hashed",
+        email_verified=False,
+        email_otp_enabled=False,
+        role="user",
+    )
+    user_service.verify_password_result = True
+    monkeypatch.setattr(auth_router, "_password_login_requires_verified_email", lambda: False)
+
+    response = await auth_router.login(
+        payload=LoginRequest(email="user@example.com", password="Password123!"),
+        request=_request(path="/auth/login"),
+        db_session=_db(),  # type: ignore[arg-type]
+        user_service=user_service,  # type: ignore[arg-type]
+        token_service=_TokenServiceStub(),  # type: ignore[arg-type]
+        session_service=_SessionStub(),  # type: ignore[arg-type]
+        otp_service=SimpleNamespace(),  # type: ignore[arg-type]
+        brute_force_service=_BruteForceStub(),  # type: ignore[arg-type]
+        audit_service=_AuditStub(),  # type: ignore[arg-type]
+        webhook_service=_WebhookStub(),  # type: ignore[arg-type]
+    )
+
+    assert response.access_token == "access-token"
+    assert response.refresh_token == "refresh-token"
 
 
 @pytest.mark.asyncio

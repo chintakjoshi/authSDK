@@ -72,6 +72,7 @@ def _production_settings() -> Settings:
             "login_requests_per_minute": 1000,
             "token_requests_per_minute": 1000,
         },
+        email={"public_base_url": "https://auth.example.com"},
         signing_keys={"rotation_overlap_seconds": 900, "encryption_key": "signing-secret"},
         webhook={
             "queue_name": "webhooks",
@@ -122,6 +123,7 @@ async def test_create_app_enforces_trusted_hosts_and_private_metrics(monkeypatch
     monkeypatch.setenv("RATE_LIMIT__DEFAULT_REQUESTS_PER_MINUTE", "1000")
     monkeypatch.setenv("RATE_LIMIT__LOGIN_REQUESTS_PER_MINUTE", "1000")
     monkeypatch.setenv("RATE_LIMIT__TOKEN_REQUESTS_PER_MINUTE", "1000")
+    monkeypatch.setenv("EMAIL__PUBLIC_BASE_URL", "https://auth.example.com")
     monkeypatch.setenv("SIGNING_KEYS__ENCRYPTION_KEY", "signing-secret")
     monkeypatch.setenv("WEBHOOK__SECRET_ENCRYPTION_KEY", "webhook-secret")
     get_settings.cache_clear()

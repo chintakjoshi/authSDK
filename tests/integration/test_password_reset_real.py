@@ -58,6 +58,7 @@ def _build_lifecycle_service(sender: _CapturingLifecycleEmailSender) -> Lifecycl
         email_sender=sender,
         email_verify_ttl_seconds=settings.email.email_verify_ttl_seconds,
         password_reset_ttl_seconds=settings.email.password_reset_ttl_seconds,
+        public_base_url=str(settings.email.public_base_url),
     )
 
 
@@ -77,7 +78,7 @@ async def test_password_reset_happy_path_revokes_existing_sessions(
     app: FastAPI = app_factory()
     sender = _CapturingLifecycleEmailSender()
     app.dependency_overrides[get_lifecycle_service] = lambda: _build_lifecycle_service(sender)
-    await user_factory("reset-user@example.com", "Password123!")
+    await user_factory("reset-user@example.com", "Password123!", email_verified=True)
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -96,6 +97,9 @@ async def test_password_reset_happy_path_revokes_existing_sessions(
         assert forgot.status_code == 200
         assert forgot.json() == {"sent": True}
         assert len(sender.reset_emails) == 1
+        assert sender.reset_emails[0].reset_link.startswith(
+            "http://localhost:8000/auth/password/reset?token="
+        )
         token = _extract_token(sender.reset_emails[0].reset_link)
 
         validate = await client.get("/auth/password/reset", params={"token": token})
@@ -154,6 +158,90 @@ async def test_password_reset_happy_path_revokes_existing_sessions(
 
 
 @pytest.mark.asyncio
+async def test_password_reset_revokes_all_active_sessions_and_access_tokens(
+    app_factory,
+    user_factory,
+    db_session,
+) -> None:
+    """Resetting a password revokes every active session, not just the initiating device."""
+    app: FastAPI = app_factory()
+    sender = _CapturingLifecycleEmailSender()
+    app.dependency_overrides[get_lifecycle_service] = lambda: _build_lifecycle_service(sender)
+    await user_factory("multi-session@example.com", "Password123!", email_verified=True)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        login_one = await client.post(
+            "/auth/login",
+            json={"email": "multi-session@example.com", "password": "Password123!"},
+        )
+        assert login_one.status_code == 200
+
+        login_two = await client.post(
+            "/auth/login",
+            json={"email": "multi-session@example.com", "password": "Password123!"},
+        )
+        assert login_two.status_code == 200
+
+        forgot = await client.post(
+            "/auth/password/forgot",
+            json={"email": "multi-session@example.com"},
+        )
+        assert forgot.status_code == 200
+        token = _extract_token(sender.reset_emails[0].reset_link)
+
+        reset = await client.post(
+            "/auth/password/reset",
+            json={"token": token, "new_password": "NewPassword123!"},
+        )
+        assert reset.status_code == 200
+
+        for refresh_token in [
+            login_one.json()["refresh_token"],
+            login_two.json()["refresh_token"],
+        ]:
+            refresh = await client.post("/auth/token", json={"refresh_token": refresh_token})
+            assert refresh.status_code == 401
+            assert refresh.json()["code"] == "session_expired"
+
+        for access_token in [
+            login_one.json()["access_token"],
+            login_two.json()["access_token"],
+        ]:
+            validate = await client.get(
+                "/auth/validate",
+                headers={"authorization": f"Bearer {access_token}"},
+            )
+            assert validate.status_code == 401
+            assert validate.json()["code"] == "session_expired"
+
+        new_login = await client.post(
+            "/auth/login",
+            json={"email": "multi-session@example.com", "password": "NewPassword123!"},
+        )
+        assert new_login.status_code == 200
+
+    user = (
+        await db_session.execute(
+            select(User).where(User.email == "multi-session@example.com", User.deleted_at.is_(None))
+        )
+    ).scalar_one()
+    sessions = list(
+        (
+            await db_session.execute(
+                select(Session).where(Session.user_id == user.id, Session.deleted_at.is_(None))
+            )
+        ).scalars()
+    )
+    assert len(sessions) == 3
+    revoked_sessions = [session for session in sessions if session.revoked_at is not None]
+    assert len(revoked_sessions) == 2
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_password_reset_rejects_expired_and_already_used_tokens(
     app_factory,
     user_factory,
@@ -189,6 +277,30 @@ async def test_password_reset_rejects_expired_and_already_used_tokens(
         expired = await client.get("/auth/password/reset", params={"token": token})
         assert expired.status_code == 400
         assert expired.json()["code"] == "invalid_reset_token"
+
+        forgot_again = await client.post(
+            "/auth/password/forgot",
+            json={"email": "expired-reset@example.com"},
+        )
+        assert forgot_again.status_code == 200
+        fresh_token = _extract_token(sender.reset_emails[-1].reset_link)
+
+        complete = await client.post(
+            "/auth/password/reset",
+            json={"token": fresh_token, "new_password": "NewPassword123!"},
+        )
+        assert complete.status_code == 200
+
+        used_validate = await client.get("/auth/password/reset", params={"token": fresh_token})
+        assert used_validate.status_code == 400
+        assert used_validate.json()["code"] == "invalid_reset_token"
+
+        used_reset = await client.post(
+            "/auth/password/reset",
+            json={"token": fresh_token, "new_password": "AnotherPassword123!"},
+        )
+        assert used_reset.status_code == 400
+        assert used_reset.json()["code"] == "invalid_reset_token"
 
     app.dependency_overrides.clear()
 

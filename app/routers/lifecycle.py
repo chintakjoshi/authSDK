@@ -17,6 +17,7 @@ from app.schemas.lifecycle import (
     ForgotPasswordResponse,
     ReauthRequest,
     ReauthResponse,
+    ResendVerifyEmailRequest,
     ResendVerifyEmailResponse,
     ResetPasswordRequest,
     ResetPasswordResponse,
@@ -231,6 +232,55 @@ async def resend_verification_email(
         target_id=user_id,
         target_type="user",
         metadata={"operation": "resend"},
+    )
+    return ResendVerifyEmailResponse(sent=True)
+
+
+@router.post("/auth/verify-email/resend/request", response_model=ResendVerifyEmailResponse)
+async def request_verification_email_resend(
+    payload: ResendVerifyEmailRequest,
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    lifecycle_service: Annotated[LifecycleService, Depends(get_lifecycle_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
+) -> ResendVerifyEmailResponse | JSONResponse:
+    """Request a verification resend without requiring an authenticated session."""
+    user_id: str | None = None
+    try:
+        user_id = await lifecycle_service.request_verification_email_resend(
+            db_session=db_session,
+            email=payload.email,
+        )
+    except LifecycleServiceError as exc:
+        await audit_service.record(
+            db=db_session,
+            event_type="user.email.verification_resent",
+            actor_type="user",
+            success=False,
+            request=request,
+            actor_id=user_id,
+            target_id=user_id,
+            target_type="user",
+            failure_reason=exc.code,
+            metadata={"operation": "resend_request"},
+        )
+        return _error_response(
+            status_code=exc.status_code,
+            detail=exc.detail,
+            code=exc.code,
+            headers=exc.headers,
+        )
+
+    await audit_service.record(
+        db=db_session,
+        event_type="user.email.verification_resent",
+        actor_type="user",
+        success=True,
+        request=request,
+        actor_id=user_id,
+        target_id=user_id,
+        target_type="user",
+        metadata={"operation": "resend_request"},
     )
     return ResendVerifyEmailResponse(sent=True)
 

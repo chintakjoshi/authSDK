@@ -99,6 +99,12 @@ class RateLimitSettings(BaseModel):
     token_requests_per_minute: int = Field(default=30, ge=1)
 
 
+class AuthSettings(BaseModel):
+    """Authentication policy controls."""
+
+    require_verified_email_for_password_login: bool = True
+
+
 class SigningKeySettings(BaseModel):
     """Signing-key rotation and encryption settings."""
 
@@ -112,6 +118,7 @@ class EmailSettings(BaseModel):
     mailhog_host: str = "localhost"
     mailhog_port: int = Field(default=1025, ge=1, le=65535)
     email_from: str = "auth@localhost"
+    public_base_url: AnyHttpUrl = "http://localhost:8000"
     email_verify_ttl_seconds: int = Field(default=86400, ge=1)
     password_reset_ttl_seconds: int = Field(default=3600, ge=1)
     otp_code_length: int = Field(default=6, ge=4, le=12)
@@ -164,6 +171,7 @@ class Settings(BaseSettings):
     oauth: OAuthSettings
     saml: SAMLSettings
     rate_limit: RateLimitSettings
+    auth: AuthSettings = AuthSettings()
     signing_keys: SigningKeySettings = SigningKeySettings()
     email: EmailSettings = EmailSettings()
     webhook: WebhookSettings = WebhookSettings()
@@ -194,6 +202,8 @@ class Settings(BaseSettings):
             raise ValueError("saml.sp_acs_url must use https in production.")
         if self.saml.idp_sso_url.scheme != "https":
             raise ValueError("saml.idp_sso_url must use https in production.")
+        if not str(self.email.public_base_url).startswith("https://"):
+            raise ValueError("email.public_base_url must use https in production.")
 
         return self
 

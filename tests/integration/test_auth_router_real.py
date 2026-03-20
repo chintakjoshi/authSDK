@@ -16,7 +16,7 @@ async def test_auth_login_refresh_logout_happy_path(
 ) -> None:
     """Password login, refresh rotation, and logout work end-to-end."""
     app: FastAPI = app_factory()
-    await user_factory("alice@example.com", "Password123!")
+    await user_factory("alice@example.com", "Password123!", email_verified=True)
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
@@ -35,7 +35,7 @@ async def test_auth_login_refresh_logout_happy_path(
             login_payload["access_token"], expected_type="access"
         )
         assert login_access_claims["email"] == "alice@example.com"
-        assert login_access_claims["email_verified"] is False
+        assert login_access_claims["email_verified"] is True
         assert login_access_claims["email_otp_enabled"] is False
         assert login_access_claims["role"] == "user"
         assert login_access_claims["scopes"] == []
@@ -52,7 +52,7 @@ async def test_auth_login_refresh_logout_happy_path(
             refresh_payload["access_token"], expected_type="access"
         )
         assert refresh_access_claims["email"] == "alice@example.com"
-        assert refresh_access_claims["email_verified"] is False
+        assert refresh_access_claims["email_verified"] is True
         assert refresh_access_claims["email_otp_enabled"] is False
         assert refresh_access_claims["role"] == "user"
         assert refresh_access_claims["scopes"] == []
@@ -71,6 +71,31 @@ async def test_auth_login_refresh_logout_happy_path(
         )
         assert refresh_after_logout.status_code == 401
         assert refresh_after_logout.json()["code"] == "session_expired"
+
+
+@pytest.mark.asyncio
+async def test_auth_login_rejects_unverified_email(
+    app_factory,
+    user_factory,
+) -> None:
+    """Unverified users must verify email before password login succeeds."""
+    app: FastAPI = app_factory()
+    await user_factory("pending@example.com", "Password123!", email_verified=False)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/auth/login",
+            json={"email": "pending@example.com", "password": "Password123!"},
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "detail": "Email is not verified.",
+        "code": "email_not_verified",
+    }
 
 
 @pytest.mark.asyncio
@@ -153,7 +178,7 @@ async def test_reauth_issues_fresh_access_token_without_rotating_refresh(
 ) -> None:
     """Re-authentication returns a newer auth_time while leaving the session refresh flow intact."""
     app: FastAPI = app_factory()
-    await user_factory("reauth-user@example.com", "Password123!")
+    await user_factory("reauth-user@example.com", "Password123!", email_verified=True)
 
     async with AsyncClient(
         transport=ASGITransport(app=app),
