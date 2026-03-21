@@ -28,7 +28,7 @@ dependencies = [
   "python3-saml==1.16.0",
   "redis==7.3.0",
   "rq==1.16.2",
-  "rq-scheduler==0.13.1",
+  "rq-scheduler==0.14.0",
   "sqlalchemy==2.0.48",
   "starlette==0.41.3",
   "structlog==25.5.0",
