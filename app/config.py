@@ -133,6 +133,8 @@ class WebhookSettings(BaseModel):
     queue_name: str = "webhooks"
     request_timeout_seconds: int = Field(default=10, ge=1)
     response_body_max_chars: int = Field(default=1000, ge=1)
+    worker_ttl_seconds: int = Field(default=120, ge=30)
+    redis_health_check_interval_seconds: int = Field(default=30, ge=0)
     secret_encryption_key: SecretStr | None = None
 
 

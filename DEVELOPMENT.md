@@ -53,7 +53,10 @@ Services started:
 
 - `postgres` (`postgres:16`)
 - `redis` (`redis:7`)
+- `mailhog` (local email inspection)
 - `auth-service` (FastAPI + Alembic migration on startup)
+- `webhook-worker` (RQ worker for immediate webhook delivery jobs)
+- `webhook-scheduler` (RQ scheduler for delayed retries and retention jobs)
 
 ## 4. Verify service health
 

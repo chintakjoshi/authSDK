@@ -61,6 +61,17 @@ Checks:
 2. Confirm code is used with the matching challenge/action.
 3. Retry with a new challenge/code.
 
+## Webhook Worker Stops After Several Idle Minutes
+
+Common causes:
+- the Redis network path drops long-idle TCP sessions
+- the webhook worker is blocking on one long dequeue window and exits on the resulting Redis timeout
+
+Checks:
+1. Inspect `webhook-worker` logs for `Redis connection timeout, quitting...`.
+2. Confirm the worker and scheduler containers are both running.
+3. If your Redis path sits behind a proxy or load balancer, lower `WEBHOOK__WORKER_TTL_SECONDS` so the dequeue wait stays below that idle timeout and keep `WEBHOOK__REDIS_HEALTH_CHECK_INTERVAL_SECONDS` enabled.
+
 ## Local Stack Not Starting
 
 Checks:
