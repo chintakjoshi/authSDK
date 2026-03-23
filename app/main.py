@@ -20,7 +20,12 @@ def create_app() -> FastAPI:
     settings = get_settings()
     configure_structlog(settings)
 
-    app = FastAPI(title=settings.app.service)
+    app = FastAPI(
+        title=settings.app.service,
+        docs_url="/docs",
+        redoc_url=None,
+        openapi_url="/openapi.json",
+    )
     register_exception_handlers(app, environment=settings.app.environment)
 
     if settings.app.allowed_hosts:

@@ -16,7 +16,7 @@ from app.models.webhook_endpoint import WebhookEndpoint
 from app.services.m2m_service import M2MService
 from app.services.user_service import UserService
 
-DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres@localhost:5432/auth_service"
+DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/auth_service"
 DEFAULT_HOST = "http://localhost:8000"
 
 

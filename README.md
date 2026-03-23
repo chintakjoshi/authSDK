@@ -171,7 +171,10 @@ curl http://localhost:8000/health/ready
 Full step-by-step guide: `DEVELOPMENT.md`.
 
 The service is exposed at `http://localhost:8000`.
+Swagger UI is exposed at `http://localhost:8000/docs`.
 Mailhog is exposed at `http://localhost:8025` for verification-email inspection.
+Adminer is exposed at `http://localhost:8080` for local Postgres inspection.
+Use `postgres` / `postgres` / `auth_service` when logging into Adminer locally.
 
 ## Common Next Steps
 

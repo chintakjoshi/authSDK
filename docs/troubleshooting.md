@@ -82,3 +82,16 @@ Checks:
    `docker compose -f docker/docker-compose.yml logs -f auth-service`
 4. Verify health:
    `curl http://localhost:8000/health/ready`
+
+Helpful local UIs once the stack is up:
+- Swagger UI: `http://localhost:8000/docs`
+- Adminer: `http://localhost:8080`
+  - server: `postgres`
+  - username: `postgres`
+  - password: `postgres`
+  - database: `auth_service`
+
+If you want the local database itself to enforce that password instead of the
+older `trust` auth mode, recreate the Postgres volume once:
+`docker compose -f docker/docker-compose.yml down -v`
+`docker compose -f docker/docker-compose.yml up -d --build`

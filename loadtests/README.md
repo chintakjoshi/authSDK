@@ -20,7 +20,7 @@ docker compose -f docker/docker-compose.yml up -d
 
 2. Ensure the host-side tools point at local Postgres:
 ```bash
-set DATABASE__URL=postgresql+asyncpg://postgres@localhost:5432/auth_service
+set DATABASE__URL=postgresql+asyncpg://postgres:postgres@localhost:5432/auth_service
 ```
 
 3. Seed the load-test fixtures:
