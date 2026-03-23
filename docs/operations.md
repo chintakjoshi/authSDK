@@ -56,6 +56,11 @@ For webhook delivery, run:
 
 These are already modeled in `docker/docker-compose.yml`.
 The scheduler process also registers the recurring retention-purge job when retention is enabled.
+The webhook worker keeps its blocking dequeue window below common managed-Redis
+idle timeouts by default. If your Redis path is behind a stricter load balancer
+or proxy, tune:
+- `WEBHOOK__WORKER_TTL_SECONDS`
+- `WEBHOOK__REDIS_HEALTH_CHECK_INTERVAL_SECONDS`
 
 ## Audit and Security Validation
 

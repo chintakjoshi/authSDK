@@ -731,9 +731,14 @@ class WebhookService:
 
 @lru_cache
 def get_webhook_redis_connection() -> Redis:
-    """Create a sync Redis client for RQ queueing and scheduling."""
+    """Create a sync Redis client for RQ queueing with connection health checks."""
     settings = get_settings()
-    return Redis.from_url(settings.redis.url, decode_responses=False)
+    return Redis.from_url(
+        settings.redis.url,
+        decode_responses=False,
+        socket_keepalive=True,
+        health_check_interval=settings.webhook.redis_health_check_interval_seconds,
+    )
 
 
 @lru_cache
