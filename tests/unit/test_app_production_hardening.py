@@ -83,10 +83,8 @@ def _production_settings() -> Settings:
     )
 
 
-@pytest.mark.asyncio
-async def test_create_app_enforces_trusted_hosts_and_private_metrics(monkeypatch) -> None:
-    """Production app enforces host allowlisting and admin-only metrics."""
-    settings = _production_settings()
+def _seed_production_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Seed the minimum environment required to import the production app module."""
     monkeypatch.setenv("APP__ENVIRONMENT", "production")
     monkeypatch.setenv("APP__SERVICE", "auth-service")
     monkeypatch.setenv("APP__HOST", "0.0.0.0")
@@ -126,6 +124,13 @@ async def test_create_app_enforces_trusted_hosts_and_private_metrics(monkeypatch
     monkeypatch.setenv("EMAIL__PUBLIC_BASE_URL", "https://auth.example.com")
     monkeypatch.setenv("SIGNING_KEYS__ENCRYPTION_KEY", "signing-secret")
     monkeypatch.setenv("WEBHOOK__SECRET_ENCRYPTION_KEY", "webhook-secret")
+
+
+@pytest.mark.asyncio
+async def test_create_app_enforces_trusted_hosts_and_private_metrics(monkeypatch) -> None:
+    """Production app enforces host allowlisting and admin-only metrics."""
+    settings = _production_settings()
+    _seed_production_env(monkeypatch)
     get_settings.cache_clear()
 
     import app.main as main_module
@@ -164,5 +169,46 @@ async def test_create_app_enforces_trusted_hosts_and_private_metrics(monkeypatch
     assert metrics_allowed.status_code == 200
     assert "auth_service_http_requests_total" in metrics_allowed.text
     assert invalid_host.status_code == 400
+
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_create_app_serves_swagger_ui_with_docs_csp(monkeypatch) -> None:
+    """Swagger UI remains available and gets a docs-specific CSP policy."""
+    settings = _production_settings()
+    _seed_production_env(monkeypatch)
+    get_settings.cache_clear()
+
+    import app.main as main_module
+
+    main_module = importlib.reload(main_module)
+
+    monkeypatch.setattr(main_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(main_module, "configure_structlog", lambda current_settings: None)
+    monkeypatch.setattr("app.middleware.rate_limit.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "app.middleware.rate_limit.get_rate_limit_redis_client",
+        lambda: _NoopRateLimitRedis(),
+    )
+
+    app = main_module.create_app()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://auth.example.com",
+    ) as client:
+        docs_response = await client.get("/docs")
+
+    assert docs_response.status_code == 200
+    assert "Swagger UI" in docs_response.text
+    assert (
+        "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net"
+        in docs_response.headers["content-security-policy"]
+    )
+    assert (
+        "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net"
+        in docs_response.headers["content-security-policy"]
+    )
 
     get_settings.cache_clear()

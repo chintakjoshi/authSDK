@@ -5,7 +5,8 @@ services:
     environment:
       POSTGRES_DB: auth_service
       POSTGRES_USER: postgres
-      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_HOST_AUTH_METHOD: ${POSTGRES_HOST_AUTH_METHOD:-scram-sha-256}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d auth_service"]
       interval: 10s
@@ -38,6 +39,18 @@ services:
     networks:
       - backend
 
+  adminer:
+    image: adminer:4.8.1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    ports:
+      - "${ADMINER_PORT:-8080}:8080"
+    networks:
+      - backend
+
   auth-service:
     build:
       context: ..
@@ -56,7 +69,7 @@ services:
       APP__HOST: ${APP__HOST:-0.0.0.0}
       APP__PORT: "${APP__PORT:-8000}"
       APP__LOG_LEVEL: ${APP__LOG_LEVEL:-INFO}
-      DATABASE__URL: ${DATABASE__URL:-postgresql+asyncpg://postgres@postgres:5432/auth_service}
+      DATABASE__URL: ${DATABASE__URL:-postgresql+asyncpg://postgres:postgres@postgres:5432/auth_service}
       REDIS__URL: ${REDIS__URL:-redis://redis:6379/0}
       JWT__ALGORITHM: ${JWT__ALGORITHM:-RS256}
       JWT__ACCESS_TOKEN_TTL_SECONDS: "${JWT__ACCESS_TOKEN_TTL_SECONDS:-900}"
@@ -126,7 +139,7 @@ services:
       APP__HOST: ${APP__HOST:-0.0.0.0}
       APP__PORT: "${APP__PORT:-8000}"
       APP__LOG_LEVEL: ${APP__LOG_LEVEL:-INFO}
-      DATABASE__URL: ${DATABASE__URL:-postgresql+asyncpg://postgres@postgres:5432/auth_service}
+      DATABASE__URL: ${DATABASE__URL:-postgresql+asyncpg://postgres:postgres@postgres:5432/auth_service}
       REDIS__URL: ${REDIS__URL:-redis://redis:6379/0}
       JWT__ALGORITHM: ${JWT__ALGORITHM:-RS256}
       JWT__ACCESS_TOKEN_TTL_SECONDS: "${JWT__ACCESS_TOKEN_TTL_SECONDS:-900}"
@@ -190,7 +203,7 @@ services:
       APP__HOST: ${APP__HOST:-0.0.0.0}
       APP__PORT: "${APP__PORT:-8000}"
       APP__LOG_LEVEL: ${APP__LOG_LEVEL:-INFO}
-      DATABASE__URL: ${DATABASE__URL:-postgresql+asyncpg://postgres@postgres:5432/auth_service}
+      DATABASE__URL: ${DATABASE__URL:-postgresql+asyncpg://postgres:postgres@postgres:5432/auth_service}
       REDIS__URL: ${REDIS__URL:-redis://redis:6379/0}
       JWT__ALGORITHM: ${JWT__ALGORITHM:-RS256}
       JWT__ACCESS_TOKEN_TTL_SECONDS: "${JWT__ACCESS_TOKEN_TTL_SECONDS:-900}"

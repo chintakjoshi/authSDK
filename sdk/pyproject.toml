@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "auth-service-sdk"
-version = "1.1.0"
+version = "1.2.0"
 description = "SDK middleware and client for auth-service token and API key verification."
 readme = "README.md"
 requires-python = ">=3.11"

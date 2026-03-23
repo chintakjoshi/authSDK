@@ -54,6 +54,7 @@ Services started:
 - `postgres` (`postgres:16`)
 - `redis` (`redis:7`)
 - `mailhog` (local email inspection)
+- `adminer` (local Postgres browser UI)
 - `auth-service` (FastAPI + Alembic migration on startup)
 - `webhook-worker` (RQ worker for immediate webhook delivery jobs)
 - `webhook-scheduler` (RQ scheduler for delayed retries and retention jobs)
@@ -74,6 +75,24 @@ Also useful:
 
 ```bash
 curl http://localhost:8000/.well-known/jwks.json
+```
+
+Local UIs:
+
+- Swagger UI: `http://localhost:8000/docs`
+- Adminer: `http://localhost:8080`
+  - server: `postgres`
+  - username: `postgres`
+  - password: `postgres`
+  - database: `auth_service`
+
+If you already initialized the stack before this change, Adminer will still
+work with password `postgres`, but the existing Postgres volume remains on the
+older `trust` auth mode until you recreate it:
+
+```bash
+docker compose -f docker/docker-compose.yml down -v
+docker compose -f docker/docker-compose.yml up -d --build
 ```
 
 ## 5. View logs
