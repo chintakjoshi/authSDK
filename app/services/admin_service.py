@@ -335,7 +335,7 @@ class AdminService:
         *,
         user_id: UUID,
     ) -> DeletedUserResult:
-        """Soft-delete a user and synchronously revoke all active sessions."""
+        """Soft-delete a user and synchronously revoke active sessions and API keys."""
         try:
             deleted_user = await self._user_service.delete_user(
                 db_session=db_session,
@@ -344,6 +344,11 @@ class AdminService:
                 commit=False,
             )
             revoked_session_ids = await self._session_service.revoke_user_sessions(
+                db_session=db_session,
+                user_id=user_id,
+                commit=False,
+            )
+            await self._api_key_service.revoke_user_keys(
                 db_session=db_session,
                 user_id=user_id,
                 commit=False,

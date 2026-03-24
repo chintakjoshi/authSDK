@@ -11,12 +11,14 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from jose import jwt
+from sqlalchemy import select
 
 from app.config import get_settings
 from app.core.jwt import get_jwt_service
 from app.core.sessions import get_redis_client, get_session_service
 from app.core.signing_keys import get_signing_key_service
 from app.db.session import get_session_factory
+from app.models.api_key import APIKey
 from app.models.user import User
 from app.models.webhook_delivery import WebhookDelivery, WebhookDeliveryStatus
 from app.services.admin_service import AdminService, get_admin_service
@@ -531,6 +533,71 @@ async def test_admin_api_key_routes_and_audit_log(app_factory, db_session) -> No
         event_types = {item["event_type"] for item in audit_log.json()["data"]}
         assert "api_key.created" in event_types
         assert "api_key.revoked" in event_types
+
+
+@pytest.mark.asyncio
+async def test_admin_delete_revokes_user_bound_api_keys(app_factory, db_session) -> None:
+    """Deleting a user invalidates that user's API keys immediately."""
+    app: FastAPI = app_factory()
+    await _create_user(
+        db_session,
+        email="cleanup-admin@example.com",
+        password="Password123!",
+        role="admin",
+        email_verified=True,
+    )
+    target = await _create_user(
+        db_session,
+        email="key-owner@example.com",
+        password="Password123!",
+        role="user",
+        email_verified=True,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        access_token = await _login_with_optional_otp(
+            client,
+            email="cleanup-admin@example.com",
+            password="Password123!",
+        )
+        headers = {"authorization": f"Bearer {access_token}"}
+
+        created = await client.post(
+            "/auth/apikeys",
+            json={
+                "name": "Target User Key",
+                "scope": "orders:read",
+                "user_id": str(target.id),
+            },
+            headers=headers,
+        )
+        assert created.status_code == 200
+        api_key = created.json()["api_key"]
+
+        valid_introspect = await client.post("/auth/introspect", json={"api_key": api_key})
+        assert valid_introspect.status_code == 200
+        assert valid_introspect.json()["valid"] is True
+
+        deleted = await client.delete(f"/admin/users/{target.id}", headers=headers)
+        assert deleted.status_code == 200
+        assert deleted.json()["deleted_user_id"] == str(target.id)
+
+        revoked_introspect = await client.post("/auth/introspect", json={"api_key": api_key})
+        assert revoked_introspect.status_code == 200
+        assert revoked_introspect.json() == {"valid": False, "code": "revoked_api_key"}
+
+    async with get_session_factory()() as session:
+        stored_key = (
+            await session.execute(select(APIKey).where(APIKey.user_id == target.id))
+        ).scalar_one()
+        stored_user = (await session.execute(select(User).where(User.id == target.id))).scalar_one()
+
+    assert stored_key.revoked_at is not None
+    assert stored_user.deleted_at is not None
+    assert stored_user.is_active is False
 
 
 @pytest.mark.asyncio

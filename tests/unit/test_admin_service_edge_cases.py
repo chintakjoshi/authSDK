@@ -102,6 +102,16 @@ class _APIKeyStub:
     async def list_keys_page(self, **kwargs: object) -> object:
         return kwargs
 
+    async def revoke_user_keys(
+        self,
+        *,
+        db_session,
+        user_id,
+        commit,
+    ) -> list[object]:  # type: ignore[no-untyped-def]
+        del db_session, user_id, commit
+        return []
+
 
 class _M2MStub:
     async def list_clients_page(self, **kwargs: object) -> object:

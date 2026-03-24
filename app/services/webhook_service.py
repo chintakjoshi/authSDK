@@ -9,11 +9,11 @@ import hmac
 import ipaddress
 import json
 import socket
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any, Protocol
-from urllib.parse import urlparse
 from uuid import UUID, uuid4
 
 import httpx
@@ -36,6 +36,8 @@ from app.services.pagination import CursorPage, apply_created_at_cursor, build_p
 logger = structlog.get_logger(__name__)
 
 _RETRY_SCHEDULE_SECONDS = (60, 300, 1800, 7200)
+
+ResolvedWebhookAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,15 @@ class DeletedWebhookEndpoint:
     abandoned_delivery_ids: list[UUID]
 
 
+@dataclass(frozen=True)
+class ResolvedWebhookTarget:
+    """Pinned webhook target after safe hostname resolution."""
+
+    url: str
+    host_header: str
+    sni_hostname: str | None
+
+
 class WebhookServiceError(Exception):
     """Raised for webhook registration and retry API failures."""
 
@@ -75,6 +86,10 @@ class WebhookServiceError(Exception):
         self.detail = detail
         self.code = code
         self.status_code = status_code
+
+
+class WebhookUnsafeTargetError(Exception):
+    """Raised when a webhook URL resolves to an unsafe delivery target."""
 
 
 class WebhookSender(Protocol):
@@ -100,6 +115,96 @@ class WebhookSchedulerAdapter(Protocol):
         """Schedule one job for future execution."""
 
 
+async def _resolve_host_ips(hostname: str) -> list[ResolvedWebhookAddress]:
+    """Resolve hostname to IPs on a worker thread for SSRF checks."""
+    try:
+        infos = await asyncio.to_thread(socket.getaddrinfo, hostname, None)
+    except OSError:
+        return []
+
+    resolved: list[ResolvedWebhookAddress] = []
+    for info in infos:
+        sockaddr = info[4]
+        if not sockaddr:
+            continue
+        try:
+            resolved.append(ipaddress.ip_address(sockaddr[0]))
+        except ValueError:
+            continue
+    return resolved
+
+
+def _is_disallowed_ip(address: ipaddress._BaseAddress) -> bool:
+    """Reject addresses that should never be used for outbound webhooks."""
+    return bool(
+        address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    )
+
+
+def _host_header_value(url: httpx.URL) -> str:
+    """Build the HTTP Host header for the original webhook authority."""
+    host = url.host or ""
+    host_text = f"[{host}]" if ":" in host else host
+    if url.port is None:
+        return host_text
+    default_port = 443 if url.scheme == "https" else 80
+    if url.port == default_port:
+        return host_text
+    return f"{host_text}:{url.port}"
+
+
+async def _build_resolved_webhook_target(
+    url: str,
+    *,
+    host_resolver: Callable[[str], Awaitable[list[ResolvedWebhookAddress]]],
+    is_disallowed_ip: Callable[[ipaddress._BaseAddress], bool],
+) -> ResolvedWebhookTarget | None:
+    """Resolve a webhook URL to one pinned safe target address."""
+    try:
+        parsed_url = httpx.URL(url)
+    except httpx.InvalidURL:
+        return None
+
+    if parsed_url.scheme not in {"http", "https"}:
+        return None
+    if parsed_url.host is None:
+        return None
+
+    original_host = parsed_url.host.strip().lower()
+    if not original_host or original_host == "localhost":
+        return None
+
+    connect_host: str
+    sni_hostname: str | None = None
+    try:
+        parsed_ip = ipaddress.ip_address(original_host)
+    except ValueError:
+        parsed_ip = None
+
+    if parsed_ip is not None:
+        if is_disallowed_ip(parsed_ip):
+            return None
+        connect_host = str(parsed_ip)
+    else:
+        resolved_ips = await host_resolver(original_host)
+        if not resolved_ips or any(is_disallowed_ip(address) for address in resolved_ips):
+            return None
+        connect_host = str(resolved_ips[0])
+        if parsed_url.scheme == "https":
+            sni_hostname = original_host
+
+    return ResolvedWebhookTarget(
+        url=str(parsed_url.copy_with(host=connect_host)),
+        host_header=_host_header_value(parsed_url),
+        sni_hostname=sni_hostname,
+    )
+
+
 class HTTPXWebhookSender:
     """HTTP sender that signs and posts webhook payloads."""
 
@@ -109,16 +214,26 @@ class HTTPXWebhookSender:
 
     async def send(self, *, url: str, payload: dict[str, Any], secret: str) -> WebhookSendResult:
         """Send one JSON webhook request and capture truncated response details."""
+        target = await self._resolve_target(url)
         body = json.dumps(payload, separators=(",", ":"), sort_keys=True)
         signature = sign_payload(payload, secret)
         headers = {
             "Content-Type": "application/json",
+            "Host": target.host_header,
             "X-Webhook-Signature": signature,
             "X-Webhook-Event": str(payload.get("event", "")),
         }
+        extensions = (
+            {"sni_hostname": target.sni_hostname} if target.sni_hostname is not None else None
+        )
         try:
             async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
-                response = await client.post(url, content=body, headers=headers)
+                response = await client.post(
+                    target.url,
+                    content=body,
+                    headers=headers,
+                    extensions=extensions,
+                )
             truncated = response.text[: self._response_body_max_chars]
             return WebhookSendResult(
                 status_code=response.status_code,
@@ -131,6 +246,17 @@ class HTTPXWebhookSender:
                 body=str(exc)[: self._response_body_max_chars],
                 delivered=False,
             )
+
+    async def _resolve_target(self, url: str) -> ResolvedWebhookTarget:
+        """Resolve webhook URL to one safe, pinned delivery target."""
+        target = await _build_resolved_webhook_target(
+            url,
+            host_resolver=_resolve_host_ips,
+            is_disallowed_ip=_is_disallowed_ip,
+        )
+        if target is None:
+            raise WebhookUnsafeTargetError("Invalid webhook URL.")
+        return target
 
 
 def sign_payload(payload: dict[str, Any], secret: str) -> str:
@@ -487,7 +613,12 @@ class WebhookService:
                 await db_session.commit()
                 return
 
-            if not await self._is_safe_webhook_url(endpoint.url):
+            secret = self._decrypt_secret(endpoint.secret)
+            try:
+                send_result = await self._sender.send(
+                    url=endpoint.url, payload=delivery.payload, secret=secret
+                )
+            except WebhookUnsafeTargetError:
                 delivery.status = WebhookDeliveryStatus.ABANDONED.value
                 delivery.next_retry_at = None
                 await db_session.commit()
@@ -502,11 +633,6 @@ class WebhookService:
                     },
                 )
                 return
-
-            secret = self._decrypt_secret(endpoint.secret)
-            send_result = await self._sender.send(
-                url=endpoint.url, payload=delivery.payload, secret=secret
-            )
 
             delivery.attempt_count += 1
             delivery.last_attempted_at = now
@@ -620,59 +746,26 @@ class WebhookService:
 
     async def _is_safe_webhook_url(self, url: str) -> bool:
         """Reject localhost and private-network webhook destinations."""
-        parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"}:
-            return False
-        hostname = parsed.hostname
-        if hostname is None:
-            return False
-        normalized = hostname.strip().lower()
-        if normalized == "localhost":
-            return False
-        try:
-            parsed_ip = ipaddress.ip_address(normalized)
-        except ValueError:
-            parsed_ip = None
-        if parsed_ip is not None:
-            return not self._is_disallowed_ip(parsed_ip)
-
-        resolved_ips = await self._resolve_host_ips(normalized)
-        if not resolved_ips:
-            return False
-        return all(not self._is_disallowed_ip(address) for address in resolved_ips)
+        return (
+            await _build_resolved_webhook_target(
+                url,
+                host_resolver=self._resolve_host_ips,
+                is_disallowed_ip=self._is_disallowed_ip,
+            )
+            is not None
+        )
 
     @staticmethod
     async def _resolve_host_ips(
         hostname: str,
-    ) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    ) -> list[ResolvedWebhookAddress]:
         """Resolve hostname to IPs on a worker thread for SSRF checks."""
-        try:
-            infos = await asyncio.to_thread(socket.getaddrinfo, hostname, None)
-        except OSError:
-            return []
-
-        resolved: list[ipaddress._BaseAddress] = []
-        for info in infos:
-            sockaddr = info[4]
-            if not sockaddr:
-                continue
-            try:
-                resolved.append(ipaddress.ip_address(sockaddr[0]))
-            except ValueError:
-                continue
-        return resolved
+        return await _resolve_host_ips(hostname)
 
     @staticmethod
     def _is_disallowed_ip(address: ipaddress._BaseAddress) -> bool:
         """Reject addresses that should never be used for outbound webhooks."""
-        return bool(
-            address.is_private
-            or address.is_loopback
-            or address.is_link_local
-            or address.is_multicast
-            or address.is_reserved
-            or address.is_unspecified
-        )
+        return _is_disallowed_ip(address)
 
     def _encrypt_secret(self, raw_secret: str) -> str:
         """Encrypt webhook secret before persistence."""

@@ -16,9 +16,12 @@ from app.models.webhook_endpoint import WebhookEndpoint
 from app.services.audit_service import AuditService
 from app.services.webhook_service import (
     HTTPXWebhookSender,
+    ResolvedWebhookTarget,
     WebhookSendResult,
     WebhookService,
     WebhookServiceError,
+    WebhookUnsafeTargetError,
+    sign_payload,
 )
 
 
@@ -110,6 +113,19 @@ def _service() -> WebhookService:
 async def test_httpx_sender_success_and_http_error(monkeypatch) -> None:
     """HTTPX sender truncates bodies and maps transport errors to delivered=False."""
     sender = HTTPXWebhookSender(timeout_seconds=5, response_body_max_chars=4)
+    target = ResolvedWebhookTarget(
+        url="https://93.184.216.34/webhook",
+        host_header="example.com",
+        sni_hostname="example.com",
+    )
+
+    async def _resolve_target(url: str) -> ResolvedWebhookTarget:
+        del url
+        return target
+
+    sender._resolve_target = _resolve_target  # type: ignore[method-assign,assignment]
+
+    post_calls: list[tuple[str, dict[str, str], dict[str, str] | None]] = []
 
     class _Response:
         status_code = 202
@@ -122,15 +138,42 @@ async def test_httpx_sender_success_and_http_error(monkeypatch) -> None:
         async def __aexit__(self, exc_type, exc, tb):  # type: ignore[no-untyped-def]
             return False
 
-        async def post(self, url: str, content: str, headers: dict[str, str]) -> _Response:
+        async def post(
+            self,
+            url: str,
+            content: str,
+            headers: dict[str, str],
+            extensions: dict[str, str] | None = None,
+        ) -> _Response:
+            del content
+            post_calls.append((url, headers, extensions))
             return _Response()
 
     monkeypatch.setattr("app.services.webhook_service.httpx.AsyncClient", lambda timeout: _Client())
     result = await sender.send(url="https://example.com", payload={"event": "x"}, secret="s")
     assert result == WebhookSendResult(status_code=202, body="acce", delivered=True)
+    assert post_calls == [
+        (
+            "https://93.184.216.34/webhook",
+            {
+                "Content-Type": "application/json",
+                "Host": "example.com",
+                "X-Webhook-Signature": sign_payload({"event": "x"}, "s"),
+                "X-Webhook-Event": "x",
+            },
+            {"sni_hostname": "example.com"},
+        )
+    ]
 
     class _BadClient(_Client):
-        async def post(self, url: str, content: str, headers: dict[str, str]) -> _Response:
+        async def post(
+            self,
+            url: str,
+            content: str,
+            headers: dict[str, str],
+            extensions: dict[str, str] | None = None,
+        ) -> _Response:
+            del url, content, headers, extensions
             raise httpx.ConnectError("boom")
 
     monkeypatch.setattr(
@@ -139,6 +182,15 @@ async def test_httpx_sender_success_and_http_error(monkeypatch) -> None:
     result = await sender.send(url="https://example.com", payload={"event": "x"}, secret="s")
     assert result.delivered is False
     assert result.status_code is None
+
+    sender._resolve_target = _raise_unsafe_target  # type: ignore[method-assign,assignment]
+    with pytest.raises(WebhookUnsafeTargetError):
+        await sender.send(url="https://example.com", payload={"event": "x"}, secret="s")
+
+
+async def _raise_unsafe_target(url: str) -> ResolvedWebhookTarget:
+    del url
+    raise WebhookUnsafeTargetError("Invalid webhook URL.")
 
 
 @pytest.mark.asyncio

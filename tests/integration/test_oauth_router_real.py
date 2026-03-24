@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -12,7 +13,7 @@ from sqlalchemy import select
 
 from app.core.jwt import get_jwt_service
 from app.core.sessions import get_redis_client, get_session_service
-from app.models.user import User
+from app.models.user import User, UserIdentity
 from app.services.oauth_service import OAuthService, get_oauth_service
 from app.services.token_service import get_token_service
 
@@ -131,4 +132,59 @@ async def test_oauth_google_callback_rejects_state_mismatch(app_factory) -> None
 
     assert response.status_code == 401
     assert response.json()["code"] == "oauth_state_mismatch"
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_oauth_google_callback_rejects_soft_deleted_user_relogin(
+    app_factory,
+    db_session,
+) -> None:
+    """Soft-deleted OAuth accounts stay blocked instead of being recreated."""
+    app: FastAPI = app_factory()
+    app.dependency_overrides[get_oauth_service] = _build_oauth_service
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        first_login = await client.get("/auth/oauth/google/login")
+        first_state = parse_qs(urlparse(first_login.headers["location"]).query)["state"][0]
+        first_callback = await client.get(
+            "/auth/oauth/google/callback",
+            params={"state": first_state, "code": "oauthcode"},
+        )
+        assert first_callback.status_code == 200
+
+        created_user = (
+            await db_session.execute(select(User).where(User.email == "oauth-user@example.com"))
+        ).scalar_one()
+        created_user.deleted_at = datetime.now(UTC)
+        created_user.is_active = False
+        await db_session.commit()
+
+        second_login = await client.get("/auth/oauth/google/login")
+        second_state = parse_qs(urlparse(second_login.headers["location"]).query)["state"][0]
+        second_callback = await client.get(
+            "/auth/oauth/google/callback",
+            params={"state": second_state, "code": "oauthcode"},
+        )
+
+    assert second_callback.status_code == 401
+    assert second_callback.json()["code"] == "invalid_credentials"
+
+    db_session.expire_all()
+    users = (
+        await db_session.execute(select(User).where(User.email == "oauth-user@example.com"))
+    ).scalars().all()
+    identity = (
+        await db_session.execute(
+            select(UserIdentity).where(
+                UserIdentity.provider == "google",
+                UserIdentity.provider_user_id == "google-user-1",
+            )
+        )
+    ).scalar_one()
+    assert len(users) == 1
+    assert users[0].deleted_at is not None
+    assert identity.user_id == users[0].id
     app.dependency_overrides.clear()

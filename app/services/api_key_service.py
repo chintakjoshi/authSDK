@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api_keys import APIKeyCore
 from app.models.api_key import APIKey
+from app.models.user import User
 from app.services.pagination import CursorPage, apply_created_at_cursor, build_page, decode_cursor
 
 
@@ -215,6 +216,13 @@ class APIKeyService:
         now = datetime.now(UTC)
         if key_row.expires_at is not None and key_row.expires_at <= now:
             return APIKeyIntrospectionResult(valid=False, code="expired_api_key")
+        if key_row.user_id is not None:
+            owner = await self._get_active_key_owner(
+                db_session=db_session,
+                user_id=key_row.user_id,
+            )
+            if owner is None:
+                return APIKeyIntrospectionResult(valid=False, code="revoked_api_key")
 
         scopes = self._core.scopes_from_storage(key_row.scope)
         return APIKeyIntrospectionResult(
@@ -273,6 +281,21 @@ class APIKeyService:
         )
         result = await db_session.execute(statement)
         return list(result.scalars().all())
+
+    async def _get_active_key_owner(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+    ) -> User | None:
+        """Fetch the active, non-deleted owner for one user-bound API key."""
+        statement = select(User).where(
+            User.id == user_id,
+            User.deleted_at.is_(None),
+            User.is_active.is_(True),
+        )
+        result = await db_session.execute(statement)
+        return result.scalar_one_or_none()
 
     @staticmethod
     def _resolve_name_and_service(
