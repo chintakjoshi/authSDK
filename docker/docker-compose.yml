@@ -56,6 +56,11 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     image: auth-service:local
+    env_file:
+      - path: ../.env-sample
+        required: true
+      - path: ../.env
+        required: false
     depends_on:
       postgres:
         condition: service_healthy
@@ -69,7 +74,7 @@ services:
       APP__HOST: ${APP__HOST:-0.0.0.0}
       APP__PORT: "${APP__PORT:-8000}"
       APP__LOG_LEVEL: ${APP__LOG_LEVEL:-INFO}
-      DATABASE__URL: ${DATABASE__URL:-postgresql+asyncpg://postgres:postgres@postgres:5432/auth_service}
+      DATABASE__URL: ${DATABASE__URL:-postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/auth_service}
       REDIS__URL: ${REDIS__URL:-redis://redis:6379/0}
       JWT__ALGORITHM: ${JWT__ALGORITHM:-RS256}
       JWT__ACCESS_TOKEN_TTL_SECONDS: "${JWT__ACCESS_TOKEN_TTL_SECONDS:-900}"
@@ -110,22 +115,27 @@ services:
         export JWT__PUBLIC_KEY_PEM="$$(cat /tmp/public.pem)";
       fi;
       alembic upgrade head &&
-      uvicorn app.main:app --host 0.0.0.0 --port 8000
+      uvicorn app.main:app --host 0.0.0.0 --port $${APP__PORT:-8000}
       '
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health/ready"]
+      test: ["CMD-SHELL", "curl -f http://localhost:$${APP__PORT:-8000}/health/ready"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 20s
     ports:
-      - "8000:8000"
+      - "${APP__PORT:-8000}:${APP__PORT:-8000}"
     networks:
       - backend
 
   webhook-worker:
     image: auth-service:local
     pull_policy: never
+    env_file:
+      - path: ../.env-sample
+        required: true
+      - path: ../.env
+        required: false
     depends_on:
       auth-service:
         condition: service_healthy
@@ -139,7 +149,7 @@ services:
       APP__HOST: ${APP__HOST:-0.0.0.0}
       APP__PORT: "${APP__PORT:-8000}"
       APP__LOG_LEVEL: ${APP__LOG_LEVEL:-INFO}
-      DATABASE__URL: ${DATABASE__URL:-postgresql+asyncpg://postgres:postgres@postgres:5432/auth_service}
+      DATABASE__URL: ${DATABASE__URL:-postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/auth_service}
       REDIS__URL: ${REDIS__URL:-redis://redis:6379/0}
       JWT__ALGORITHM: ${JWT__ALGORITHM:-RS256}
       JWT__ACCESS_TOKEN_TTL_SECONDS: "${JWT__ACCESS_TOKEN_TTL_SECONDS:-900}"
@@ -190,6 +200,11 @@ services:
   webhook-scheduler:
     image: auth-service:local
     pull_policy: never
+    env_file:
+      - path: ../.env-sample
+        required: true
+      - path: ../.env
+        required: false
     depends_on:
       auth-service:
         condition: service_healthy
@@ -203,7 +218,7 @@ services:
       APP__HOST: ${APP__HOST:-0.0.0.0}
       APP__PORT: "${APP__PORT:-8000}"
       APP__LOG_LEVEL: ${APP__LOG_LEVEL:-INFO}
-      DATABASE__URL: ${DATABASE__URL:-postgresql+asyncpg://postgres:postgres@postgres:5432/auth_service}
+      DATABASE__URL: ${DATABASE__URL:-postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/auth_service}
       REDIS__URL: ${REDIS__URL:-redis://redis:6379/0}
       JWT__ALGORITHM: ${JWT__ALGORITHM:-RS256}
       JWT__ACCESS_TOKEN_TTL_SECONDS: "${JWT__ACCESS_TOKEN_TTL_SECONDS:-900}"

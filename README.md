@@ -158,6 +158,10 @@ The package name is `auth-service-sdk`, while the import namespace is `sdk`.
 cp .env-sample .env
 ```
 
+The Compose stack injects the full app config from `.env-sample` plus any local
+overrides from `.env` into the Python services. `APP__PORT` controls both the
+internal service port and the published host port.
+
 2. Start stack:
 ```bash
 docker compose -f docker/docker-compose.yml up --build

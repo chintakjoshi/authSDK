@@ -31,9 +31,13 @@ Copy-Item .env-sample .env
 Notes:
 
 - `.env` is ignored by git.
+- `docker/docker-compose.yml` injects the full app configuration from
+  `.env-sample` plus optional overrides from `.env` into the Python services.
 - For Docker startup, JWT keys are optional. If `JWT__PRIVATE_KEY_PEM` and
   `JWT__PUBLIC_KEY_PEM` are not set, the container generates temporary keys
   automatically on boot.
+- `APP__PORT` controls both the internal Uvicorn port and the published host
+  port for the auth service container.
 
 ## 3. Start the full stack
 
