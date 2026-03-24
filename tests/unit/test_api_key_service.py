@@ -181,7 +181,20 @@ async def test_introspect_valid_key_returns_contract_payload() -> None:
     ) -> APIKey | None:
         return row
 
+    async def _fake_get_active_key_owner(
+        self: APIKeyService,
+        db_session: _FakeDBSession,
+        *,
+        user_id,
+    ) -> object:
+        del db_session, user_id
+        return object()
+
     service._get_key_by_hash = MethodType(_fake_get_by_hash, service)  # type: ignore[assignment]
+    service._get_active_key_owner = MethodType(  # type: ignore[assignment]
+        _fake_get_active_key_owner,
+        service,
+    )
     result = await service.introspect(db_session=_FakeDBSession(), raw_key=raw_key)  # type: ignore[arg-type]
     assert result.valid is True
     assert result.code is None
@@ -189,6 +202,45 @@ async def test_introspect_valid_key_returns_contract_payload() -> None:
     assert result.user_id == str(row.user_id)
     assert result.scopes == ["svc:read", "svc:write"]
     assert result.service == row.service
+
+
+@pytest.mark.asyncio
+async def test_introspect_deleted_or_inactive_owner_returns_revoked_code() -> None:
+    """User-bound keys fail closed when their owner is no longer active."""
+    core = APIKeyCore()
+    service = APIKeyService(core=core)
+    raw_key = "sk_test_raw_key_value"
+    row = _api_key_row(
+        hashed_key=core.hash_key(raw_key),
+        revoked_at=None,
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+    )
+
+    async def _fake_get_by_hash(
+        self: APIKeyService,
+        db_session: _FakeDBSession,
+        key_hash: str,
+        for_update: bool,
+    ) -> APIKey | None:
+        return row
+
+    async def _fake_get_active_key_owner(
+        self: APIKeyService,
+        db_session: _FakeDBSession,
+        *,
+        user_id,
+    ) -> None:
+        del db_session, user_id
+        return None
+
+    service._get_key_by_hash = MethodType(_fake_get_by_hash, service)  # type: ignore[assignment]
+    service._get_active_key_owner = MethodType(  # type: ignore[assignment]
+        _fake_get_active_key_owner,
+        service,
+    )
+
+    result = await service.introspect(db_session=_FakeDBSession(), raw_key=raw_key)  # type: ignore[arg-type]
+    assert result == APIKeyIntrospectionResult(valid=False, code="revoked_api_key")
 
 
 @pytest.mark.asyncio

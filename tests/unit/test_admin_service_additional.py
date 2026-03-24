@@ -158,8 +158,22 @@ class _BruteForceServiceStub:
 
 
 class _APIKeyServiceStub:
+    def __init__(self) -> None:
+        self.revoked_user_ids: list[object] = []
+
     async def list_keys_page(self, **kwargs):  # type: ignore[no-untyped-def]
         return {"ok": True, **kwargs}
+
+    async def revoke_user_keys(
+        self,
+        *,
+        db_session,
+        user_id,
+        commit,
+    ):  # type: ignore[no-untyped-def]
+        del db_session
+        self.revoked_user_ids.append((user_id, commit))
+        return []
 
 
 class _M2MServiceStub:
@@ -231,6 +245,7 @@ def _service(
     user_service: _UserServiceStub | None = None,
     session_service: _SessionServiceStub | None = None,
     otp_service: _OTPServiceStub | None = None,
+    api_key_service: _APIKeyServiceStub | None = None,
     webhook_service: _WebhookServiceStub | None = None,
     erasure_service: _ErasureServiceStub | None = None,
 ) -> AdminService:
@@ -239,7 +254,7 @@ def _service(
         session_service=session_service or _SessionServiceStub(),  # type: ignore[arg-type]
         otp_service=otp_service or _OTPServiceStub(),  # type: ignore[arg-type]
         brute_force_service=_BruteForceServiceStub(),  # type: ignore[arg-type]
-        api_key_service=_APIKeyServiceStub(),  # type: ignore[arg-type]
+        api_key_service=api_key_service or _APIKeyServiceStub(),  # type: ignore[arg-type]
         m2m_service=_M2MServiceStub(),  # type: ignore[arg-type]
         webhook_service=webhook_service or _WebhookServiceStub(),  # type: ignore[arg-type]
         audit_service=_AuditServiceStub(),  # type: ignore[arg-type]
@@ -416,6 +431,23 @@ async def test_proxy_and_mutation_paths_map_errors() -> None:
             user_id=uuid4(),
         )
     assert exc_info.value.code == "already_erased"
+
+
+@pytest.mark.asyncio
+async def test_delete_user_revokes_user_bound_api_keys_in_same_transaction() -> None:
+    """Admin deletion revokes user-bound API keys before the transaction commits."""
+    db_session = _DBSessionStub()
+    api_key_service = _APIKeyServiceStub()
+    deleted_user_id = uuid4()
+
+    result = await _service(api_key_service=api_key_service).delete_user(
+        db_session=db_session,  # type: ignore[arg-type]
+        user_id=deleted_user_id,
+    )
+
+    assert result.user_id == deleted_user_id
+    assert api_key_service.revoked_user_ids == [(deleted_user_id, False)]
+    assert db_session.commit_count == 1
 
 
 @pytest.mark.asyncio

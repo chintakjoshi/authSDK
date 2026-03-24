@@ -10,7 +10,8 @@ from functools import lru_cache
 
 from redis.asyncio.client import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.saml import SamlCore, SamlProtocolError, get_saml_core
@@ -167,72 +168,174 @@ class SamlService:
         email_verified: bool,
     ) -> User:
         """Upsert SAML identity first, then resolve/create canonical user."""
-        identity_stmt = select(UserIdentity).where(
-            UserIdentity.provider == "saml",
-            UserIdentity.provider_user_id == provider_user_id,
-            UserIdentity.deleted_at.is_(None),
-        )
-        identity_result = await db_session.execute(identity_stmt)
-        identity = identity_result.scalar_one_or_none()
+        try:
+            identity_stmt = select(UserIdentity).where(
+                UserIdentity.provider == "saml",
+                UserIdentity.provider_user_id == provider_user_id,
+                UserIdentity.deleted_at.is_(None),
+            )
+            identity_result = await db_session.execute(identity_stmt)
+            identity = identity_result.scalar_one_or_none()
 
-        if identity is None:
-            user = await self._get_user_by_email(db_session=db_session, email=email)
-            if user is None:
-                user = User(
+            if identity is None:
+                user = await self._get_user_by_email(db_session=db_session, email=email)
+                if user is None:
+                    await self._ensure_email_available_for_new_user(
+                        db_session=db_session,
+                        email=email,
+                    )
+                    user = await self._create_user(
+                        db_session=db_session,
+                        email=email,
+                        email_verified=email_verified,
+                    )
+                identity = UserIdentity(
+                    user_id=user.id,
+                    provider="saml",
+                    provider_user_id=provider_user_id,
                     email=email,
-                    password_hash=None,
-                    is_active=True,
-                    role="user",
+                )
+                db_session.add(identity)
+                await db_session.flush()
+                return user
+
+            user = await self._get_user_by_id(db_session=db_session, user_id=identity.user_id)
+            if user is None:
+                deleted_or_inactive_user = await self._get_deleted_or_inactive_user_by_id(
+                    db_session=db_session,
+                    user_id=identity.user_id,
+                )
+                if deleted_or_inactive_user is not None:
+                    raise self._blocked_login_error()
+                await self._ensure_email_available_for_new_user(
+                    db_session=db_session,
+                    email=email,
+                )
+                user = await self._create_user(
+                    db_session=db_session,
+                    email=email,
                     email_verified=email_verified,
                 )
-                db_session.add(user)
-                await db_session.flush()
-            identity = UserIdentity(
-                user_id=user.id,
-                provider="saml",
-                provider_user_id=provider_user_id,
-                email=email,
-            )
-            db_session.add(identity)
+                identity.user_id = user.id
+
+            if user.email.lower() != email.lower():
+                await self._ensure_email_available_for_existing_user(
+                    db_session=db_session,
+                    user=user,
+                    email=email,
+                )
+                user.email = email
+            if email_verified and not user.email_verified:
+                user.email_verified = True
+            if identity.email != email:
+                identity.email = email
             await db_session.flush()
             return user
-
-        user = await self._get_user_by_id(db_session=db_session, user_id=identity.user_id)
-        if user is None:
-            user = User(
-                email=email,
-                password_hash=None,
-                is_active=True,
-                role="user",
-                email_verified=email_verified,
-            )
-            db_session.add(user)
-            await db_session.flush()
-            identity.user_id = user.id
-
-        if user.email.lower() != email.lower():
-            user.email = email
-        if email_verified and not user.email_verified:
-            user.email_verified = True
-        if identity.email != email:
-            identity.email = email
-        await db_session.flush()
-        return user
+        except IntegrityError as exc:
+            await db_session.rollback()
+            raise self._blocked_login_error() from exc
 
     async def _get_user_by_email(self, db_session: AsyncSession, email: str) -> User | None:
-        """Fetch non-deleted user by email."""
+        """Fetch active, non-deleted user by email."""
         statement = select(User).where(
             func.lower(User.email) == email.lower(),
             User.deleted_at.is_(None),
+            User.is_active.is_(True),
         )
         result = await db_session.execute(statement)
         return result.scalar_one_or_none()
 
     async def _get_user_by_id(self, db_session: AsyncSession, user_id: object) -> User | None:
-        """Fetch non-deleted user by ID."""
-        statement = select(User).where(User.id == user_id, User.deleted_at.is_(None))
+        """Fetch active, non-deleted user by ID."""
+        statement = select(User).where(
+            User.id == user_id,
+            User.deleted_at.is_(None),
+            User.is_active.is_(True),
+        )
         result = await db_session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def _get_deleted_or_inactive_user_by_email(
+        self,
+        db_session: AsyncSession,
+        email: str,
+    ) -> User | None:
+        """Fetch a deleted or inactive user row when the email is reserved."""
+        statement = select(User).where(
+            func.lower(User.email) == email.lower(),
+            or_(User.deleted_at.is_not(None), User.is_active.is_(False)),
+        )
+        result = await db_session.execute(statement)
+        return result.scalar_one_or_none()
+
+    async def _get_deleted_or_inactive_user_by_id(
+        self,
+        db_session: AsyncSession,
+        user_id: object,
+    ) -> User | None:
+        """Fetch a deleted or inactive user row by ID when login should stay blocked."""
+        statement = select(User).where(
+            User.id == user_id,
+            or_(User.deleted_at.is_not(None), User.is_active.is_(False)),
+        )
+        result = await db_session.execute(statement)
+        return result.scalar_one_or_none()
+
+    async def _ensure_email_available_for_new_user(
+        self,
+        db_session: AsyncSession,
+        *,
+        email: str,
+    ) -> None:
+        """Raise when the SAML email belongs to a deleted or inactive account."""
+        deleted_or_inactive_user = await self._get_deleted_or_inactive_user_by_email(
+            db_session=db_session,
+            email=email,
+        )
+        if deleted_or_inactive_user is not None:
+            raise self._blocked_login_error()
+
+    async def _ensure_email_available_for_existing_user(
+        self,
+        db_session: AsyncSession,
+        *,
+        user: User,
+        email: str,
+    ) -> None:
+        """Raise when an email update would collide with another reserved account."""
+        active_user = await self._get_user_by_email(db_session=db_session, email=email)
+        if active_user is not None and active_user.id != user.id:
+            raise self._blocked_login_error()
+        deleted_or_inactive_user = await self._get_deleted_or_inactive_user_by_email(
+            db_session=db_session,
+            email=email,
+        )
+        if deleted_or_inactive_user is not None and deleted_or_inactive_user.id != user.id:
+            raise self._blocked_login_error()
+
+    async def _create_user(
+        self,
+        db_session: AsyncSession,
+        *,
+        email: str,
+        email_verified: bool,
+    ) -> User:
+        """Create a new canonical user for a first-time SAML login."""
+        user = User(
+            email=email,
+            password_hash=None,
+            is_active=True,
+            role="user",
+            email_verified=email_verified,
+        )
+        db_session.add(user)
+        await db_session.flush()
+        return user
+
+    @staticmethod
+    def _blocked_login_error() -> SamlServiceError:
+        """Return the stable auth failure for deleted or conflicting SAML accounts."""
+        return SamlServiceError("Invalid credentials.", "invalid_credentials", 401)
 
     async def _store_state(self, *, state: str, record: SamlStateRecord) -> None:
         """Persist SAML request state in Redis for callback validation."""

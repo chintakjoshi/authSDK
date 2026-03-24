@@ -101,6 +101,8 @@ class _UserStub:
     role: str
     email_verified: bool
     email_otp_enabled: bool = False
+    is_active: bool = True
+    deleted_at: object | None = None
 
 
 class _ScalarResult:
@@ -120,6 +122,7 @@ class _DBSessionStub:
         self._execute_results = list(execute_results or [])
         self.added: list[object] = []
         self.flush_count = 0
+        self.rollback_count = 0
 
     async def execute(self, statement):  # type: ignore[no-untyped-def]
         del statement
@@ -132,6 +135,9 @@ class _DBSessionStub:
 
     async def flush(self) -> None:
         self.flush_count += 1
+
+    async def rollback(self) -> None:
+        self.rollback_count += 1
 
 
 def _service(
@@ -302,3 +308,60 @@ async def test_issue_token_pair_and_identity_upsert_cover_remaining_paths(monkey
     assert resolved_user.email == "fresh@example.com"
     assert resolved_user.email_verified is True
     assert existing_identity.email == "fresh@example.com"
+
+
+@pytest.mark.asyncio
+async def test_identity_upsert_rejects_deleted_or_inactive_saml_accounts() -> None:
+    """SAML identity upsert fails closed when the mapped or reserved account is deleted."""
+    service = _service()
+    deleted_user = _UserStub(
+        id="deleted-user",
+        email="saml@example.com",
+        role="user",
+        email_verified=True,
+        is_active=False,
+        deleted_at="deleted",
+    )
+
+    async def _missing_user_by_email(**kwargs: object) -> None:
+        return None
+
+    async def _deleted_user_by_email(**kwargs: object) -> _UserStub:
+        return deleted_user
+
+    service._get_user_by_email = _missing_user_by_email  # type: ignore[assignment]
+    service._get_deleted_or_inactive_user_by_email = _deleted_user_by_email  # type: ignore[assignment]
+    with pytest.raises(SamlServiceError) as exc_info:
+        await service._upsert_identity_then_resolve_user(
+            db_session=_DBSessionStub(),  # type: ignore[arg-type]
+            provider_user_id="saml-user-1",
+            email="saml@example.com",
+            email_verified=True,
+        )
+    assert exc_info.value.code == "invalid_credentials"
+
+    existing_identity = UserIdentity(
+        user_id="deleted-user",  # type: ignore[arg-type]
+        provider="saml",
+        provider_user_id="saml-user-2",
+        email="saml@example.com",
+    )
+    db_session = _DBSessionStub(execute_results=[existing_identity])
+
+    async def _missing_user_by_id(**kwargs: object) -> None:
+        return None
+
+    async def _deleted_user_by_id(**kwargs: object) -> _UserStub:
+        return deleted_user
+
+    service._get_user_by_id = _missing_user_by_id  # type: ignore[assignment]
+    service._get_deleted_or_inactive_user_by_id = _deleted_user_by_id  # type: ignore[assignment]
+    with pytest.raises(SamlServiceError) as exc_info:
+        await service._upsert_identity_then_resolve_user(
+            db_session=db_session,  # type: ignore[arg-type]
+            provider_user_id="saml-user-2",
+            email="saml@example.com",
+            email_verified=True,
+        )
+    assert exc_info.value.code == "invalid_credentials"
+    assert db_session.added == []

@@ -20,6 +20,7 @@ from app.services.audit_service import AuditService
 from app.services.webhook_service import (
     WebhookSendResult,
     WebhookService,
+    WebhookUnsafeTargetError,
     get_webhook_service,
     sign_payload,
 )
@@ -46,6 +47,14 @@ class _FakeSender:
         if self._results:
             return self._results.pop(0)
         return WebhookSendResult(status_code=200, body="ok", delivered=True)
+
+
+class _UnsafeSender:
+    """Sender stub that simulates send-time SSRF target rejection."""
+
+    async def send(self, *, url: str, payload: dict[str, Any], secret: str) -> WebhookSendResult:
+        del url, payload, secret
+        raise WebhookUnsafeTargetError("Invalid webhook URL.")
 
 
 @dataclass
@@ -285,3 +294,56 @@ async def test_webhook_registration_blocks_localhost_urls(
 
     assert response.status_code == 400
     assert response.json() == {"detail": "Invalid webhook URL.", "code": "invalid_webhook_url"}
+
+
+@pytest.mark.asyncio
+async def test_webhook_delivery_abandons_send_time_unsafe_target(
+    db_session: AsyncSession,
+) -> None:
+    """A webhook that becomes unsafe at send time is abandoned instead of retried."""
+    webhook_service = _build_webhook_service(
+        sender=_UnsafeSender(),
+        queue=_FakeQueue(),
+        scheduler=_FakeScheduler(),
+    )
+
+    endpoint = await webhook_service.register_endpoint(
+        db_session=db_session,
+        name="rebinding hooks",
+        url="https://example.com/rebinding",
+        secret="rebind-secret",
+        events=["session.created"],
+    )
+    await webhook_service.emit_event(
+        event_type="session.created", data={"endpoint_id": str(endpoint.id)}
+    )
+
+    delivery = (
+        await db_session.execute(
+            select(WebhookDelivery).where(WebhookDelivery.endpoint_id == endpoint.id)
+        )
+    ).scalar_one()
+    delivery_id = delivery.id
+    await webhook_service.process_delivery(delivery_id=delivery_id)
+
+    db_session.expire_all()
+    delivery = await db_session.get(WebhookDelivery, delivery_id)
+    assert delivery is not None
+    assert delivery.status == WebhookDeliveryStatus.ABANDONED.value
+    assert delivery.attempt_count == 0
+    assert delivery.next_retry_at is None
+    assert delivery.response_status is None
+
+    failed_audits = list(
+        (
+            await db_session.execute(
+                select(AuditEvent).where(
+                    AuditEvent.event_type == "webhook.failed",
+                    AuditEvent.failure_reason == "invalid_webhook_url",
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert failed_audits
