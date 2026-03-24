@@ -174,8 +174,10 @@ async def test_oauth_google_callback_rejects_soft_deleted_user_relogin(
 
     db_session.expire_all()
     users = (
-        await db_session.execute(select(User).where(User.email == "oauth-user@example.com"))
-    ).scalars().all()
+        (await db_session.execute(select(User).where(User.email == "oauth-user@example.com")))
+        .scalars()
+        .all()
+    )
     identity = (
         await db_session.execute(
             select(UserIdentity).where(

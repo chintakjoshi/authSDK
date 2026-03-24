@@ -152,8 +152,10 @@ async def test_saml_callback_rejects_soft_deleted_user_relogin(app_factory, db_s
 
     db_session.expire_all()
     users = (
-        await db_session.execute(select(User).where(User.email == "saml-user@example.com"))
-    ).scalars().all()
+        (await db_session.execute(select(User).where(User.email == "saml-user@example.com")))
+        .scalars()
+        .all()
+    )
     identity = (
         await db_session.execute(
             select(UserIdentity).where(
