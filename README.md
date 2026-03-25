@@ -1,257 +1,203 @@
-# authSDK [![Tests](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml) [![Docker Build](https://github.com/chintakjoshi/authSDK/actions/workflows/release.yml/badge.svg)](https://github.com/chintakjoshi/authSDK/actions/workflows/release.yml)
+# authSDK
 
-Authentication platform repository containing:
-- a central auth service you can deploy once for your organization
-- a Python SDK (`auth-service-sdk`) that other apps can install to trust and consume that auth service
+[![Tests](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml)
+[![Docker Build](https://github.com/chintakjoshi/authSDK/actions/workflows/release.yml/badge.svg)](https://github.com/chintakjoshi/authSDK/actions/workflows/release.yml)
 
-This repo is designed for a multi-service setup. The auth service owns identity,
-token issuance, session state, OTP flows, API-key introspection, admin
-operations, and signing keys. Downstream applications install the SDK and use
-middleware/dependencies to validate tokens and enforce authorization locally
-while delegating trust to the central auth service.
+`authSDK` is a central authentication platform plus a reusable Python SDK for
+downstream services.
 
-## What This Repo Contains
+The repository contains two closely related deliverables:
 
-### 1. Central Auth Service
+- `app/`: a FastAPI auth service that owns identity, sessions, token issuance,
+  API keys, OTP, lifecycle flows, admin APIs, key rotation, audit logging, and
+  webhooks
+- `sdk/`: the `auth-service-sdk` package used by other services to validate JWTs
+  and API keys and enforce authorization locally
 
-The service in `app/` is the backend authority for authentication and
-authorization-related state. It provides:
+## Why This Repo Exists
 
-- email/password signup and login
-- JWT access and refresh token issuance
-- audience-scoped tokens for downstream services
-- logout and server-side session validation
-- API key issuance and introspection
-- OTP login challenges and action tokens
-- email verification and password reset flows
-- re-authentication for sensitive actions
-- Google OAuth and SAML entry points
-- admin APIs for users, audit logs, OAuth clients, API keys, signing keys, and webhooks
-- signing-key rotation and JWKS publishing
-- audit logging, rate limiting, health checks, and scheduled retention purge
+This project is meant for a multi-service architecture where authentication
+state lives in one place and application services consume that trust boundary
+through the SDK.
 
-### 2. Reusable SDK
+Typical use cases:
 
-The SDK lives in `sdk/` and is published as `auth-service-sdk`.
+- centralize sign-in, refresh, logout, and session revocation
+- issue audience-scoped JWTs for multiple downstream services
+- support OTP, password reset, email verification, OAuth, and SAML in one
+  deployable service
+- give consuming services a thin, reusable middleware layer instead of
+  duplicating auth code
 
-Installing the SDK does not install or run the auth backend itself. It gives
-other Python/FastAPI/Starlette services a lightweight client-side integration
-layer so they can trust the central auth service.
-
-The SDK provides:
-
-- `JWTAuthMiddleware`
-  Verifies RS256 JWTs using the auth service JWKS, enforces token audience, and
-  validates session state through the auth service.
-- `APIKeyAuthMiddleware`
-  Validates opaque API keys through auth-service introspection with local
-  positive/negative caching.
-- `require_role(...)`
-  Route dependency for role-based authorization.
-- `require_action_token(...)`
-  Route dependency for step-up actions protected by action tokens.
-- `require_fresh_auth(...)`
-  Route dependency for enforcing recent authentication via `auth_time`.
-
-## How The Pieces Fit Together
-
-The intended architecture is:
+## System Overview
 
 ```text
-[ User / Client ]
-        |
-        v
-[ Central Auth Service ]  -> issues JWTs, refresh tokens, API key decisions
-        |
-        +--> Postgres
-        +--> Redis
-        +--> webhook worker / scheduler
-        |
-        v
-[ Downstream Apps ]
-        |
-        +--> install `auth-service-sdk`
-        +--> validate JWTs/API keys
-        +--> enforce roles / action tokens / fresh auth
+                           +----------------------+
+                           |   Downstream App     |
+                           |  (FastAPI/Starlette) |
+                           +----------+-----------+
+                                      |
+                        auth-service-sdk middleware/dependencies
+                                      |
+                                      v
++-----------+                +--------+--------+                +-----------+
+| User/App  +--------------->+   auth-service   +-------------->+ Postgres  |
++-----------+                +--------+--------+                +-----------+
+                                      |
+                                      +--------------> Redis
+                                      |
+                                      +--------------> webhook worker
+                                      |
+                                      +--------------> scheduler / retention
 ```
 
-Typical request flow:
+The auth service exposes public auth endpoints, admin endpoints, JWKS, token
+validation, API-key introspection, webhook management, and health probes.
+Downstream services install `auth-service-sdk` and trust the auth service for
+verification and session state.
 
-1. A user authenticates against the auth service.
-2. The auth service issues an access token for a specific audience such as
-   `orders-api`.
-3. The user calls a downstream app with that token.
-4. The downstream app uses `auth-service-sdk` middleware to validate the token.
-5. The SDK may call the auth service for JWKS, session validation, or API-key
-   introspection.
-6. The downstream app receives a trusted identity in `request.state.user`.
+## Feature Set
 
-## When To Use This Repo
+- email/password signup and login
+- JWT access and refresh tokens
+- audience-scoped access tokens for downstream APIs
+- server-side session validation and logout
+- API key issuance and introspection
+- OTP login and step-up action tokens
+- email verification and password reset flows
+- Google OAuth and SAML entry points
+- admin APIs for users, clients, API keys, audit log, signing keys, and
+  webhooks
+- signing-key rotation with overlap windows and JWKS publishing
+- rate limiting, structured logging, correlation IDs, tracing, metrics, and
+  security headers
+- background webhook delivery and scheduled retention purge
 
-Use this repo when you want:
+## Repository Layout
 
-- one shared authentication authority for multiple internal or external apps
-- consistent JWT validation across services
-- centralized session revocation and token verification
-- OTP, password reset, email verification, OAuth, and SAML in one place
-- a reusable SDK so downstream services do not duplicate auth code
-
-## Multi-App Example
-
-Example setup:
-
-- auth service deployed at `https://auth.example.com`
-- `orders-api` expects audience `orders-api`
-- `billing-api` expects audience `billing-api`
-
-Login for `orders-api`:
-
-```json
-POST /auth/login
-{
-  "email": "user@example.com",
-  "password": "Password123!",
-  "audience": "orders-api"
-}
+```text
+app/          FastAPI service, routers, schemas, services, middleware
+sdk/          publishable Python SDK for consuming services
+docs/         architecture, configuration, API, operations, troubleshooting
+tests/        unit and integration coverage
+loadtests/    Locust scenarios and result artifacts
+docker/       Dockerfile and local compose stack
+migrations/   Alembic environment and revisions
+workers/      background job entrypoints
 ```
 
-SDK usage inside `orders-api`:
+## Quick Start
 
-```python
-from fastapi import FastAPI
-from sdk import JWTAuthMiddleware
+1. Copy the local environment template.
 
-app = FastAPI()
-app.add_middleware(
-    JWTAuthMiddleware,
-    auth_base_url="https://auth.example.com",
-    expected_audience="orders-api",
-)
+```powershell
+Copy-Item .env-sample .env
 ```
 
-This audience boundary prevents a token minted for one downstream service from
-being replayed against another.
+2. Start the local stack.
 
-## Installing The SDK In Another Project
-
-You can install the SDK from:
-
-- a published package index:
-  `pip install auth-service-sdk`
-- a local path during development:
-  `pip install /path/to/authSDK/sdk`
-- a Git repository subdirectory:
-  `pip install "git+https://github.com/<org>/<repo>.git#subdirectory=sdk"`
-
-The package name is `auth-service-sdk`, while the import namespace is `sdk`.
-
-## Start Here
-
-- New engineer onboarding path: `docs/README.md`
-- Local stack setup: `DEVELOPMENT.md`
-- SDK middleware usage: `sdk/README.md`
-
-## Local Docker Quick Start
-
-1. Copy environment template:
-```bash
-cp .env-sample .env
-```
-
-The Compose stack injects the full app config from `.env-sample` plus any local
-overrides from `.env` into the Python services. `APP__PORT` controls both the
-internal service port and the published host port.
-
-2. Start stack:
-```bash
+```powershell
 docker compose -f docker/docker-compose.yml up --build
 ```
 
-3. Verify health:
-```bash
+3. Verify the service is healthy.
+
+```powershell
 curl http://localhost:8000/health/ready
 ```
 
-Full step-by-step guide: `DEVELOPMENT.md`.
+Local URLs:
 
-The service is exposed at `http://localhost:8000`.
-Swagger UI is exposed at `http://localhost:8000/docs`.
-Mailhog is exposed at `http://localhost:8025` for verification-email inspection.
-Adminer is exposed at `http://localhost:8080` for local Postgres inspection.
-Use `postgres` / `postgres` / `auth_service` when logging into Adminer locally.
+- auth service: `http://localhost:8000`
+- Swagger UI: `http://localhost:8000/docs`
+- Mailhog: `http://localhost:8025`
+- Adminer: `http://localhost:8080`
 
-## Common Next Steps
+## Documentation Map
 
-- Integrate SDK in a service: `docs/integrate-sdk.md`
-- Review auth endpoint contracts: `docs/service-api.md`
-- Review production operations: `docs/operations.md`
-- Debug common integration issues: `docs/troubleshooting.md`
+Start here based on what you need:
 
-## Signing Key Rotation CLI
+- repository docs hub: `docs/README.md`
+- local development: `DEVELOPMENT.md`
+- system architecture: `docs/architecture.md`
+- configuration reference: `docs/configuration.md`
+- service API guide: `docs/service-api.md`
+- SDK integration: `docs/integrate-sdk.md`
+- testing guide: `docs/testing.md`
+- operations and deployment: `docs/operations.md`
+- troubleshooting: `docs/troubleshooting.md`
+- SDK package guide: `sdk/README.md`
+- load tests: `loadtests/README.md`
 
-Rotate RS256 signing keys:
+## SDK At A Glance
+
+The SDK package is published as `auth-service-sdk` and imported as `sdk`.
+
+It provides:
+
+- `JWTAuthMiddleware`
+- `APIKeyAuthMiddleware`
+- `require_role(...)`
+- `require_action_token(...)`
+- `require_fresh_auth(...)`
+- `AuthClient`
+
+Install options:
+
+```bash
+pip install auth-service-sdk
+pip install /path/to/authSDK/sdk
+pip install "git+https://github.com/<org>/<repo>.git#subdirectory=sdk"
+```
+
+## Development Workflow
+
+The repo includes:
+
+- linting with Ruff
+- formatting checks with Black
+- unit and integration tests with Pytest
+- Alembic migration validation
+- service and SDK package builds
+
+Common commands:
+
+```bash
+python -m ruff check .
+python -m black --check .
+python -m pytest -q
+python -m alembic upgrade head
+python -m build
+python -m build sdk
+```
+
+For a fuller contributor workflow, see `CONTRIBUTING.md`.
+
+## Operational Entry Points
+
+Rotate signing keys:
 
 ```bash
 python -m app.cli rotate-signing-key
 ```
 
-Optional overlap override:
+Run background processes outside Docker:
 
 ```bash
-python -m app.cli rotate-signing-key --overlap-seconds 900
+python worker.py
+python scheduler.py
 ```
 
-## Minimum Endpoints The SDK Expects
+## CI/CD
 
-Downstream apps using the SDK expect the auth service to expose:
+GitHub Actions currently covers:
 
-- `GET /.well-known/jwks.json`
-- `GET /auth/validate`
-- `POST /auth/introspect`
+- lint and formatting checks
+- unit and integration tests
+- Alembic offline and online migration validation
+- service package build
+- SDK package build and wheel smoke test
+- container image publication to GHCR
 
-Those endpoints are implemented by this repo's auth service.
-
-## GitHub CI/CD
-
-### Workflows
-
-- `CI` (`.github/workflows/ci.yml`)
-  - Runs on pull requests and pushes to `main`.
-  - Executes:
-    - `ruff` lint
-    - `black --check`
-    - `pytest`
-    - `alembic upgrade head --sql`
-    - `alembic upgrade head` against CI Postgres service
-    - `python -m build`
-  - Boots Postgres and Redis service containers.
-  - Generates ephemeral RSA keys at runtime for `JWT__PRIVATE_KEY_PEM` and `JWT__PUBLIC_KEY_PEM`.
-
-- `Publish Container` (`.github/workflows/release.yml`)
-  - Runs on pushes to `main`, tags (`v*`), and manual dispatch.
-  - Builds and pushes the auth-service container image to GHCR.
-  - Publishes branch, tag, and commit-sha tags automatically.
-  - Publishes `latest` from the default branch, or during manual dispatch when explicitly requested.
-  - Uses GitHub Actions cache for faster rebuilds.
-  - If `docker/Dockerfile` is still empty, it exits with a warning and skips image publishing.
-
-### Optional Release Input
-
-- `image_name` in `Publish Container` workflow dispatch
-  - Overrides the default GHCR image name (`auth-service`).
-- `publish_latest` in `Publish Container` workflow dispatch
-  - Forces publication of the `latest` tag during manual runs.
-
-### Pulling From GHCR
-
-Once the workflow has published an image, you can pull it with:
-
-```bash
-docker pull ghcr.io/<owner>/auth-service:main
-```
-
-For release tags:
-
-```bash
-docker pull ghcr.io/<owner>/auth-service:v1.0.0
-```
+See `.github/workflows/ci.yml` and `.github/workflows/release.yml` for the
+authoritative workflow definitions.

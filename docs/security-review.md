@@ -1,89 +1,71 @@
-# Security Review Checklist
+# Security Review
 
-Date: 2026-03-17  
-Scope: auth-service additions across `app/`, `sdk/`, `loadtests/`, and `tests/`
+Date: `2026-03-17`
+Scope: `app/`, `sdk/`, `loadtests/`, and `tests/`
 
 ## Result
 
-- Status: `PASS`
-- Blocking findings: `0`
-- Follow-up needed before a production sign-off: execute the Locust runs in [loadtests/README.md](../loadtests/README.md) and retain the output artifacts
+- status: `PASS`
+- blocking findings: `0`
+- follow-up before a production sign-off: execute the documented Locust runs and
+  retain the resulting artifacts
 
-## Checklist
+## Reviewed Controls
 
 1. OTP codes never appear in logs, API responses, or audit records
-- Status: `PASS`
-- Evidence:
-  - OTP email bodies are constructed only in [otp_service.py](../app/services/otp_service.py)
-  - Logging redaction remains centralized in [logging.py](../app/middleware/logging.py)
-  - OTP API responses expose challenge tokens or action tokens, never raw codes, in [otp.py](../app/routers/otp.py)
-  - OTP audit assertions live in [test_email_otp_real.py](../tests/integration/test_email_otp_real.py)
+   Status: `PASS`
 
 2. `otp_challenge` and `action_token` JWTs are rejected on protected routes
-- Status: `PASS`
-- Evidence:
-  - JWT type validation rejects these token types in [jwt.py](../app/core/jwt.py)
-  - SDK middleware rejection coverage is in [test_sdk_middleware.py](../tests/unit/test_sdk_middleware.py)
+   Status: `PASS`
 
-3. Action tokens carry a specific action claim and fail closed on claim mismatch
-- Status: `PASS`
-- Evidence:
-  - Action token issuance includes the `action` claim in [otp_service.py](../app/services/otp_service.py)
-  - Validation and mismatch checks are in [otp_service.py](../app/services/otp_service.py)
-  - Coverage exists in [test_otp_service_additional.py](../tests/unit/test_otp_service_additional.py)
+3. Action tokens carry a specific action claim and fail closed on mismatch
+   Status: `PASS`
 
 4. `email_otp_enabled` cannot be enabled unless the user is email-verified
-- Status: `PASS`
-- Evidence:
-  - Enforcement is in [otp_service.py](../app/services/otp_service.py)
-  - Integration coverage exists in [test_email_otp_real.py](../tests/integration/test_email_otp_real.py)
+   Status: `PASS`
 
-5. OTP challenge isolation prevents user A's challenge from accepting user B's code
-- Status: `PASS`
-- Evidence:
-  - Challenge tokens carry the target subject and are verified against user-specific Redis state in [otp_service.py](../app/services/otp_service.py)
-  - Load-test runtime validation is implemented in [locustfile.py](../loadtests/locustfile.py)
+5. OTP challenge isolation prevents user A from using user B's code
+   Status: `PASS`
 
 6. OTP Redis keys are deleted immediately after successful verification
-- Status: `PASS`
-- Evidence:
-  - Login and action OTP cleanup is handled in [otp_service.py](../app/services/otp_service.py)
-  - Replay-protection coverage exists in [test_otp_service_flow_additional.py](../tests/unit/test_otp_service_flow_additional.py)
+   Status: `PASS`
 
 7. OTP failure tracking blocks issuance correctly
-- Status: `PASS`
-- Evidence:
-  - Shared OTP failure counters and issuance-block logic are in [otp_service.py](../app/services/otp_service.py)
-  - Integration coverage exists in [test_email_otp_real.py](../tests/integration/test_email_otp_real.py)
+   Status: `PASS`
 
 8. SSRF protection covers localhost and private-IP webhook destinations
-- Status: `PASS`
-- Evidence:
-  - URL parsing, hostname resolution, and private-IP rejection are in [webhook_service.py](../app/services/webhook_service.py)
-  - Integration coverage exists in [test_webhook_system_real.py](../tests/integration/test_webhook_system_real.py)
-  - Additional helper coverage exists in [test_webhook_service_additional.py](../tests/unit/test_webhook_service_additional.py)
+   Status: `PASS`
 
-9. Audit log remains append-only with no UPDATE or DELETE path
-- Status: `PASS`
-- Evidence:
-  - Audit writes are create-only in [audit_service.py](../app/services/audit_service.py)
-  - No production code path updates or deletes audit rows
+9. Audit log remains append-only with no update or delete path
+   Status: `PASS`
 
-10. GDPR erasure clears OTP Redis keys and removes PII from durable auth records
-- Status: `PASS`
-- Evidence:
-  - Erasure orchestration is in [erasure_service.py](../app/services/erasure_service.py)
-  - OTP cleanup helper is in [otp_service.py](../app/services/otp_service.py)
-  - Integration coverage exists in [test_gdpr_erasure_real.py](../tests/integration/test_gdpr_erasure_real.py)
+10. GDPR erasure clears OTP Redis keys and removes durable PII
+    Status: `PASS`
 
 11. Last-admin protection cannot be bypassed by concurrent removals
-- Status: `PASS`
-- Evidence:
-  - Row-lock enforcement lives in [user_service.py](../app/services/user_service.py)
-  - Admin router coverage for protection exists in [test_admin_router_real.py](../tests/integration/test_admin_router_real.py)
-  - Service-level protection coverage exists in [test_user_roles_real.py](../tests/integration/test_user_roles_real.py)
+    Status: `PASS`
+
+## Evidence Pointers
+
+- OTP handling: `app/services/otp_service.py`
+- webhook SSRF protection: `app/services/webhook_service.py`
+- append-only audit behavior: `app/services/audit_service.py`
+- erasure flow: `app/services/erasure_service.py`
+- admin protection: `app/services/user_service.py`
+- SDK JWT enforcement: `sdk/middleware.py`
+- representative integration coverage: `tests/integration/`
+- representative unit coverage: `tests/unit/`
 
 ## Notes
 
-- The webhook-volume load scenario intentionally requires a public receiver because SSRF protections reject `localhost`, loopback, and private-network webhook URLs.
-- This review is a code-and-test review. It complements, but does not replace, executed load runs and external penetration testing.
+- the webhook volume scenario requires a publicly reachable receiver because
+  SSRF protections intentionally block localhost, loopback, and private-network
+  destinations
+- this review is a code-and-test review, not a substitute for external
+  penetration testing or executed performance validation
+
+## Related Docs
+
+- security reporting guidance: `../SECURITY.md`
+- load-test procedure: `../loadtests/README.md`
+- production runtime guidance: `operations.md`

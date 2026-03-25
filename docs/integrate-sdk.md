@@ -1,30 +1,42 @@
-# SDK Integration Quickstart
+# SDK Integration Guide
 
-This guide is for engineers integrating `auth-service-sdk` into an existing
+This guide is for teams integrating `auth-service-sdk` into another Python
 service.
 
-## 1. Install
+## Install
+
+Published package:
 
 ```bash
 pip install auth-service-sdk
 ```
 
-## 2. Confirm Auth Service Reachability
-
-Set your auth base URL:
+Local path:
 
 ```bash
-export AUTH_BASE_URL="https://auth.example.com"
+pip install /path/to/authSDK/sdk
 ```
 
-Verify required endpoints:
+Git subdirectory install:
 
 ```bash
-curl "$AUTH_BASE_URL/.well-known/jwks.json"
-curl -X POST "$AUTH_BASE_URL/auth/introspect" -H "content-type: application/json" -d '{"api_key":"sk_test"}'
+pip install "git+https://github.com/<org>/<repo>.git#subdirectory=sdk"
 ```
 
-## 3. Protect Routes with JWTs
+The package name is `auth-service-sdk`. The import namespace is `sdk`.
+
+## Service Requirements
+
+The auth service must expose:
+
+- `GET /.well-known/jwks.json`
+- `GET /auth/validate`
+- `POST /auth/introspect`
+
+## JWT-Protected Routes
+
+Use `JWTAuthMiddleware` when your service accepts bearer tokens issued by the
+auth service.
 
 ```python
 from fastapi import FastAPI
@@ -39,22 +51,49 @@ app.add_middleware(
 )
 ```
 
-`JWTAuthMiddleware` does:
-- local RS256 verification using JWKS cache
-- one forced JWKS refresh on verification failure
-- online session-state check via `GET /auth/validate`
+What it does:
 
-## 4. Add Authorization Checks
+- verifies RS256 JWTs locally with cached JWKS
+- refreshes JWKS once on verification failure
+- validates user-token session state through `/auth/validate`
+- writes the verified identity to `request.state.user`
+
+Machine-to-machine tokens with type `m2m` are accepted by the middleware when
+they satisfy the expected audience and claim checks.
+
+## API-Key-Protected Routes
+
+Use `APIKeyAuthMiddleware` when your service accepts opaque API keys.
+
+```python
+from fastapi import FastAPI
+from sdk import APIKeyAuthMiddleware
+
+app = FastAPI()
+app.add_middleware(
+    APIKeyAuthMiddleware,
+    auth_base_url="https://auth.example.com",
+)
+```
+
+What it does:
+
+- extracts keys from `X-API-Key` or `Authorization: ApiKey ...`
+- caches valid introspection results
+- caches invalid introspection results briefly
+- fails closed with `503` when the auth service is unavailable
+
+## Route-Level Authorization Dependencies
 
 ```python
 from fastapi import Depends, FastAPI
-from sdk import require_role, require_action_token, require_fresh_auth
+from sdk import require_action_token, require_fresh_auth, require_role
 
 app = FastAPI()
 
 @app.get("/admin")
 async def admin_route(user=Depends(require_role("admin"))):
-    return {"ok": True}
+    return {"user": user}
 
 @app.post("/dangerous")
 async def dangerous_route(
@@ -66,41 +105,80 @@ async def dangerous_route(
         )
     )
 ):
-    return {"ok": True}
+    return {"user": user}
 
 @app.post("/sensitive")
 async def sensitive_route(user=Depends(require_fresh_auth(300))):
-    return {"ok": True}
+    return {"user": user}
 ```
 
-## 5. Protect Service-to-Service Routes with API Keys
+Use them for:
 
-```python
-from fastapi import FastAPI
-from sdk import APIKeyAuthMiddleware
+- role gates
+- OTP-backed step-up actions
+- recent-authentication requirements
 
-app = FastAPI()
-app.add_middleware(APIKeyAuthMiddleware, auth_base_url="https://auth.example.com")
+## Identity Shape
+
+After successful auth, `request.state.user` contains one of these identity
+shapes.
+
+User token:
+
+```json
+{
+  "type": "user",
+  "user_id": "uuid",
+  "email": "user@example.com",
+  "email_verified": true,
+  "email_otp_enabled": false,
+  "role": "user",
+  "scopes": [],
+  "auth_time": 1710000000
+}
 ```
 
-`APIKeyAuthMiddleware` does:
-- introspection on cache miss (`POST /auth/introspect`)
-- valid cache TTL 60 seconds
-- invalid cache TTL 10 seconds
-- fail-closed `503` when auth service is unavailable
+Service token:
 
-## 6. Read Identity in Handlers
+```json
+{
+  "type": "service",
+  "client_id": "client-id",
+  "role": "service",
+  "scopes": ["metrics:read"],
+  "email": null
+}
+```
 
-After middleware succeeds, `request.state.user` contains:
-- user JWT identity:
-  `{"type":"user","user_id","email","email_verified","email_otp_enabled","role","scopes","auth_time"}`
-- API key identity:
-  `{"type":"api_key","key_id","service","scopes","email":None}`
+API key:
 
-## 7. Validate End-to-End
+```json
+{
+  "type": "api_key",
+  "key_id": "uuid",
+  "service": "orders",
+  "scopes": ["orders:read"],
+  "email": null
+}
+```
 
-1. Obtain an access token from `/auth/login`, passing `{"audience":"orders-api"}` for routes protected by your service.
-2. Call one protected route with `Authorization: Bearer <token>`.
-3. Confirm expected `401` for invalid token and `403` for role/action/fresh-auth failures.
+## Failure Semantics
 
-If blocked, continue with `troubleshooting.md`.
+- `401`
+  invalid token or API key
+- `403`
+  authenticated, but blocked by role, action token, or stale-auth policy
+- `503`
+  auth service unavailable for a required online validation step
+
+## Audience Guidance
+
+Set `expected_audience` to your service identifier and request that same
+audience when your clients obtain tokens. This prevents a token minted for one
+service from being replayed against another.
+
+## Related Docs
+
+- SDK package README: `../sdk/README.md`
+- service API guide: `service-api.md`
+- troubleshooting: `troubleshooting.md`
