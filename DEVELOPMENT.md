@@ -1,124 +1,165 @@
-# Local Development (Docker)
+# Development Guide
 
-This document is the step-by-step runbook to start the full auth service stack
-locally with Docker.
+This guide covers local setup, day-to-day commands, and the expected workflow
+for engineers working in this repository.
 
 Related docs:
-- onboarding hub: `docs/README.md`
-- SDK integration quickstart: `docs/integrate-sdk.md`
-- troubleshooting: `docs/troubleshooting.md`
 
-## 1. Prerequisites
+- docs hub: `docs/README.md`
+- contributor guide: `CONTRIBUTING.md`
+- configuration reference: `docs/configuration.md`
+- testing guide: `docs/testing.md`
 
-- Docker Desktop running
-- Docker Compose plugin (`docker compose version`)
-- Port `8000` (service), `5432` (Postgres), and `6379` (Redis) available
+## Prerequisites
 
-## 2. Create `.env` from sample
+- Python `3.11`
+- Docker Desktop with the Compose plugin
+- PostgreSQL and Redis ports available if you plan to use the local Docker stack
+- optional: `uv` for faster local task execution
 
-From repository root:
+## Local Stack With Docker
 
-```bash
-cp .env-sample .env
-```
-
-PowerShell alternative:
+1. Copy the environment template.
 
 ```powershell
 Copy-Item .env-sample .env
 ```
 
-Notes:
+2. Start the full stack.
 
-- `.env` is ignored by git.
-- `docker/docker-compose.yml` injects the full app configuration from
-  `.env-sample` plus optional overrides from `.env` into the Python services.
-- For Docker startup, JWT keys are optional. If `JWT__PRIVATE_KEY_PEM` and
-  `JWT__PUBLIC_KEY_PEM` are not set, the container generates temporary keys
-  automatically on boot.
-- `APP__PORT` controls both the internal Uvicorn port and the published host
-  port for the auth service container.
-
-## 3. Start the full stack
-
-From repository root:
-
-```bash
+```powershell
 docker compose -f docker/docker-compose.yml up --build
 ```
 
-Detached mode:
+3. Verify readiness.
 
-```bash
-docker compose -f docker/docker-compose.yml up -d --build
-```
-
-Services started:
-
-- `postgres` (`postgres:16`)
-- `redis` (`redis:7`)
-- `mailhog` (local email inspection)
-- `adminer` (local Postgres browser UI)
-- `auth-service` (FastAPI + Alembic migration on startup)
-- `webhook-worker` (RQ worker for immediate webhook delivery jobs)
-- `webhook-scheduler` (RQ scheduler for delayed retries and retention jobs)
-
-## 4. Verify service health
-
-```bash
-curl http://localhost:8000/health/live
+```powershell
 curl http://localhost:8000/health/ready
 ```
 
-Expected:
+Services started by Compose:
 
-- `/health/live` -> `200 {"status":"live"}`
-- `/health/ready` -> `200 {"status":"ready"}`
+- `postgres`
+- `redis`
+- `mailhog`
+- `adminer`
+- `auth-service`
+- `webhook-worker`
+- `webhook-scheduler`
 
-Also useful:
-
-```bash
-curl http://localhost:8000/.well-known/jwks.json
-```
-
-Local UIs:
+Local URLs:
 
 - Swagger UI: `http://localhost:8000/docs`
+- Mailhog: `http://localhost:8025`
 - Adminer: `http://localhost:8080`
-  - server: `postgres`
-  - username: `postgres`
-  - password: `postgres`
-  - database: `auth_service`
 
-If you already initialized the stack before this change, Adminer will still
-work with password `postgres`, but the existing Postgres volume remains on the
-older `trust` auth mode until you recreate it:
+If you need a full reset:
 
-```bash
-docker compose -f docker/docker-compose.yml down -v
-docker compose -f docker/docker-compose.yml up -d --build
-```
-
-## 5. View logs
-
-```bash
-docker compose -f docker/docker-compose.yml logs -f auth-service
-```
-
-## 6. Stop or reset
-
-Stop containers:
-
-```bash
-docker compose -f docker/docker-compose.yml down
-```
-
-Stop and remove Postgres volume (full reset):
-
-```bash
+```powershell
 docker compose -f docker/docker-compose.yml down -v
 ```
 
-## 7. Optional: load-test setup
+## Python Environment
 
-See `loadtests/README.md` for Locust runs and seeding a load-test user.
+Install the service and development dependencies in your active environment:
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install .[dev]
+python -m pip install build
+```
+
+If you prefer `uv`, the lockfile is already committed:
+
+```bash
+uv sync --extra dev
+```
+
+## Running The App Without Docker
+
+The service expects working Postgres, Redis, and environment configuration.
+For a complete key map, use `.env-sample` plus `docs/configuration.md`.
+
+Start the API:
+
+```bash
+python -m alembic upgrade head
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Background processes:
+
+```bash
+python worker.py
+python scheduler.py
+```
+
+## Common Commands
+
+Lint:
+
+```bash
+python -m ruff check .
+```
+
+Format check:
+
+```bash
+python -m black --check .
+```
+
+Tests:
+
+```bash
+python -m pytest -q
+```
+
+Migrations:
+
+```bash
+python -m alembic upgrade head
+python -m alembic upgrade head --sql
+```
+
+Build artifacts:
+
+```bash
+python -m build
+python -m build sdk
+```
+
+Signing-key rotation:
+
+```bash
+python -m app.cli rotate-signing-key
+```
+
+## Local Verification Checklist
+
+After changing auth flows, SDK behavior, persistence, or operational code, a
+good local verification pass usually includes:
+
+- `python -m ruff check .`
+- `python -m black --check .`
+- `python -m pytest -q`
+- `python -m alembic upgrade head --sql`
+
+For changes that affect packaging:
+
+- `python -m build`
+- `python -m build sdk`
+
+For changes that affect runtime behavior:
+
+- verify `/health/live`
+- verify `/health/ready`
+- inspect `/.well-known/jwks.json`
+- test at least one end-to-end login or SDK-protected route
+
+## Where To Go Next
+
+- architecture and request flows: `docs/architecture.md`
+- service endpoint map: `docs/service-api.md`
+- SDK integration details: `docs/integrate-sdk.md`
+- test strategy and load tests: `docs/testing.md`
+- production runtime notes: `docs/operations.md`

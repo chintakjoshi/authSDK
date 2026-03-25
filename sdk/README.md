@@ -1,14 +1,21 @@
 # auth-service-sdk
 
-`auth-service-sdk` provides middleware and dependencies for protecting routes
-with JWTs, API keys, role checks, action-token checks, and fresh-auth checks.
+`auth-service-sdk` is the client-side integration package for services that
+trust the central auth service.
 
-## Quick Navigation
+It gives downstream FastAPI and Starlette applications a thin auth layer
+instead of reimplementing JWT verification, API-key introspection, or common
+authorization checks.
 
-- Full onboarding path: `../docs/README.md`
-- Service integration quickstart: `../docs/integrate-sdk.md`
-- Auth API contract summary: `../docs/service-api.md`
-- Troubleshooting: `../docs/troubleshooting.md`
+## Package Surface
+
+- `JWTAuthMiddleware`
+- `APIKeyAuthMiddleware`
+- `AuthClient`
+- `get_current_user`
+- `require_role(...)`
+- `require_action_token(...)`
+- `require_fresh_auth(...)`
 
 ## Installation
 
@@ -16,29 +23,27 @@ with JWTs, API keys, role checks, action-token checks, and fresh-auth checks.
 pip install auth-service-sdk
 ```
 
+Local development installs are also supported:
+
+```bash
+pip install /path/to/authSDK/sdk
+```
+
 ## Minimum Service Endpoints Required
 
-The SDK expects an auth service that exposes:
+The SDK expects the auth service to expose:
 
 - `GET /.well-known/jwks.json`
 - `GET /auth/validate`
 - `POST /auth/introspect`
 
-## JWTAuthMiddleware
+## JWT Example
 
 ```python
-from starlette.applications import Starlette
-from starlette.responses import JSONResponse
-from starlette.routing import Route
-
+from fastapi import FastAPI
 from sdk import JWTAuthMiddleware
 
-
-async def protected(request):
-    return JSONResponse({"user": request.state.user})
-
-
-app = Starlette(routes=[Route("/protected", protected)])
+app = FastAPI()
 app.add_middleware(
     JWTAuthMiddleware,
     auth_base_url="https://auth.example.com",
@@ -46,49 +51,33 @@ app.add_middleware(
 )
 ```
 
-Behavior:
-- JWT verification is local using cached JWKS.
-- User access tokens are then validated against auth-service session state via
-  `/auth/validate`.
-- JWKS cache TTL is 5 minutes.
-- On verification failure, middleware forces one JWKS refresh and retries once.
+Behavior summary:
 
-## APIKeyAuthMiddleware
+- local RS256 verification using cached JWKS
+- one forced JWKS refresh on verification failure
+- online session validation for user tokens
+- verified identity stored in `request.state.user`
+
+## API Key Example
 
 ```python
-from starlette.applications import Starlette
-from starlette.responses import JSONResponse
-from starlette.routing import Route
-
+from fastapi import FastAPI
 from sdk import APIKeyAuthMiddleware
 
-
-async def protected(request):
-    return JSONResponse({"identity": request.state.user})
-
-
-app = Starlette(routes=[Route("/protected", protected)])
+app = FastAPI()
 app.add_middleware(
     APIKeyAuthMiddleware,
     auth_base_url="https://auth.example.com",
 )
 ```
 
-Behavior:
-- API key cache key is `sha256(raw_key)`.
-- Valid introspection responses are cached for 60 seconds.
-- Invalid introspection responses are cached for 10 seconds.
-- If auth-service is unreachable, middleware returns `503` and does not fall
-  back to stale data.
+Behavior summary:
 
-## `request.state.user` shape
+- extracts keys from `X-API-Key` or `Authorization: ApiKey ...`
+- caches valid and invalid introspection decisions locally
+- fails closed when the auth service is unavailable
 
-- JWT/user identity:
-  `{ "type": "user", "user_id": str, "email": str, "email_verified": bool, "email_otp_enabled": bool, "role": "admin"|"user"|"service", "scopes": list[str], "auth_time": int }`
-- API key identity:
-  `{ "type": "api_key", "key_id": str, "service": str, "scopes": list[str], "email": None }`
-
-## Dependencies
+## Dependency Example
 
 ```python
 from fastapi import Depends, FastAPI
@@ -96,12 +85,12 @@ from sdk import require_action_token, require_fresh_auth, require_role
 
 app = FastAPI()
 
-@app.get("/admin-only")
-async def admin_only(user=Depends(require_role("admin"))):
-    return {"user_id": user["user_id"]}
+@app.get("/admin")
+async def admin_route(user=Depends(require_role("admin"))):
+    return {"user": user}
 
 @app.post("/dangerous")
-async def dangerous_op(
+async def dangerous_route(
     user=Depends(
         require_action_token(
             "erase_account",
@@ -110,20 +99,22 @@ async def dangerous_op(
         )
     )
 ):
-    return {"user_id": user["user_id"]}
+    return {"user": user}
 
 @app.post("/sensitive")
-async def sensitive_op(user=Depends(require_fresh_auth(300))):
-    return {"user_id": user["user_id"]}
+async def sensitive_route(user=Depends(require_fresh_auth(300))):
+    return {"user": user}
 ```
 
-## Failure Semantics (Important)
+## Failure Semantics
 
-- `401`: invalid JWT/API key or invalid claims.
-- `403`: authenticated but blocked by role, action token, or stale auth.
-- `503`: auth-service unavailable for required network validation.
+- `401`: invalid token or API key
+- `403`: authenticated but blocked by policy
+- `503`: auth service unavailable for a required validation call
 
-## Audience Requirement
+## Documentation
 
-- Set `expected_audience` to your service identifier when using JWT middleware or action-token dependencies.
-- Request that same audience from the auth service during login or client-credentials issuance so tokens are scoped to your service.
+- repo overview: `../README.md`
+- SDK integration guide: `../docs/integrate-sdk.md`
+- service API guide: `../docs/service-api.md`
+- troubleshooting: `../docs/troubleshooting.md`

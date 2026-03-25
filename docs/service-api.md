@@ -1,12 +1,13 @@
-# Service API Reference (Practical)
+# Service API Guide
 
-This is a practical reference for common integration flows.
+This document is the human-readable map of the auth service API. Use the
+OpenAPI document for exact request and response schemas.
 
 Base URL examples assume `http://localhost:8000`.
 
-## Response Error Shape
+## Error Shape
 
-All errors follow:
+Application errors follow the same basic structure:
 
 ```json
 {
@@ -15,86 +16,24 @@ All errors follow:
 }
 ```
 
-## Browser / BFF Integration
-
-Recommended production shape:
-
-1. Browser calls your BFF only.
-2. BFF calls this auth service.
-3. BFF stores session state in `HttpOnly` cookies or another server-managed session layer.
-
-Password-login contract when verified-email policy is enabled:
-
-- `POST /auth/login` returns `400` with
-  `{"detail":"Email is not verified.","code":"email_not_verified"}`
-  for correct credentials on an unverified account.
-- This is a terminal auth-policy response, not a retryable transport error.
-- No access token or refresh token is issued in this branch.
-- A BFF should not create cookies, session rows, or partial login state when it receives
-  `email_not_verified`.
-- The next user action should usually be "Check email" or "Resend verification email".
-
-Verification resend contract:
-
-- `POST /auth/verify-email/resend/request` is the public endpoint a BFF should call when the
-  user is blocked by `email_not_verified`.
-- On success it always returns `200 {"sent": true}` for unknown, verified, and unverified
-  emails. Clients must not infer account existence or verification status from that `200`
-  response.
-- Only `429 rate_limited` and backend failures should be treated as operational errors.
-
-Lifecycle email link contract:
-
-- Verification and password-reset emails are built from `EMAIL__PUBLIC_BASE_URL`.
-- Set that value to the externally reachable origin for this auth service, for example
-  `https://auth.example.com`.
-- Do not leave it pointed at an internal container hostname or `0.0.0.0`, or emailed links
-  will not work outside the local network.
-
-Verification completion contract:
-
-- `GET /auth/verify-email` only marks the email as verified.
-- It does not auto-login the user and does not issue tokens.
-- After successful verification, the BFF should direct the user back through the normal
-  login flow.
-
-Password-reset session contract:
-
-- `POST /auth/password/reset` revokes all active sessions for the user.
-- A BFF should clear its own auth cookies if a later refresh, validate, or reauth request
-  returns `session_expired` after a password reset.
-
-## Core Endpoints
+## Endpoint Families
 
 ### Health
 
 - `GET /health/live`
 - `GET /health/ready`
 
-### Auth
+### Auth And Token
 
 - `POST /auth/signup`
-  - request: `{"email":"user@example.com","password":"Password123!"}`
 - `POST /auth/login`
-  - request: `{"email":"user@example.com","password":"Password123!","audience":"orders-api"}`
-  - `audience` is optional and scopes the issued access token to a downstream service
-  - response: token pair or OTP challenge
-  - when verified-email login policy is enabled, unverified users receive
-    `{"detail":"Email is not verified.","code":"email_not_verified"}`
 - `POST /auth/token`
-  - refresh flow request: `{"refresh_token":"..."}`
-  - client credentials flow:
-    `grant_type=client_credentials&client_id=...&client_secret=...&audience=orders-api`
 - `POST /auth/logout`
-  - request: `{"refresh_token":"..."}`
-  - requires bearer access token
 - `GET /.well-known/jwks.json`
 - `GET /auth/validate`
-  - requires bearer access token
 - `POST /auth/introspect`
-  - request: `{"api_key":"sk_..."}`
 
-### Email / OTP / Lifecycle
+### Lifecycle And Recovery
 
 - `GET /auth/verify-email`
 - `POST /auth/verify-email/resend`
@@ -103,35 +42,29 @@ Password-reset session contract:
 - `GET /auth/password/reset`
 - `POST /auth/password/reset`
 - `POST /auth/reauth`
+- `POST /auth/users/me/erase`
+
+### OTP
+
 - `POST /auth/otp/verify/login`
 - `POST /auth/otp/resend/login`
 - `POST /auth/otp/request/action`
 - `POST /auth/otp/verify/action`
 - `POST /auth/otp/enable`
 - `POST /auth/otp/disable`
-- `POST /auth/users/me/erase`
 
-### OAuth / SAML
+### OAuth And SAML
 
 - `GET /auth/oauth/google/login`
 - `GET /auth/oauth/google/callback`
 - `GET /auth/saml/login`
 - `GET /auth/saml/metadata`
 
-### API Keys
+### User API Keys
 
 - `POST /auth/apikeys`
 - `GET /auth/apikeys`
 - `POST /auth/apikeys/{key_id}/revoke`
-
-### Admin
-
-Admin endpoints are under `/admin/*`.
-
-Auth options:
-- bearer access token with admin role
-- development-only bootstrap header:
-  `X-Admin-API-Key: <configured ADMIN_API_KEY>`
 
 ### Webhooks
 
@@ -140,33 +73,130 @@ Auth options:
 - `GET /webhooks/{endpoint_id}/deliveries`
 - `POST /webhooks/deliveries/{delivery_id}/retry`
 
-## Recommended Integration Flow
+### Admin
 
-1. Use `/auth/signup`, then complete `/auth/verify-email` before `/auth/login`.
-2. Use `/auth/verify-email/resend/request` when an unverified user needs a fresh verification email.
-3. Use SDK `JWTAuthMiddleware` for protected user routes.
-4. Use SDK `APIKeyAuthMiddleware` for machine clients using opaque API keys.
-5. Enforce role/action/fresh-auth with SDK dependencies where needed.
+The admin surface lives under `/admin/*`.
 
-## Lifecycle Error Contracts
+Major areas include:
 
-- `email_not_verified`
-  Returned by `POST /auth/login` when credentials are correct but password login requires a
-  verified email first.
-- `invalid_verify_token`
-  Returned when a verification link is blank, expired, replaced by a newer resend, or already
-  consumed.
-- `invalid_reset_token`
-  Returned when a password-reset token is blank, expired, or already consumed.
-- `session_expired`
-  Returned when a refresh/access-token-backed session is no longer active, including after
-  logout or password reset.
-- `rate_limited`
-  Returned when resend or other protected operations exceed their configured request budget.
+- users
+- API keys
+- OAuth clients
+- webhooks and deliveries
+- audit log
+- signing-key rotation
+
+## Auth Model By Endpoint Type
+
+Public endpoints:
+
+- signup, login, OAuth entry, JWKS, health, and public lifecycle recovery flows
+
+Bearer-token endpoints:
+
+- logout
+- validate
+- current-user OTP flows
+- most authenticated user workflows
+
+Admin endpoints:
+
+- admin bearer token
+- or development-only `X-Admin-API-Key` bootstrap access when configured
+
+Step-up protected endpoints:
+
+- some admin mutations and sensitive user operations also require an
+  `X-Action-Token`
+
+## Common Integration Flows
+
+### Password Login
+
+Request:
+
+```json
+{
+  "email": "user@example.com",
+  "password": "Password123!",
+  "audience": "orders-api"
+}
+```
+
+Notes:
+
+- `audience` is optional but recommended for downstream APIs
+- login may return a token pair or an OTP challenge
+- if verified email is required and the user is unverified, login returns
+  `email_not_verified`
+
+### Refresh Token
+
+```json
+{
+  "refresh_token": "..."
+}
+```
+
+### Client Credentials
+
+`POST /auth/token` also supports form-encoded client credentials:
+
+```text
+grant_type=client_credentials
+client_id=...
+client_secret=...
+audience=orders-api
+```
+
+### API Key Introspection
+
+```json
+{
+  "api_key": "sk_..."
+}
+```
+
+## Important Behavior Contracts
+
+### Email Verification Policy
+
+When `AUTH__REQUIRE_VERIFIED_EMAIL_FOR_PASSWORD_LOGIN=true`:
+
+- `POST /auth/login` returns `400`
+- response code is `email_not_verified`
+- no token pair is issued
+- clients should direct the user toward verification or resend flows
+
+### Verification Resend Privacy
+
+`POST /auth/verify-email/resend/request` always responds with a generic success
+payload for unknown, verified, and unverified emails. Callers must not infer
+account existence from the response.
+
+### Password Reset Session Revocation
+
+`POST /auth/password/reset` revokes active sessions for the user. Callers should
+clear local auth state if later refresh or validation calls return
+`session_expired`.
+
+### SDK Expectations
+
+Services using `auth-service-sdk` require these endpoints to exist:
+
+- `GET /.well-known/jwks.json`
+- `GET /auth/validate`
+- `POST /auth/introspect`
 
 ## OpenAPI
 
-For full request/response schemas, use:
+Use these for authoritative schemas:
 
-- `GET /docs` (Swagger UI)
+- `GET /docs`
 - `GET /openapi.json`
+
+## Related Docs
+
+- architecture: `architecture.md`
+- SDK integration: `integrate-sdk.md`
+- troubleshooting: `troubleshooting.md`
