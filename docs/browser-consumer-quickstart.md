@@ -52,13 +52,14 @@ Enable browser sessions in `authSDK`:
 BROWSER_SESSIONS__ENABLED=true
 ```
 
-Recommended baseline for same-origin browser apps:
+Recommended local HTTP baseline for same-origin browser apps:
 
 ```text
-BROWSER_SESSIONS__ACCESS_COOKIE_NAME=__Host-auth_access
-BROWSER_SESSIONS__REFRESH_COOKIE_NAME=__Host-auth_refresh
-BROWSER_SESSIONS__CSRF_COOKIE_NAME=__Host-auth_csrf
+BROWSER_SESSIONS__ACCESS_COOKIE_NAME=auth_access
+BROWSER_SESSIONS__REFRESH_COOKIE_NAME=auth_refresh
+BROWSER_SESSIONS__CSRF_COOKIE_NAME=auth_csrf
 BROWSER_SESSIONS__SAME_SITE=lax
+BROWSER_SESSIONS__SECURE_ONLY=false
 BROWSER_SESSIONS__ACCESS_COOKIE_PATH=/
 BROWSER_SESSIONS__REFRESH_COOKIE_PATH=/_auth
 BROWSER_SESSIONS__CSRF_COOKIE_PATH=/
@@ -67,9 +68,28 @@ BROWSER_SESSIONS__CSRF_HEADER_NAME=X-CSRF-Token
 
 Production guidance:
 
+- local HTTP development should use non-prefixed cookie names such as
+  `auth_access`, `auth_refresh`, and `auth_csrf`
 - set `BROWSER_SESSIONS__SECURE_ONLY=true`
 - leave `BROWSER_SESSIONS__COOKIE_DOMAIN` unset for host-only cookies
 - use HTTPS for the frontend origin and all proxied auth routes
+- for HTTPS host-only cookies, a good baseline is:
+
+```text
+BROWSER_SESSIONS__ACCESS_COOKIE_NAME=__Host-auth_access
+BROWSER_SESSIONS__REFRESH_COOKIE_NAME=__Secure-auth_refresh
+BROWSER_SESSIONS__CSRF_COOKIE_NAME=__Host-auth_csrf
+BROWSER_SESSIONS__ACCESS_COOKIE_PATH=/
+BROWSER_SESSIONS__REFRESH_COOKIE_PATH=/_auth
+BROWSER_SESSIONS__CSRF_COOKIE_PATH=/
+```
+
+Prefix rules matter:
+
+- `__Host-*` cookies require `Secure`, no `Domain`, and `Path=/`
+- that means `__Host-auth_refresh` cannot be used with
+  `BROWSER_SESSIONS__REFRESH_COOKIE_PATH=/_auth`
+- `authSDK` now rejects invalid prefix and path combinations at startup
 
 Transport note:
 
@@ -93,16 +113,16 @@ app = FastAPI()
 
 app.add_middleware(
     CookieCSRFMiddleware,
-    csrf_cookie_name="__Host-auth_csrf",
+    csrf_cookie_name="auth_csrf",
     csrf_header_name="X-CSRF-Token",
-    access_cookie_name="__Host-auth_access",
+    access_cookie_name="auth_access",
 )
 app.add_middleware(
     JWTAuthMiddleware,
     auth_base_url="https://app.example.com/_auth",
     expected_audience="jobs-api",
     token_sources=["authorization", "cookie"],
-    access_cookie_name="__Host-auth_access",
+    access_cookie_name="auth_access",
 )
 ```
 
@@ -110,6 +130,9 @@ Important notes:
 
 - register `CookieCSRFMiddleware` before `JWTAuthMiddleware`; FastAPI/Starlette
   runs the most recently added middleware first
+- the cookie names in this example match the local HTTP baseline above; in
+  HTTPS production, match your configured names such as `__Host-auth_access`
+  and `__Host-auth_csrf`
 - keep `token_sources=["authorization", "cookie"]` unless you are certain your
   service will never receive bearer tokens from non-browser clients
 - `Authorization` still wins if both a bearer token and cookie are present
@@ -138,7 +161,7 @@ the response body.
 ### 2. Login With Cookie Transport
 
 ```ts
-const csrfToken = readCookie("__Host-auth_csrf");
+const csrfToken = readCookie("auth_csrf");
 
 const loginResponse = await fetch("/_auth/login", {
   method: "POST",
@@ -171,7 +194,7 @@ await fetch("/api/v1/jobs", {
 Unsafe requests:
 
 ```ts
-const csrfToken = readCookie("__Host-auth_csrf");
+const csrfToken = readCookie("auth_csrf");
 
 await fetch("/api/v1/profile", {
   method: "PATCH",
@@ -187,7 +210,7 @@ await fetch("/api/v1/profile", {
 ### 4. Refresh The Session
 
 ```ts
-const csrfToken = readCookie("__Host-auth_csrf");
+const csrfToken = readCookie("auth_csrf");
 
 await fetch("/_auth/token", {
   method: "POST",
@@ -203,7 +226,7 @@ Do not send the refresh token in the body for cookie-mode refresh.
 ### 5. Logout
 
 ```ts
-const csrfToken = readCookie("__Host-auth_csrf");
+const csrfToken = readCookie("auth_csrf");
 
 await fetch("/_auth/logout", {
   method: "POST",
@@ -231,7 +254,8 @@ Recommended but optional:
 - send `X-Auth-Session-Transport: cookie` if you want explicit request intent
   in logs or mixed-client environments
 
-The only cookie a browser client should read directly is the CSRF cookie.
+The only cookie a browser client should read directly is the CSRF cookie. Use
+the name that matches your environment-specific authSDK config.
 
 ## Suggested Frontend Helpers
 

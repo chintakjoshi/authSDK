@@ -31,6 +31,10 @@ Copy-Item .env-sample .env
 docker compose -f docker/docker-compose.yml up --build
 ```
 
+The checked-in `.env-sample` already uses localhost-safe browser-session cookie
+names for `http://localhost`. Keep those local names unless you are testing the
+stack behind real HTTPS.
+
 3. Verify readiness.
 
 ```powershell

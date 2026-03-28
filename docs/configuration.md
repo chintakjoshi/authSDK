@@ -173,6 +173,15 @@ Forbidden in production:
 - `BROWSER_SESSIONS__CSRF_HEADER_NAME`
   CSRF request header name, defaults to `X-CSRF-Token`
 
+Prefix-validation rules:
+
+- `__Secure-*` cookie names require `BROWSER_SESSIONS__SECURE_ONLY=true`
+- `__Host-*` cookie names require `BROWSER_SESSIONS__SECURE_ONLY=true`
+- `__Host-*` cookie names require `BROWSER_SESSIONS__COOKIE_DOMAIN` to stay unset
+- `__Host-*` cookie names require the matching cookie path to be `/`
+- if you want `BROWSER_SESSIONS__REFRESH_COOKIE_PATH=/_auth`, do not use
+  `__Host-*` for the refresh cookie name
+
 ### Signing Keys
 
 - `SIGNING_KEYS__ROTATION_OVERLAP_SECONDS`
@@ -225,8 +234,12 @@ Browser-session notes:
 - for browser consumers, prefer same-origin `/_auth` and `/api` proxy routes
 - leave `BROWSER_SESSIONS__COOKIE_DOMAIN` unset unless you intentionally need
   broader cookie scope
+- in local HTTP development, use non-prefixed cookie names such as
+  `auth_access`, `auth_refresh`, and `auth_csrf`
 - in local HTTP development, `BROWSER_SESSIONS__SECURE_ONLY=false` is acceptable
   until the app is served over HTTPS
+- in HTTPS production, prefer host-only names such as `__Host-auth_access`,
+  `__Secure-auth_refresh`, and `__Host-auth_csrf`
 - once a browser app moves to cookie sessions, it should stop persisting raw
   auth tokens in JavaScript-readable storage
 

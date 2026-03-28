@@ -128,6 +128,38 @@ Checks:
 2. Verify the code belongs to the current challenge.
 3. Request a fresh OTP and retry.
 
+## `403` Invalid CSRF Token Or Browser Login Never Sticks
+
+Common causes:
+
+- the browser rejected one or more auth cookies, so CSRF and session state were
+  never established
+- a cookie name starts with `__Host-` while `BROWSER_SESSIONS__SECURE_ONLY=false`
+- a cookie name starts with `__Host-` but the matching cookie path is not `/`
+- a cookie name starts with `__Secure-` on plain `http://localhost`
+
+Checks:
+
+1. Inspect the browser devtools Application or Storage tab and confirm the
+   access, refresh, and CSRF cookies are actually being stored.
+2. Confirm local HTTP development uses non-prefixed names such as
+   `auth_access`, `auth_refresh`, and `auth_csrf`.
+3. If you are using `__Host-*`, verify all of these are true:
+   - `BROWSER_SESSIONS__SECURE_ONLY=true`
+   - `BROWSER_SESSIONS__COOKIE_DOMAIN` is unset
+   - the matching cookie path is `/`
+4. If you want `BROWSER_SESSIONS__REFRESH_COOKIE_PATH=/_auth`, use
+   `__Secure-auth_refresh` or a non-prefixed refresh cookie name instead of
+   `__Host-auth_refresh`.
+5. Call `GET /auth/csrf` and verify the response includes a `Set-Cookie` header
+   for the configured CSRF cookie name.
+
+Fix:
+
+- for local HTTP development, use the `.env-sample` browser-session values as-is
+- for HTTPS production, keep `BROWSER_SESSIONS__SECURE_ONLY=true` and use
+  `__Host-auth_access`, `__Secure-auth_refresh`, and `__Host-auth_csrf`
+
 ## Webhook Worker Stops After Idle Time
 
 Common cause:

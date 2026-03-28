@@ -149,6 +149,59 @@ class BrowserSessionSettings(BaseModel):
         normalized = value.strip()
         return normalized or None
 
+    @model_validator(mode="after")
+    def validate_cookie_prefix_constraints(self) -> BrowserSessionSettings:
+        """Validate cookie-prefix semantics when browser sessions are enabled."""
+        if not self.enabled:
+            return self
+
+        cookie_specs = (
+            (
+                "access_cookie_name",
+                self.access_cookie_name,
+                "access_cookie_path",
+                self.access_cookie_path,
+            ),
+            (
+                "refresh_cookie_name",
+                self.refresh_cookie_name,
+                "refresh_cookie_path",
+                self.refresh_cookie_path,
+            ),
+            (
+                "csrf_cookie_name",
+                self.csrf_cookie_name,
+                "csrf_cookie_path",
+                self.csrf_cookie_path,
+            ),
+        )
+
+        for field_name, cookie_name, path_field_name, cookie_path in cookie_specs:
+            if cookie_name.startswith("__Secure-") and not self.secure_only:
+                raise ValueError(
+                    f"browser_sessions.{field_name} uses '__Secure-' and requires "
+                    "browser_sessions.secure_only=true."
+                )
+            if not cookie_name.startswith("__Host-"):
+                continue
+            if not self.secure_only:
+                raise ValueError(
+                    f"browser_sessions.{field_name} uses '__Host-' and requires "
+                    "browser_sessions.secure_only=true."
+                )
+            if self.cookie_domain is not None:
+                raise ValueError(
+                    f"browser_sessions.{field_name} uses '__Host-' and requires "
+                    "browser_sessions.cookie_domain to be unset."
+                )
+            if cookie_path != "/":
+                raise ValueError(
+                    f"browser_sessions.{field_name} uses '__Host-' and requires "
+                    f"browser_sessions.{path_field_name}='/'."
+                )
+
+        return self
+
 
 class SigningKeySettings(BaseModel):
     """Signing-key rotation and encryption settings."""
