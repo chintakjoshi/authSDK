@@ -583,7 +583,9 @@ async def token_endpoint(
             return csrf_error
         refresh_token = extract_refresh_token_from_cookie(request) or ""
         if not refresh_token:
-            return _error_response(status_code=401, detail="Session expired.", code="session_expired")
+            return _error_response(
+                status_code=401, detail="Session expired.", code="session_expired"
+            )
     else:
         try:
             payload = RefreshTokenRequest.model_validate(await request.json())

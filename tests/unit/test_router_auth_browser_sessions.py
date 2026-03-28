@@ -312,7 +312,9 @@ async def test_refresh_cookie_transport_uses_refresh_cookie_and_rotates_session_
 
 
 @pytest.mark.asyncio
-async def test_refresh_infers_cookie_transport_from_browser_session_context_without_header() -> None:
+async def test_refresh_infers_cookie_transport_from_browser_session_context_without_header() -> (
+    None
+):
     """Refresh should default to cookie transport when refresh-session cookies are present."""
     response = await auth_router.token_endpoint(
         request=_request(
