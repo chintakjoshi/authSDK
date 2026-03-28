@@ -74,6 +74,161 @@ async def test_auth_login_refresh_logout_happy_path(
 
 
 @pytest.mark.asyncio
+async def test_auth_cookie_login_refresh_logout_happy_path(
+    app_factory,
+    user_factory,
+) -> None:
+    """Cookie-mode login, refresh, and logout work end-to-end for browser clients."""
+    app: FastAPI = app_factory()
+    await user_factory("cookie-alice@example.com", "Password123!", email_verified=True)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        csrf_response = await client.get("/auth/csrf")
+        assert csrf_response.status_code == 200
+        csrf_token = csrf_response.json()["csrf_token"]
+
+        login_response = await client.post(
+            "/auth/login",
+            json={"email": "cookie-alice@example.com", "password": "Password123!"},
+            headers={
+                "X-Auth-Session-Transport": "cookie",
+                "X-CSRF-Token": csrf_token,
+            },
+        )
+        assert login_response.status_code == 200
+        assert login_response.json() == {
+            "authenticated": True,
+            "session_transport": "cookie",
+        }
+
+        jwt_service = get_jwt_service()
+        login_access_token = client.cookies.get("__Host-auth_access")
+        login_refresh_token = client.cookies.get("__Host-auth_refresh")
+        assert login_access_token
+        assert login_refresh_token
+        login_access_claims = jwt_service.verify_token(login_access_token, expected_type="access")
+        assert login_access_claims["email"] == "cookie-alice@example.com"
+        assert login_access_claims["email_verified"] is True
+        assert login_access_claims["role"] == "user"
+
+        refresh_response = await client.post(
+            "/auth/token",
+            headers={
+                "X-Auth-Session-Transport": "cookie",
+                "X-CSRF-Token": csrf_token,
+            },
+        )
+        assert refresh_response.status_code == 200
+        assert refresh_response.json() == {
+            "authenticated": True,
+            "session_transport": "cookie",
+        }
+
+        refreshed_access_token = client.cookies.get("__Host-auth_access")
+        refreshed_refresh_token = client.cookies.get("__Host-auth_refresh")
+        assert refreshed_access_token
+        assert refreshed_refresh_token
+        assert refreshed_refresh_token != login_refresh_token
+        refresh_access_claims = jwt_service.verify_token(refreshed_access_token, expected_type="access")
+        assert refresh_access_claims["email"] == "cookie-alice@example.com"
+        assert refresh_access_claims["auth_time"] == login_access_claims["auth_time"]
+
+        logout_response = await client.post(
+            "/auth/logout",
+            headers={
+                "X-Auth-Session-Transport": "cookie",
+                "X-CSRF-Token": csrf_token,
+            },
+        )
+        assert logout_response.status_code == 204
+
+        replacement_csrf = await client.get("/auth/csrf")
+        assert replacement_csrf.status_code == 200
+        refresh_after_logout = await client.post(
+            "/auth/token",
+            headers={
+                "X-Auth-Session-Transport": "cookie",
+                "X-CSRF-Token": replacement_csrf.json()["csrf_token"],
+            },
+        )
+        assert refresh_after_logout.status_code == 401
+        assert refresh_after_logout.json()["code"] == "session_expired"
+
+
+@pytest.mark.asyncio
+async def test_auth_cookie_login_refresh_logout_defaults_without_transport_header(
+    app_factory,
+    user_factory,
+) -> None:
+    """Browser-session context should default auth flows to cookie mode without the transport header."""
+    app: FastAPI = app_factory()
+    await user_factory(
+        "implicit-cookie-alice@example.com",
+        "Password123!",
+        email_verified=True,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        csrf_response = await client.get("/auth/csrf")
+        assert csrf_response.status_code == 200
+        csrf_token = csrf_response.json()["csrf_token"]
+
+        login_response = await client.post(
+            "/auth/login",
+            json={
+                "email": "implicit-cookie-alice@example.com",
+                "password": "Password123!",
+            },
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert login_response.status_code == 200
+        assert login_response.json() == {
+            "authenticated": True,
+            "session_transport": "cookie",
+        }
+
+        login_access_token = client.cookies.get("__Host-auth_access")
+        login_refresh_token = client.cookies.get("__Host-auth_refresh")
+        assert login_access_token
+        assert login_refresh_token
+
+        refresh_response = await client.post(
+            "/auth/token",
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert refresh_response.status_code == 200
+        assert refresh_response.json() == {
+            "authenticated": True,
+            "session_transport": "cookie",
+        }
+
+        refreshed_refresh_token = client.cookies.get("__Host-auth_refresh")
+        assert refreshed_refresh_token
+        assert refreshed_refresh_token != login_refresh_token
+
+        logout_response = await client.post(
+            "/auth/logout",
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert logout_response.status_code == 204
+
+        replacement_csrf = await client.get("/auth/csrf")
+        assert replacement_csrf.status_code == 200
+        refresh_after_logout = await client.post(
+            "/auth/token",
+            headers={"X-CSRF-Token": replacement_csrf.json()["csrf_token"]},
+        )
+        assert refresh_after_logout.status_code == 401
+        assert refresh_after_logout.json()["code"] == "session_expired"
+
+
+@pytest.mark.asyncio
 async def test_auth_login_rejects_unverified_email(
     app_factory,
     user_factory,

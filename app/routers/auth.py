@@ -13,6 +13,19 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.core.browser_sessions import (
+    build_cookie_session_response,
+    clear_auth_cookies,
+    extract_refresh_token_from_cookie,
+    get_browser_session_settings,
+    is_cookie_transport_request,
+    mint_csrf_token,
+    require_csrf_for_cookie_transport,
+    set_csrf_cookie,
+)
+from app.core.browser_sessions import (
+    extract_bearer_token as _shared_extract_bearer_token,
+)
 from app.core.jwt import JWTService, TokenValidationError, get_jwt_service
 from app.core.sessions import SessionService, SessionStateError, get_session_service
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
@@ -20,6 +33,8 @@ from app.dependencies import get_database_session
 from app.schemas.api_key import APIKeyIntrospectRequest
 from app.schemas.otp import LoginOTPChallengeResponse
 from app.schemas.token import (
+    CookieSessionResponse,
+    CSRFTokenResponse,
     LogoutRequest,
     OAuthAccessTokenResponse,
     RefreshTokenRequest,
@@ -73,15 +88,8 @@ def _error_response(
 
 
 def _extract_bearer_token(request: Request) -> str | None:
-    """Extract bearer token from Authorization header."""
-    authorization = request.headers.get("authorization", "").strip()
-    if not authorization:
-        return None
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer":
-        return None
-    cleaned = token.strip()
-    return cleaned or None
+    """Compatibility wrapper for bearer extraction used by existing tests."""
+    return _shared_extract_bearer_token(request)
 
 
 def _first_form_value(form_data: dict[str, list[str]], key: str) -> str | None:
@@ -152,7 +160,10 @@ def _password_login_requires_verified_email() -> bool:
     return bool(get_settings().auth.require_verified_email_for_password_login)
 
 
-@router.post("/auth/login", response_model=TokenPairResponse | LoginOTPChallengeResponse)
+@router.post(
+    "/auth/login",
+    response_model=TokenPairResponse | LoginOTPChallengeResponse | CookieSessionResponse,
+)
 async def login(
     payload: LoginRequest,
     request: Request,
@@ -166,6 +177,10 @@ async def login(
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> TokenPairResponse | LoginOTPChallengeResponse | JSONResponse:
     """Authenticate email/password credentials and issue JWT pair."""
+    csrf_error = require_csrf_for_cookie_transport(request)
+    if csrf_error is not None:
+        return csrf_error
+
     user = await user_service.get_user_by_email(db_session=db_session, email=payload.email)
     client_ip = extract_client_ip(request)
     user_agent = normalize_user_agent(request.headers.get("user-agent"))
@@ -461,13 +476,21 @@ async def login(
         actor_id=str(user.id),
         metadata={"provider": "password", "token_kind": "access_refresh_pair"},
     )
+    if is_cookie_transport_request(request):
+        return build_cookie_session_response(
+            access_token=token_pair.access_token,
+            refresh_token=token_pair.refresh_token,
+        )
     return TokenPairResponse(
         access_token=token_pair.access_token,
         refresh_token=token_pair.refresh_token,
     )
 
 
-@router.post("/auth/token", response_model=TokenPairResponse | OAuthAccessTokenResponse)
+@router.post(
+    "/auth/token",
+    response_model=TokenPairResponse | OAuthAccessTokenResponse | CookieSessionResponse,
+)
 async def token_endpoint(
     request: Request,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
@@ -552,20 +575,31 @@ async def token_endpoint(
             scope=issued_token.scope,
         )
 
-    try:
-        payload = RefreshTokenRequest.model_validate(await request.json())
-    except json.JSONDecodeError:
-        return _error_response(
-            status_code=422,
-            detail="Invalid request payload.",
-            code="invalid_credentials",
-        )
-    except ValidationError:
-        return _error_response(
-            status_code=422,
-            detail="Invalid request payload.",
-            code="invalid_credentials",
-        )
+    refresh_token: str
+    cookie_transport = is_cookie_transport_request(request)
+    if cookie_transport:
+        csrf_error = require_csrf_for_cookie_transport(request)
+        if csrf_error is not None:
+            return csrf_error
+        refresh_token = extract_refresh_token_from_cookie(request) or ""
+        if not refresh_token:
+            return _error_response(status_code=401, detail="Session expired.", code="session_expired")
+    else:
+        try:
+            payload = RefreshTokenRequest.model_validate(await request.json())
+        except json.JSONDecodeError:
+            return _error_response(
+                status_code=422,
+                detail="Invalid request payload.",
+                code="invalid_credentials",
+            )
+        except ValidationError:
+            return _error_response(
+                status_code=422,
+                detail="Invalid request payload.",
+                code="invalid_credentials",
+            )
+        refresh_token = payload.refresh_token
 
     try:
 
@@ -595,7 +629,7 @@ async def token_endpoint(
 
         rotated = await session_service.rotate_refresh_session(
             db_session=db_session,
-            raw_refresh_token=payload.refresh_token,
+            raw_refresh_token=refresh_token,
             token_issuer=_issue_pair,
         )
         token_pair = await rotated if inspect.isawaitable(rotated) else rotated
@@ -627,6 +661,11 @@ async def token_endpoint(
         request=request,
         metadata={"provider": "password", "token_kind": "access_refresh_pair"},
     )
+    if cookie_transport:
+        return build_cookie_session_response(
+            access_token=token_pair.access_token,
+            refresh_token=token_pair.refresh_token,
+        )
     return TokenPairResponse(
         access_token=token_pair.access_token,
         refresh_token=token_pair.refresh_token,
@@ -635,7 +674,6 @@ async def token_endpoint(
 
 @router.post("/auth/logout", response_model=None)
 async def logout(
-    payload: LogoutRequest,
     request: Request,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     jwt_service: Annotated[JWTService, Depends(get_jwt_service)],
@@ -643,10 +681,33 @@ async def logout(
     session_service: Annotated[SessionService, Depends(get_session_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
+    payload: LogoutRequest | None = None,
 ) -> Response | JSONResponse:
     """Revoke session and blocklist current access token JTI."""
-    access_token = _extract_bearer_token(request)
-    if access_token is None:
+    cookie_transport = is_cookie_transport_request(request)
+    if cookie_transport:
+        csrf_error = require_csrf_for_cookie_transport(request)
+        if csrf_error is not None:
+            return csrf_error
+        settings = get_browser_session_settings()
+        access_token = request.cookies.get(settings.access_cookie_name, "").strip()
+        refresh_token = request.cookies.get(settings.refresh_cookie_name, "").strip()
+    else:
+        access_token = _extract_bearer_token(request)
+        refresh_token = payload.refresh_token if payload is not None else ""
+
+    if access_token is None or not access_token:
+        await audit_service.record(
+            db=db_session,
+            event_type="user.logout",
+            actor_type="user",
+            success=False,
+            request=request,
+            failure_reason="invalid_token",
+            metadata={"provider": "password"},
+        )
+        return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
+    if not refresh_token:
         await audit_service.record(
             db=db_session,
             event_type="user.logout",
@@ -681,7 +742,7 @@ async def logout(
     try:
         await session_service.revoke_session(
             db_session=db_session,
-            raw_refresh_token=payload.refresh_token,
+            raw_refresh_token=refresh_token,
             access_jti=str(claims["jti"]),
             access_expiration_epoch=int(claims["exp"]),
         )
@@ -715,7 +776,19 @@ async def logout(
             "reason": "logout",
         },
     )
-    return Response(status_code=204)
+    response = Response(status_code=204)
+    if cookie_transport:
+        clear_auth_cookies(response, clear_csrf=True)
+    return response
+
+
+@router.get("/auth/csrf", response_model=CSRFTokenResponse)
+async def csrf() -> CSRFTokenResponse | JSONResponse:
+    """Mint or rotate the CSRF token used for browser-session double submit protection."""
+    csrf_token = mint_csrf_token()
+    response = JSONResponse(status_code=200, content={"csrf_token": csrf_token})
+    set_csrf_cookie(response, csrf_token)
+    return response
 
 
 @router.get("/.well-known/jwks.json")

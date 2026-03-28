@@ -5,6 +5,19 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class CookieSessionResponse(BaseModel):
+    """Cookie-session success payload that omits raw token material."""
+
+    authenticated: Literal[True] = True
+    session_transport: Literal["cookie"] = "cookie"
+
+
+class CSRFTokenResponse(BaseModel):
+    """CSRF bootstrap response payload for browser-session clients."""
+
+    csrf_token: str
+
+
 class TokenPairResponse(BaseModel):
     """Access/refresh token response payload."""
 

@@ -5,6 +5,13 @@ OpenAPI document for exact request and response schemas.
 
 Base URL examples assume `http://localhost:8000`.
 
+Browser-consumer note:
+
+- browser apps should usually expose these endpoints through a same-origin auth
+  proxy such as `/_auth`
+- start with `browser-consumer-quickstart.md` for the deployment and request
+  model, then use this document for endpoint semantics
+
 ## Error Shape
 
 Application errors follow the same basic structure:
@@ -25,6 +32,7 @@ Application errors follow the same basic structure:
 
 ### Auth And Token
 
+- `GET /auth/csrf`
 - `POST /auth/signup`
 - `POST /auth/login`
 - `POST /auth/token`
@@ -91,6 +99,7 @@ Major areas include:
 Public endpoints:
 
 - signup, login, OAuth entry, JWKS, health, and public lifecycle recovery flows
+- CSRF bootstrap through `GET /auth/csrf`
 
 Bearer-token endpoints:
 
@@ -98,6 +107,18 @@ Bearer-token endpoints:
 - validate
 - current-user OTP flows
 - most authenticated user workflows
+
+Browser-session endpoints:
+
+- `GET /auth/csrf` mints a CSRF cookie and returns the token value
+- `POST /auth/login`, `POST /auth/token`, and `POST /auth/logout` accept
+  `X-Auth-Session-Transport: cookie`
+- when browser sessions are enabled, those endpoints also default to cookie
+  mode when browser-session cookies or CSRF request context are already present
+- cookie-mode auth responses omit raw access and refresh tokens from the JSON
+  body and set cookies instead
+- cookie-mode mutation requests require a matching CSRF cookie and
+  `X-CSRF-Token` header
 
 Admin endpoints:
 
@@ -127,8 +148,20 @@ Notes:
 
 - `audience` is optional but recommended for downstream APIs
 - login may return a token pair or an OTP challenge
+- login may also return `{ "authenticated": true, "session_transport": "cookie" }`
+  when cookie transport is requested or inferred from browser-session context
 - if verified email is required and the user is unverified, login returns
   `email_not_verified`
+
+Cookie-mode request requirements:
+
+- fetch a CSRF token first from `GET /auth/csrf`
+- send `X-CSRF-Token` matching the CSRF cookie
+- expect access and refresh cookies instead of raw token strings
+- `X-Auth-Session-Transport: cookie` is optional for browser clients after
+  CSRF bootstrap, but still accepted
+- `X-Auth-Session-Transport: token` explicitly preserves legacy token-pair
+  behavior
 
 ### Refresh Token
 
@@ -137,6 +170,11 @@ Notes:
   "refresh_token": "..."
 }
 ```
+
+Cookie-mode refresh does not send a JSON refresh token. It reads the refresh
+token from the configured cookie and requires a valid CSRF header.
+`X-Auth-Session-Transport: cookie` remains optional-but-supported for explicit
+browser clients.
 
 ### Client Credentials
 
@@ -188,6 +226,10 @@ Services using `auth-service-sdk` require these endpoints to exist:
 - `GET /auth/validate`
 - `POST /auth/introspect`
 
+Browser-session consumers should also expose:
+
+- `GET /auth/csrf`
+
 ## OpenAPI
 
 Use these for authoritative schemas:
@@ -198,5 +240,6 @@ Use these for authoritative schemas:
 ## Related Docs
 
 - architecture: `architecture.md`
+- browser app quickstart: `browser-consumer-quickstart.md`
 - SDK integration: `integrate-sdk.md`
 - troubleshooting: `troubleshooting.md`

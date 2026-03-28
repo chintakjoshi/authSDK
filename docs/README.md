@@ -10,6 +10,7 @@ This directory is the maintainer and integrator guide for `authSDK`.
 
 ## Core Docs
 
+- browser app quickstart: `browser-consumer-quickstart.md`
 - architecture and system flows: `architecture.md`
 - configuration and environment variables: `configuration.md`
 - service endpoints and integration contracts: `service-api.md`
@@ -37,6 +38,13 @@ Operator path:
 4. `security-review.md`
 
 SDK consumer path:
+
+1. `browser-consumer-quickstart.md`
+2. `integrate-sdk.md`
+3. `service-api.md`
+4. `troubleshooting.md`
+
+Non-browser consumer path:
 
 1. `integrate-sdk.md`
 2. `service-api.md`

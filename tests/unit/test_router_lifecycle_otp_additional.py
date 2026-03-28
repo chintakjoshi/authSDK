@@ -16,6 +16,7 @@ from app.schemas.otp import RequestActionOTPRequest, VerifyActionOTPRequest
 from app.services.erasure_service import ErasedUserResult, ErasureServiceError
 from app.services.lifecycle_service import LifecycleServiceError
 from app.services.otp_service import OTPServiceError
+from app.services.token_service import TokenPair
 
 
 def _request(
@@ -127,6 +128,20 @@ class _OTPStub:
 
     async def disable_email_otp(self, **kwargs: object) -> object:
         return SimpleNamespace(id=uuid4(), email_otp_enabled=False)
+
+
+class _LoginOTPVerifyStub:
+    async def verify_login_code(self, **kwargs: object) -> object:
+        del kwargs
+        return SimpleNamespace(
+            user_id="user-1",
+            session_id=uuid4(),
+            suspicious_login=None,
+            token_pair=TokenPair(
+                access_token="login-access-token",
+                refresh_token="login-refresh-token",
+            ),
+        )
 
 
 class _ErasureStub:
@@ -483,3 +498,27 @@ async def test_otp_routes_cover_request_verify_and_dual_gate_branches() -> None:
         audit_service=audit_service,  # type: ignore[arg-type]
     )
     assert disabled.email_otp_enabled is False
+
+
+@pytest.mark.asyncio
+async def test_verify_login_otp_infers_cookie_transport_without_transport_header() -> None:
+    """OTP login completion should default to cookie transport from browser-session context."""
+    request = _request(
+        path="/auth/otp/verify/login",
+        headers={
+            "cookie": "__Host-auth_csrf=csrf-token",
+            "x-csrf-token": "csrf-token",
+        },
+    )
+
+    response = await otp_router.verify_login_otp(
+        payload=SimpleNamespace(challenge_token="challenge-token", code="123456"),
+        request=request,
+        db_session=_db(),  # type: ignore[arg-type]
+        otp_service=_LoginOTPVerifyStub(),  # type: ignore[arg-type]
+        audit_service=_AuditStub(),  # type: ignore[arg-type]
+        webhook_service=_WebhookStub(),  # type: ignore[arg-type]
+    )
+
+    assert response.status_code == 200
+    assert response.body == b'{"authenticated":true,"session_transport":"cookie"}'

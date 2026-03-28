@@ -3,6 +3,10 @@
 This guide is for teams integrating `auth-service-sdk` into another Python
 service.
 
+If your consumer includes a browser frontend, start with
+`browser-consumer-quickstart.md` first. This document focuses on the downstream
+Python service side of that integration.
+
 ## Install
 
 Published package:
@@ -60,6 +64,38 @@ What it does:
 
 Machine-to-machine tokens with type `m2m` are accepted by the middleware when
 they satisfy the expected audience and claim checks.
+
+For browser-cookie sessions, enable cookie extraction explicitly:
+
+```python
+from fastapi import FastAPI
+from sdk import CookieCSRFMiddleware, JWTAuthMiddleware
+
+app = FastAPI()
+app.add_middleware(
+    CookieCSRFMiddleware,
+    csrf_cookie_name="__Host-auth_csrf",
+    csrf_header_name="X-CSRF-Token",
+    access_cookie_name="__Host-auth_access",
+)
+app.add_middleware(
+    JWTAuthMiddleware,
+    auth_base_url="https://auth.example.com",
+    expected_audience="orders-api",
+    token_sources=["authorization", "cookie"],
+    access_cookie_name="__Host-auth_access",
+)
+```
+
+Cookie-mode notes:
+
+- register `CookieCSRFMiddleware` before `JWTAuthMiddleware`; FastAPI/Starlette
+  executes the most recently added middleware first
+- `Authorization` still takes precedence when both a bearer token and cookie
+  are present
+- authenticated source is recorded on `request.state.auth_transport`
+- `CookieCSRFMiddleware` only enforces unsafe requests authenticated through
+  cookies
 
 ## API-Key-Protected Routes
 
@@ -162,6 +198,11 @@ API key:
 }
 ```
 
+The middleware also sets:
+
+- `request.state.auth_transport = "authorization"` for bearer-token requests
+- `request.state.auth_transport = "cookie"` for cookie-authenticated requests
+
 ## Failure Semantics
 
 - `401`
@@ -180,5 +221,6 @@ service from being replayed against another.
 ## Related Docs
 
 - SDK package README: `../sdk/README.md`
+- browser app quickstart: `browser-consumer-quickstart.md`
 - service API guide: `service-api.md`
 - troubleshooting: `troubleshooting.md`

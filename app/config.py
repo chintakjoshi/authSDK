@@ -105,6 +105,51 @@ class AuthSettings(BaseModel):
     require_verified_email_for_password_login: bool = True
 
 
+class BrowserSessionSettings(BaseModel):
+    """Browser-cookie session settings for web application consumers."""
+
+    enabled: bool = False
+    infer_cookie_transport: bool = True
+    transport_header_name: str = "X-Auth-Session-Transport"
+    access_cookie_name: str = "__Host-auth_access"
+    refresh_cookie_name: str = "__Host-auth_refresh"
+    csrf_cookie_name: str = "__Host-auth_csrf"
+    same_site: Literal["lax", "strict", "none"] = "lax"
+    secure_only: bool = False
+    cookie_domain: str | None = None
+    access_cookie_path: str = "/"
+    refresh_cookie_path: str = "/"
+    csrf_cookie_path: str = "/"
+    csrf_header_name: str = "X-CSRF-Token"
+
+    @field_validator(
+        "transport_header_name",
+        "access_cookie_name",
+        "refresh_cookie_name",
+        "csrf_cookie_name",
+        "access_cookie_path",
+        "refresh_cookie_path",
+        "csrf_cookie_path",
+        "csrf_header_name",
+    )
+    @classmethod
+    def normalize_required_strings(cls, value: str) -> str:
+        """Normalize required string settings and reject blank values."""
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("browser_sessions string settings must be non-empty.")
+        return normalized
+
+    @field_validator("cookie_domain")
+    @classmethod
+    def normalize_cookie_domain(cls, value: str | None) -> str | None:
+        """Treat blank cookie domains as unset."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+
 class SigningKeySettings(BaseModel):
     """Signing-key rotation and encryption settings."""
 
@@ -174,6 +219,7 @@ class Settings(BaseSettings):
     saml: SAMLSettings
     rate_limit: RateLimitSettings
     auth: AuthSettings = AuthSettings()
+    browser_sessions: BrowserSessionSettings = BrowserSessionSettings()
     signing_keys: SigningKeySettings = SigningKeySettings()
     email: EmailSettings = EmailSettings()
     webhook: WebhookSettings = WebhookSettings()
@@ -206,6 +252,8 @@ class Settings(BaseSettings):
             raise ValueError("saml.idp_sso_url must use https in production.")
         if not str(self.email.public_base_url).startswith("https://"):
             raise ValueError("email.public_base_url must use https in production.")
+        if self.browser_sessions.enabled and not self.browser_sessions.secure_only:
+            raise ValueError("browser_sessions.secure_only must be true in production.")
 
         return self
 

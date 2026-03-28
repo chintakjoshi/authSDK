@@ -74,6 +74,7 @@ See `.github/workflows/ci.yml` for the exact commands.
 Load testing is especially useful after changes to:
 
 - auth token issuance
+- browser session login and refresh throughput
 - OTP flows
 - rate limiting
 - admin list pagination
@@ -86,12 +87,35 @@ Add or update tests when you change:
 - endpoint behavior or error contracts
 - token claims or validation rules
 - SDK middleware behavior
+- browser-session cookie or CSRF behavior
 - admin-sensitive workflows
 - persistence or migration logic
 - background worker behavior
+
+## Browser Consumer Regression Expectations
+
+Any browser-facing consumer adopting cookie sessions should add end-to-end or
+high-fidelity integration coverage for:
+
+- CSRF bootstrap
+- login defaulting to cookie mode from browser-session context
+- reload preserving the authenticated session
+- refresh after access-token expiry
+- logout and session revocation
+- unsafe requests failing when CSRF is missing or mismatched
+
+For platform changes in `authSDK`, keep at least one browser-style integration
+test that exercises:
+
+1. `GET /auth/csrf`
+2. cookie-mode login without requiring the transport header
+3. authenticated downstream request with cookies
+4. cookie-mode refresh
+5. cookie-mode logout
 
 ## Related Docs
 
 - contributor workflow: `../CONTRIBUTING.md`
 - local setup: `../DEVELOPMENT.md`
+- browser app quickstart: `browser-consumer-quickstart.md`
 - load-test details: `../loadtests/README.md`

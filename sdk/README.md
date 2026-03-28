@@ -7,9 +7,13 @@ It gives downstream FastAPI and Starlette applications a thin auth layer
 instead of reimplementing JWT verification, API-key introspection, or common
 authorization checks.
 
+For browser-backed applications, prefer the same-origin cookie-session pattern
+described in `../docs/browser-consumer-quickstart.md`.
+
 ## Package Surface
 
 - `JWTAuthMiddleware`
+- `CookieCSRFMiddleware`
 - `APIKeyAuthMiddleware`
 - `AuthClient`
 - `get_current_user`
@@ -57,6 +61,44 @@ Behavior summary:
 - one forced JWKS refresh on verification failure
 - online session validation for user tokens
 - verified identity stored in `request.state.user`
+
+Cookie-aware usage:
+
+```python
+from fastapi import FastAPI
+from sdk import CookieCSRFMiddleware, JWTAuthMiddleware
+
+app = FastAPI()
+app.add_middleware(
+    CookieCSRFMiddleware,
+    csrf_cookie_name="__Host-auth_csrf",
+    csrf_header_name="X-CSRF-Token",
+    access_cookie_name="__Host-auth_access",
+)
+app.add_middleware(
+    JWTAuthMiddleware,
+    auth_base_url="https://auth.example.com",
+    expected_audience="orders-api",
+    token_sources=["authorization", "cookie"],
+    access_cookie_name="__Host-auth_access",
+)
+```
+
+In cookie mode, the middleware records the active transport on
+`request.state.auth_transport`.
+
+Register `CookieCSRFMiddleware` before `JWTAuthMiddleware`. FastAPI/Starlette
+executes the most recently added middleware first, so this order lets JWT auth
+populate `request.state.auth_transport` before the CSRF layer runs. The CSRF
+middleware still fails closed if a consumer gets the order wrong.
+
+Browser-consumer note:
+
+- use a same-origin auth proxy such as `/_auth`
+- set browser requests to `credentials: "include"`
+- add `CookieCSRFMiddleware` anywhere a cookie-authenticated browser can make
+  unsafe requests
+- do not persist access or refresh tokens in browser storage
 
 ## API Key Example
 
@@ -115,6 +157,7 @@ async def sensitive_route(user=Depends(require_fresh_auth(300))):
 ## Documentation
 
 - repo overview: `../README.md`
+- browser app quickstart: `../docs/browser-consumer-quickstart.md`
 - SDK integration guide: `../docs/integrate-sdk.md`
 - service API guide: `../docs/service-api.md`
 - troubleshooting: `../docs/troubleshooting.md`
