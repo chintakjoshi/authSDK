@@ -26,7 +26,7 @@ dependencies = [
   "pydantic-settings==2.13.1",
   "python-jose[cryptography]==3.5.0",
   "python3-saml==1.16.0",
-  "redis==7.3.0",
+  "redis==7.4.0",
   "rq==1.16.2",
   "rq-scheduler==0.13.1",
   "sqlalchemy==2.0.48",
