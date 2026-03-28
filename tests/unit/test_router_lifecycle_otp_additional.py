@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.requests import Request
 
+from app.core.browser_sessions import get_browser_session_settings
 from app.routers import lifecycle as lifecycle_router
 from app.routers import otp as otp_router
 from app.schemas.lifecycle import ReauthRequest, SignupRequest
@@ -503,10 +504,11 @@ async def test_otp_routes_cover_request_verify_and_dual_gate_branches() -> None:
 @pytest.mark.asyncio
 async def test_verify_login_otp_infers_cookie_transport_without_transport_header() -> None:
     """OTP login completion should default to cookie transport from browser-session context."""
+    settings = get_browser_session_settings()
     request = _request(
         path="/auth/otp/verify/login",
         headers={
-            "cookie": "__Host-auth_csrf=csrf-token",
+            "cookie": f"{settings.csrf_cookie_name}=csrf-token",
             "x-csrf-token": "csrf-token",
         },
     )

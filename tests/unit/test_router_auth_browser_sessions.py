@@ -11,6 +11,7 @@ import pytest
 from fastapi.requests import Request
 from starlette.responses import Response
 
+from app.core.browser_sessions import get_browser_session_settings
 from app.routers import auth as auth_router
 from app.schemas.token import LogoutRequest
 from app.schemas.user import LoginRequest
@@ -173,7 +174,8 @@ def _cookie_headers(
     include_transport_header: bool = True,
 ) -> dict[str, str]:
     """Build request headers for cookie-mode browser-session tests."""
-    cookie_value = "; ".join([f"__Host-auth_csrf={csrf_token}", *cookies])
+    settings = get_browser_session_settings()
+    cookie_value = "; ".join([f"{settings.csrf_cookie_name}={csrf_token}", *cookies])
     headers = {
         "x-csrf-token": csrf_token,
         "cookie": cookie_value,
@@ -214,8 +216,15 @@ async def test_login_cookie_transport_sets_session_cookies_and_omits_raw_tokens(
         "session_transport": "cookie",
     }
     set_cookie_headers = response.headers.getlist("set-cookie")
+    settings = get_browser_session_settings()
     assert any("httponly" in header.lower() for header in set_cookie_headers)
     assert any("samesite" in header.lower() for header in set_cookie_headers)
+    assert any(
+        settings.access_cookie_name.lower() in header.lower() for header in set_cookie_headers
+    )
+    assert any(
+        settings.refresh_cookie_name.lower() in header.lower() for header in set_cookie_headers
+    )
 
 
 @pytest.mark.asyncio
@@ -249,8 +258,13 @@ async def test_login_infers_cookie_transport_from_browser_session_context_withou
         "session_transport": "cookie",
     }
     set_cookie_headers = response.headers.getlist("set-cookie")
-    assert any("__host-auth_access=" in header.lower() for header in set_cookie_headers)
-    assert any("__host-auth_refresh=" in header.lower() for header in set_cookie_headers)
+    settings = get_browser_session_settings()
+    assert any(
+        settings.access_cookie_name.lower() in header.lower() for header in set_cookie_headers
+    )
+    assert any(
+        settings.refresh_cookie_name.lower() in header.lower() for header in set_cookie_headers
+    )
 
 
 @pytest.mark.asyncio
@@ -291,7 +305,9 @@ async def test_refresh_cookie_transport_uses_refresh_cookie_and_rotates_session_
         request=_request(
             method="POST",
             path="/auth/token",
-            headers=_cookie_headers("__Host-auth_refresh=refresh-cookie-token"),
+            headers=_cookie_headers(
+                f"{get_browser_session_settings().refresh_cookie_name}=refresh-cookie-token"
+            ),
         ),
         db_session=_db(),  # type: ignore[arg-type]
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]
@@ -307,8 +323,13 @@ async def test_refresh_cookie_transport_uses_refresh_cookie_and_rotates_session_
         "session_transport": "cookie",
     }
     set_cookie_headers = response.headers.getlist("set-cookie")
-    assert any("__host-auth_access=" in header.lower() for header in set_cookie_headers)
-    assert any("__host-auth_refresh=" in header.lower() for header in set_cookie_headers)
+    settings = get_browser_session_settings()
+    assert any(
+        settings.access_cookie_name.lower() in header.lower() for header in set_cookie_headers
+    )
+    assert any(
+        settings.refresh_cookie_name.lower() in header.lower() for header in set_cookie_headers
+    )
 
 
 @pytest.mark.asyncio
@@ -321,7 +342,7 @@ async def test_refresh_infers_cookie_transport_from_browser_session_context_with
             method="POST",
             path="/auth/token",
             headers=_cookie_headers(
-                "__Host-auth_refresh=refresh-cookie-token",
+                f"{get_browser_session_settings().refresh_cookie_name}=refresh-cookie-token",
                 include_transport_header=False,
             ),
         ),
@@ -339,8 +360,13 @@ async def test_refresh_infers_cookie_transport_from_browser_session_context_with
         "session_transport": "cookie",
     }
     set_cookie_headers = response.headers.getlist("set-cookie")
-    assert any("__host-auth_access=" in header.lower() for header in set_cookie_headers)
-    assert any("__host-auth_refresh=" in header.lower() for header in set_cookie_headers)
+    settings = get_browser_session_settings()
+    assert any(
+        settings.access_cookie_name.lower() in header.lower() for header in set_cookie_headers
+    )
+    assert any(
+        settings.refresh_cookie_name.lower() in header.lower() for header in set_cookie_headers
+    )
 
 
 @pytest.mark.asyncio
@@ -352,8 +378,8 @@ async def test_logout_cookie_transport_uses_cookies_and_clears_session_cookies()
             method="POST",
             path="/auth/logout",
             headers=_cookie_headers(
-                "__Host-auth_access=access-cookie-token",
-                "__Host-auth_refresh=refresh-cookie-token",
+                f"{get_browser_session_settings().access_cookie_name}=access-cookie-token",
+                f"{get_browser_session_settings().refresh_cookie_name}=refresh-cookie-token",
             ),
         ),
         db_session=_db(),  # type: ignore[arg-type]
@@ -367,8 +393,13 @@ async def test_logout_cookie_transport_uses_cookies_and_clears_session_cookies()
     assert isinstance(response, Response)
     assert response.status_code == 204
     set_cookie_headers = response.headers.getlist("set-cookie")
-    assert any("__host-auth_access=" in header.lower() for header in set_cookie_headers)
-    assert any("__host-auth_refresh=" in header.lower() for header in set_cookie_headers)
+    settings = get_browser_session_settings()
+    assert any(
+        settings.access_cookie_name.lower() in header.lower() for header in set_cookie_headers
+    )
+    assert any(
+        settings.refresh_cookie_name.lower() in header.lower() for header in set_cookie_headers
+    )
     assert any(
         "max-age=0" in header.lower() or "expires=" in header.lower()
         for header in set_cookie_headers
@@ -384,8 +415,8 @@ async def test_logout_infers_cookie_transport_from_browser_session_context_witho
             method="POST",
             path="/auth/logout",
             headers=_cookie_headers(
-                "__Host-auth_access=access-cookie-token",
-                "__Host-auth_refresh=refresh-cookie-token",
+                f"{get_browser_session_settings().access_cookie_name}=access-cookie-token",
+                f"{get_browser_session_settings().refresh_cookie_name}=refresh-cookie-token",
                 include_transport_header=False,
             ),
         ),
@@ -400,8 +431,13 @@ async def test_logout_infers_cookie_transport_from_browser_session_context_witho
     assert isinstance(response, Response)
     assert response.status_code == 204
     set_cookie_headers = response.headers.getlist("set-cookie")
-    assert any("__host-auth_access=" in header.lower() for header in set_cookie_headers)
-    assert any("__host-auth_refresh=" in header.lower() for header in set_cookie_headers)
+    settings = get_browser_session_settings()
+    assert any(
+        settings.access_cookie_name.lower() in header.lower() for header in set_cookie_headers
+    )
+    assert any(
+        settings.refresh_cookie_name.lower() in header.lower() for header in set_cookie_headers
+    )
     assert any(
         "max-age=0" in header.lower() or "expires=" in header.lower()
         for header in set_cookie_headers
@@ -418,4 +454,5 @@ async def test_csrf_endpoint_sets_cookie_and_returns_token() -> None:
     payload = json.loads(response.body)
     assert payload["csrf_token"]
     set_cookie_headers = response.headers.getlist("set-cookie")
-    assert any("__host-auth_csrf=" in header.lower() for header in set_cookie_headers)
+    settings = get_browser_session_settings()
+    assert any(settings.csrf_cookie_name.lower() in header.lower() for header in set_cookie_headers)

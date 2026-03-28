@@ -71,16 +71,16 @@ from sdk import CookieCSRFMiddleware, JWTAuthMiddleware
 app = FastAPI()
 app.add_middleware(
     CookieCSRFMiddleware,
-    csrf_cookie_name="__Host-auth_csrf",
+    csrf_cookie_name="auth_csrf",
     csrf_header_name="X-CSRF-Token",
-    access_cookie_name="__Host-auth_access",
+    access_cookie_name="auth_access",
 )
 app.add_middleware(
     JWTAuthMiddleware,
     auth_base_url="https://auth.example.com",
     expected_audience="orders-api",
     token_sources=["authorization", "cookie"],
-    access_cookie_name="__Host-auth_access",
+    access_cookie_name="auth_access",
 )
 ```
 
@@ -91,6 +91,10 @@ Register `CookieCSRFMiddleware` before `JWTAuthMiddleware`. FastAPI/Starlette
 executes the most recently added middleware first, so this order lets JWT auth
 populate `request.state.auth_transport` before the CSRF layer runs. The CSRF
 middleware still fails closed if a consumer gets the order wrong.
+
+The cookie names in this example match the local HTTP browser-session baseline.
+In HTTPS production, use the names configured in authSDK, often
+`__Host-auth_access` and `__Host-auth_csrf`.
 
 Browser-consumer note:
 

@@ -105,8 +105,8 @@ async def test_auth_cookie_login_refresh_logout_happy_path(
         }
 
         jwt_service = get_jwt_service()
-        login_access_token = client.cookies.get("__Host-auth_access")
-        login_refresh_token = client.cookies.get("__Host-auth_refresh")
+        login_access_token = client.cookies.get("auth_access")
+        login_refresh_token = client.cookies.get("auth_refresh")
         assert login_access_token
         assert login_refresh_token
         login_access_claims = jwt_service.verify_token(login_access_token, expected_type="access")
@@ -127,8 +127,8 @@ async def test_auth_cookie_login_refresh_logout_happy_path(
             "session_transport": "cookie",
         }
 
-        refreshed_access_token = client.cookies.get("__Host-auth_access")
-        refreshed_refresh_token = client.cookies.get("__Host-auth_refresh")
+        refreshed_access_token = client.cookies.get("auth_access")
+        refreshed_refresh_token = client.cookies.get("auth_refresh")
         assert refreshed_access_token
         assert refreshed_refresh_token
         assert refreshed_refresh_token != login_refresh_token
@@ -195,8 +195,8 @@ async def test_auth_cookie_login_refresh_logout_defaults_without_transport_heade
             "session_transport": "cookie",
         }
 
-        login_access_token = client.cookies.get("__Host-auth_access")
-        login_refresh_token = client.cookies.get("__Host-auth_refresh")
+        login_access_token = client.cookies.get("auth_access")
+        login_refresh_token = client.cookies.get("auth_refresh")
         assert login_access_token
         assert login_refresh_token
 
@@ -210,7 +210,7 @@ async def test_auth_cookie_login_refresh_logout_defaults_without_transport_heade
             "session_transport": "cookie",
         }
 
-        refreshed_refresh_token = client.cookies.get("__Host-auth_refresh")
+        refreshed_refresh_token = client.cookies.get("auth_refresh")
         assert refreshed_refresh_token
         assert refreshed_refresh_token != login_refresh_token
 
