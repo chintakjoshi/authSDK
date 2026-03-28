@@ -132,7 +132,9 @@ async def test_auth_cookie_login_refresh_logout_happy_path(
         assert refreshed_access_token
         assert refreshed_refresh_token
         assert refreshed_refresh_token != login_refresh_token
-        refresh_access_claims = jwt_service.verify_token(refreshed_access_token, expected_type="access")
+        refresh_access_claims = jwt_service.verify_token(
+            refreshed_access_token, expected_type="access"
+        )
         assert refresh_access_claims["email"] == "cookie-alice@example.com"
         assert refresh_access_claims["auth_time"] == login_access_claims["auth_time"]
 

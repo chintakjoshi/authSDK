@@ -220,7 +220,9 @@ async def test_jwt_middleware_prefers_authorization_header_over_cookie() -> None
 
 
 @pytest.mark.asyncio
-async def test_cookie_csrf_middleware_rejects_unsafe_cookie_authenticated_requests_without_header() -> None:
+async def test_cookie_csrf_middleware_rejects_unsafe_cookie_authenticated_requests_without_header() -> (
+    None
+):
     """Unsafe cookie-authenticated requests should fail closed without CSRF header."""
     cookie_csrf_middleware = getattr(sdk_middleware, "CookieCSRFMiddleware", None)
     assert cookie_csrf_middleware is not None
@@ -249,7 +251,9 @@ async def test_cookie_csrf_middleware_rejects_unsafe_cookie_authenticated_reques
 
 
 @pytest.mark.asyncio
-async def test_cookie_csrf_middleware_allows_matching_header_for_cookie_authenticated_requests() -> None:
+async def test_cookie_csrf_middleware_allows_matching_header_for_cookie_authenticated_requests() -> (
+    None
+):
     """Matching CSRF cookie and header should allow unsafe cookie-authenticated requests."""
     cookie_csrf_middleware = getattr(sdk_middleware, "CookieCSRFMiddleware", None)
     assert cookie_csrf_middleware is not None
@@ -276,7 +280,9 @@ async def test_cookie_csrf_middleware_allows_matching_header_for_cookie_authenti
 
 
 @pytest.mark.asyncio
-async def test_cookie_csrf_middleware_rejects_when_access_cookie_implies_cookie_auth_without_state() -> None:
+async def test_cookie_csrf_middleware_rejects_when_access_cookie_implies_cookie_auth_without_state() -> (
+    None
+):
     """CSRF should still fail closed when middleware order leaves auth_transport unset."""
     cookie_csrf_middleware = getattr(sdk_middleware, "CookieCSRFMiddleware", None)
     assert cookie_csrf_middleware is not None
@@ -326,7 +332,9 @@ async def test_cookie_csrf_middleware_skips_enforcement_when_bearer_auth_wins_ov
 
 
 @pytest.mark.asyncio
-async def test_cookie_csrf_and_jwt_middlewares_fail_closed_even_with_wrong_registration_order() -> None:
+async def test_cookie_csrf_and_jwt_middlewares_fail_closed_even_with_wrong_registration_order() -> (
+    None
+):
     """Missing CSRF must still be rejected when consumers register middleware in the wrong order."""
     cookie_csrf_middleware = getattr(sdk_middleware, "CookieCSRFMiddleware", None)
     assert cookie_csrf_middleware is not None
