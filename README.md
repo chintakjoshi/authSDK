@@ -6,6 +6,10 @@
 `authSDK` is a central authentication platform plus a reusable Python SDK for
 downstream services.
 
+For browser applications, the recommended integration path is now same-origin
+cookie sessions backed by `HttpOnly` cookies. Non-browser consumers can keep
+using the existing bearer-token contracts.
+
 The repository contains two closely related deliverables:
 
 - `app/`: a FastAPI auth service that owns identity, sessions, token issuance,
@@ -60,6 +64,7 @@ verification and session state.
 
 - email/password signup and login
 - JWT access and refresh tokens
+- browser-cookie sessions for first-party web apps
 - audience-scoped access tokens for downstream APIs
 - server-side session validation and logout
 - API key issuance and introspection
@@ -119,6 +124,7 @@ Start here based on what you need:
 
 - repository docs hub: `docs/README.md`
 - local development: `DEVELOPMENT.md`
+- browser app quickstart: `docs/browser-consumer-quickstart.md`
 - system architecture: `docs/architecture.md`
 - configuration reference: `docs/configuration.md`
 - service API guide: `docs/service-api.md`
@@ -172,6 +178,10 @@ python -m build sdk
 ```
 
 For a fuller contributor workflow, see `CONTRIBUTING.md`.
+
+Browser-app integrators should start with `docs/browser-consumer-quickstart.md`
+and then use `docs/service-api.md` plus `docs/integrate-sdk.md` for the exact
+service and SDK contracts.
 
 ## Operational Entry Points
 

@@ -60,6 +60,7 @@ Required in production:
 - `APP__ALLOWED_HOSTS`
 - `SIGNING_KEYS__ENCRYPTION_KEY`
 - `WEBHOOK__SECRET_ENCRYPTION_KEY`
+- `BROWSER_SESSIONS__SECURE_ONLY=true` when browser sessions are enabled
 - HTTPS OAuth redirect URI
 - HTTPS redirect URI allowlist entries
 - HTTPS SAML ACS URL
@@ -139,6 +140,39 @@ Forbidden in production:
 - `AUTH__REQUIRE_VERIFIED_EMAIL_FOR_PASSWORD_LOGIN`
   blocks password login until email verification is complete
 
+### Browser Sessions
+
+- `BROWSER_SESSIONS__ENABLED`
+  enables cookie-mode auth endpoints and cookie helpers
+- `BROWSER_SESSIONS__INFER_COOKIE_TRANSPORT`
+  defaults to `true`; when enabled, authSDK treats browser-session signals such
+  as CSRF/session cookies as cookie transport even without an explicit
+  transport header
+- `BROWSER_SESSIONS__TRANSPORT_HEADER_NAME`
+  explicit browser transport selector, defaults to `X-Auth-Session-Transport`;
+  `token` still overrides browser-session inference when needed
+- `BROWSER_SESSIONS__ACCESS_COOKIE_NAME`
+  access JWT cookie name, defaults to `__Host-auth_access`
+- `BROWSER_SESSIONS__REFRESH_COOKIE_NAME`
+  refresh cookie name, defaults to `__Host-auth_refresh`
+- `BROWSER_SESSIONS__CSRF_COOKIE_NAME`
+  CSRF cookie name, defaults to `__Host-auth_csrf`
+- `BROWSER_SESSIONS__SAME_SITE`
+  one of `lax`, `strict`, `none`
+- `BROWSER_SESSIONS__SECURE_ONLY`
+  must be `true` in production when browser sessions are enabled
+- `BROWSER_SESSIONS__COOKIE_DOMAIN`
+  leave unset for host-only cookies; only set this intentionally for broader
+  cookie scope
+- `BROWSER_SESSIONS__ACCESS_COOKIE_PATH`
+  access cookie path, usually `/`
+- `BROWSER_SESSIONS__REFRESH_COOKIE_PATH`
+  refresh cookie path; use your same-origin auth prefix such as `/_auth`
+- `BROWSER_SESSIONS__CSRF_COOKIE_PATH`
+  CSRF cookie path, usually `/`
+- `BROWSER_SESSIONS__CSRF_HEADER_NAME`
+  CSRF request header name, defaults to `X-CSRF-Token`
+
 ### Signing Keys
 
 - `SIGNING_KEYS__ROTATION_OVERLAP_SECONDS`
@@ -186,9 +220,20 @@ Forbidden in production:
 - if JWT PEM values are omitted in Docker, the container generates ephemeral
   keys on startup
 
+Browser-session notes:
+
+- for browser consumers, prefer same-origin `/_auth` and `/api` proxy routes
+- leave `BROWSER_SESSIONS__COOKIE_DOMAIN` unset unless you intentionally need
+  broader cookie scope
+- in local HTTP development, `BROWSER_SESSIONS__SECURE_ONLY=false` is acceptable
+  until the app is served over HTTPS
+- once a browser app moves to cookie sessions, it should stop persisting raw
+  auth tokens in JavaScript-readable storage
+
 ## Related Docs
 
 - local workflow: `../DEVELOPMENT.md`
 - architecture: `architecture.md`
+- browser app quickstart: `browser-consumer-quickstart.md`
 - operations: `operations.md`
 - troubleshooting: `troubleshooting.md`

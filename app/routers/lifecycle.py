@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
 from typing import Annotated
 from uuid import UUID
 
@@ -10,6 +9,14 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.browser_sessions import (
+    build_cookie_reauth_response,
+    extract_access_token,
+    require_csrf_for_cookie_authenticated_request,
+)
+from app.core.browser_sessions import (
+    extract_bearer_token as _shared_extract_bearer_token,
+)
 from app.dependencies import get_database_session
 from app.schemas.lifecycle import (
     EraseAccountResponse,
@@ -26,6 +33,7 @@ from app.schemas.lifecycle import (
     ValidatePasswordResetResponse,
     VerifyEmailResponse,
 )
+from app.schemas.token import CookieSessionResponse
 from app.services.audit_service import AuditService, get_audit_service
 from app.services.brute_force_service import extract_client_ip, normalize_user_agent
 from app.services.erasure_service import ErasureService, ErasureServiceError, get_erasure_service
@@ -56,15 +64,8 @@ def _error_response(
 
 
 def _extract_bearer_token(request: Request) -> str | None:
-    """Extract bearer token from Authorization header."""
-    authorization = request.headers.get("authorization", "").strip()
-    if not authorization:
-        return None
-    scheme, _, token = authorization.partition(" ")
-    if not hmac.compare_digest(scheme.lower(), "bearer"):
-        return None
-    stripped = token.strip()
-    return stripped or None
+    """Compatibility wrapper for bearer extraction used by existing tests."""
+    return _shared_extract_bearer_token(request)
 
 
 @router.post("/auth/signup", status_code=201, response_model=SignupResponse)
@@ -175,7 +176,11 @@ async def resend_verification_email(
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> ResendVerifyEmailResponse | JSONResponse:
     """Resend email verification link for authenticated user."""
-    access_token = _extract_bearer_token(request)
+    csrf_error = require_csrf_for_cookie_authenticated_request(request)
+    if csrf_error is not None:
+        return csrf_error
+
+    access_token, _ = extract_access_token(request)
     if access_token is None:
         await audit_service.record(
             db=db_session,
@@ -391,7 +396,7 @@ async def reset_password(
     return ResetPasswordResponse(reset=True)
 
 
-@router.post("/auth/reauth", response_model=ReauthResponse)
+@router.post("/auth/reauth", response_model=ReauthResponse | CookieSessionResponse)
 async def reauthenticate(
     payload: ReauthRequest,
     request: Request,
@@ -401,7 +406,11 @@ async def reauthenticate(
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> ReauthResponse | JSONResponse:
     """Re-verify password and issue a fresh access token with updated auth_time."""
-    access_token = _extract_bearer_token(request)
+    csrf_error = require_csrf_for_cookie_authenticated_request(request)
+    if csrf_error is not None:
+        return csrf_error
+
+    access_token, auth_transport = extract_access_token(request)
     if access_token is None:
         await audit_service.record(
             db=db_session,
@@ -467,6 +476,8 @@ async def reauthenticate(
         request=request,
         actor_id=user_id,
     )
+    if auth_transport == "cookie":
+        return build_cookie_reauth_response(access_token=fresh_access_token)
     return ReauthResponse(access_token=fresh_access_token)
 
 
@@ -487,7 +498,11 @@ async def erase_my_account(
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> EraseAccountResponse | JSONResponse:
     """Erase the authenticated user's account after action-token verification."""
-    access_token = _extract_bearer_token(request)
+    csrf_error = require_csrf_for_cookie_authenticated_request(request)
+    if csrf_error is not None:
+        return csrf_error
+
+    access_token, _ = extract_access_token(request)
     if access_token is None:
         return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
 

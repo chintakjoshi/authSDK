@@ -250,6 +250,8 @@ def integration_env() -> Iterator[dict[str, str]]:
         "RATE_LIMIT__DEFAULT_REQUESTS_PER_MINUTE": "10000",
         "RATE_LIMIT__LOGIN_REQUESTS_PER_MINUTE": "10000",
         "RATE_LIMIT__TOKEN_REQUESTS_PER_MINUTE": "10000",
+        "BROWSER_SESSIONS__ENABLED": "true",
+        "BROWSER_SESSIONS__SECURE_ONLY": "false",
         "EMAIL__MAILHOG_HOST": mailhog_host,
         "EMAIL__MAILHOG_PORT": str(mailhog_port),
         "EMAIL__EMAIL_FROM": "auth-integration@example.com",

@@ -67,6 +67,23 @@ Routers registered in the application:
    still active.
 5. The verified identity is placed in `request.state.user`.
 
+### Browser Session Flow
+
+1. A browser app calls same-origin `/_auth/csrf`.
+2. The reverse proxy forwards that request to `GET /auth/csrf`.
+3. The auth service sets a CSRF cookie and returns the token value.
+4. The browser app calls same-origin `/_auth/login` with `credentials: include`
+   and a matching CSRF header. An explicit
+   `X-Auth-Session-Transport: cookie` header is still accepted but no longer
+   required once browser-session context is established.
+5. The auth service issues access and refresh cookies instead of returning raw
+   token strings to JavaScript.
+6. The browser app calls same-origin `/api/*` with `credentials: include`.
+7. The downstream API uses `JWTAuthMiddleware` cookie extraction plus
+   `CookieCSRFMiddleware` to authenticate and protect unsafe requests.
+8. Refresh and logout continue through same-origin `/_auth/token` and
+   `/_auth/logout`.
+
 ### API Key Validation
 
 1. A downstream service uses `APIKeyAuthMiddleware`.
@@ -127,4 +144,5 @@ See `configuration.md` for the full configuration model.
 - environment variables: `configuration.md`
 - endpoint families: `service-api.md`
 - SDK usage: `integrate-sdk.md`
+- browser adoption quickstart: `browser-consumer-quickstart.md`
 - deployment and runtime operations: `operations.md`

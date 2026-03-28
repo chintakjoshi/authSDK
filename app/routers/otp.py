@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
 import time
 from typing import Annotated
 
@@ -10,6 +9,16 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.browser_sessions import (
+    build_cookie_session_response,
+    extract_access_token,
+    is_cookie_transport_request,
+    require_csrf_for_cookie_authenticated_request,
+    require_csrf_for_cookie_transport,
+)
+from app.core.browser_sessions import (
+    extract_bearer_token as _shared_extract_bearer_token,
+)
 from app.dependencies import get_database_session
 from app.schemas.otp import (
     OTPEnrollmentResponse,
@@ -21,7 +30,7 @@ from app.schemas.otp import (
     VerifyActionOTPResponse,
     VerifyLoginOTPRequest,
 )
-from app.schemas.token import TokenPairResponse
+from app.schemas.token import CookieSessionResponse, TokenPairResponse
 from app.services.audit_service import AuditService, get_audit_service
 from app.services.brute_force_service import extract_client_ip, normalize_user_agent
 from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
@@ -45,22 +54,15 @@ def _error_response(
     )
 
 
-def _extract_bearer_token(request: Request) -> str | None:
-    """Extract bearer token from Authorization header."""
-    authorization = request.headers.get("authorization", "").strip()
-    if not authorization:
-        return None
-    scheme, _, token = authorization.partition(" ")
-    if not hmac.compare_digest(scheme.lower(), "bearer"):
-        return None
-    stripped = token.strip()
-    return stripped or None
-
-
 def _extract_action_token(request: Request) -> str | None:
     """Extract action token from X-Action-Token header."""
     token = request.headers.get("x-action-token", "").strip()
     return token or None
+
+
+def _extract_bearer_token(request: Request) -> str | None:
+    """Compatibility wrapper for bearer extraction used by existing tests."""
+    return _shared_extract_bearer_token(request)
 
 
 def _auth_time_is_fresh(claims: dict[str, object], *, max_age_seconds: int = 300) -> bool:
@@ -95,7 +97,7 @@ async def _record_failure_events(
         )
 
 
-@router.post("/auth/otp/verify/login", response_model=TokenPairResponse)
+@router.post("/auth/otp/verify/login", response_model=TokenPairResponse | CookieSessionResponse)
 async def verify_login_otp(
     payload: VerifyLoginOTPRequest,
     request: Request,
@@ -105,6 +107,10 @@ async def verify_login_otp(
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> TokenPairResponse | JSONResponse:
     """Complete password login after email OTP verification."""
+    csrf_error = require_csrf_for_cookie_transport(request)
+    if csrf_error is not None:
+        return csrf_error
+
     try:
         result = await otp_service.verify_login_code(
             db_session=db_session,
@@ -190,6 +196,11 @@ async def verify_login_otp(
         actor_id=result.user_id,
         metadata={"provider": "password", "token_kind": "access_refresh_pair"},
     )
+    if is_cookie_transport_request(request):
+        return build_cookie_session_response(
+            access_token=result.token_pair.access_token,
+            refresh_token=result.token_pair.refresh_token,
+        )
     return TokenPairResponse(
         access_token=result.token_pair.access_token,
         refresh_token=result.token_pair.refresh_token,
@@ -239,7 +250,11 @@ async def request_action_otp(
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> RequestActionOTPResponse | JSONResponse:
     """Send an OTP for a sensitive authenticated action."""
-    access_token = _extract_bearer_token(request)
+    csrf_error = require_csrf_for_cookie_authenticated_request(request)
+    if csrf_error is not None:
+        return csrf_error
+
+    access_token, _ = extract_access_token(request)
     if access_token is None:
         return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
 
@@ -283,7 +298,11 @@ async def verify_action_otp(
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> VerifyActionOTPResponse | JSONResponse:
     """Verify an action OTP and mint an action token."""
-    access_token = _extract_bearer_token(request)
+    csrf_error = require_csrf_for_cookie_authenticated_request(request)
+    if csrf_error is not None:
+        return csrf_error
+
+    access_token, _ = extract_access_token(request)
     if access_token is None:
         return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
 
@@ -340,7 +359,11 @@ async def enable_email_otp(
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> OTPEnrollmentResponse | JSONResponse:
     """Enable login OTP for the authenticated user."""
-    access_token = _extract_bearer_token(request)
+    csrf_error = require_csrf_for_cookie_authenticated_request(request)
+    if csrf_error is not None:
+        return csrf_error
+
+    access_token, _ = extract_access_token(request)
     if access_token is None:
         return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
 
@@ -404,7 +427,11 @@ async def disable_email_otp(
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
 ) -> OTPEnrollmentResponse | JSONResponse:
     """Disable login OTP for the authenticated user."""
-    access_token = _extract_bearer_token(request)
+    csrf_error = require_csrf_for_cookie_authenticated_request(request)
+    if csrf_error is not None:
+        return csrf_error
+
+    access_token, _ = extract_access_token(request)
     if access_token is None:
         return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
 

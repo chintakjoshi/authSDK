@@ -45,6 +45,12 @@ def _extract_bearer_token(request: Request) -> str | None:
     return stripped or None
 
 
+def _extract_cookie_token(request: Request, cookie_name: str) -> str | None:
+    """Extract a token from a configured cookie."""
+    token = request.cookies.get(cookie_name, "").strip()
+    return token or None
+
+
 def _extract_api_key(request: Request) -> str | None:
     """Extract API key from X-API-Key or Authorization headers."""
     direct_key = request.headers.get("x-api-key", "").strip()
@@ -90,6 +96,8 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         auth_client: AuthClient | None = None,
         jwks_cache: JWKSCacheManager | None = None,
         required_token_type: str = "access",
+        token_sources: list[str] | None = None,
+        access_cookie_name: str = "__Host-auth_access",
     ) -> None:
         """Initialize middleware with auth client and JWKS cache."""
         super().__init__(app)
@@ -101,10 +109,14 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
         )
         self._required_token_type = required_token_type
         self._expected_audience = expected_audience
+        self._token_sources = _normalize_token_sources(token_sources or ["authorization"])
+        self._access_cookie_name = access_cookie_name.strip()
+        if not self._access_cookie_name:
+            raise ValueError("access_cookie_name must be non-empty.")
 
     async def dispatch(self, request: Request, call_next) -> Response:
         """Verify JWT and inject user identity into request state."""
-        token = _extract_bearer_token(request)
+        token, auth_transport = self._extract_token(request)
         if token is None:
             return _error_response(401, "Invalid token.", "invalid_token")
 
@@ -134,6 +146,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
                 "email": None,
             }
             request.state.user = service_identity
+            request.state.auth_transport = auth_transport
             return await call_next(request)
 
         try:
@@ -169,7 +182,19 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             "auth_time": auth_time,
         }
         request.state.user = user_identity
+        request.state.auth_transport = auth_transport
         return await call_next(request)
+
+    def _extract_token(self, request: Request) -> tuple[str | None, str | None]:
+        """Extract token using the configured source precedence."""
+        for source in self._token_sources:
+            if source == "authorization":
+                token = _extract_bearer_token(request)
+            else:
+                token = _extract_cookie_token(request, self._access_cookie_name)
+            if token is not None:
+                return token, source
+        return None, None
 
     async def _verify_with_refresh(self, token: str) -> dict[str, Any]:
         """Verify token using cached JWKS and force-refresh once on failure."""
@@ -322,6 +347,56 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         return "Invalid API key."
 
 
+class CookieCSRFMiddleware(BaseHTTPMiddleware):
+    """Require double-submit CSRF validation for unsafe cookie-authenticated requests."""
+
+    def __init__(
+        self,
+        app,
+        *,
+        csrf_cookie_name: str = "__Host-auth_csrf",
+        csrf_header_name: str = "X-CSRF-Token",
+        access_cookie_name: str = "__Host-auth_access",
+    ) -> None:
+        """Initialize middleware with configurable CSRF cookie/header names."""
+        super().__init__(app)
+        self._csrf_cookie_name = csrf_cookie_name.strip()
+        self._csrf_header_name = csrf_header_name.strip()
+        self._access_cookie_name = access_cookie_name.strip()
+        if not self._csrf_cookie_name:
+            raise ValueError("csrf_cookie_name must be non-empty.")
+        if not self._csrf_header_name:
+            raise ValueError("csrf_header_name must be non-empty.")
+        if not self._access_cookie_name:
+            raise ValueError("access_cookie_name must be non-empty.")
+
+    def _uses_cookie_auth(self, request: Request) -> bool:
+        """Infer whether this request should be treated as cookie-authenticated."""
+        auth_transport = getattr(request.state, "auth_transport", None)
+        if auth_transport == "cookie":
+            return True
+        if auth_transport == "authorization":
+            return False
+        if _extract_bearer_token(request) is not None:
+            return False
+        return _extract_cookie_token(request, self._access_cookie_name) is not None
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        """Reject unsafe cookie-authenticated requests that lack a matching CSRF token."""
+        if request.method.upper() in {"GET", "HEAD", "OPTIONS", "TRACE"}:
+            return await call_next(request)
+        if not self._uses_cookie_auth(request):
+            return await call_next(request)
+
+        cookie_token = request.cookies.get(self._csrf_cookie_name, "").strip()
+        header_token = request.headers.get(self._csrf_header_name, "").strip()
+        if not cookie_token or not header_token:
+            return _error_response(403, "Invalid CSRF token.", "invalid_csrf_token")
+        if not hmac.compare_digest(cookie_token, header_token):
+            return _error_response(403, "Invalid CSRF token.", "invalid_csrf_token")
+        return await call_next(request)
+
+
 def _normalize_expected_audience(value: str | list[str]) -> list[str]:
     """Normalize one or more expected audiences."""
     if isinstance(value, str):
@@ -333,6 +408,20 @@ def _normalize_expected_audience(value: str | list[str]) -> list[str]:
         if normalized and normalized not in audiences:
             audiences.append(normalized)
     return audiences
+
+
+def _normalize_token_sources(value: list[str]) -> list[str]:
+    """Normalize token source precedence for JWT middleware."""
+    normalized_sources: list[str] = []
+    for item in value:
+        normalized = item.strip().lower()
+        if normalized not in {"authorization", "cookie"}:
+            raise ValueError("token_sources entries must be 'authorization' or 'cookie'.")
+        if normalized not in normalized_sources:
+            normalized_sources.append(normalized)
+    if not normalized_sources:
+        raise ValueError("token_sources must be non-empty.")
+    return normalized_sources
 
 
 def _audience_matches(token_audience: Any, expected_audience: str | list[str]) -> bool:

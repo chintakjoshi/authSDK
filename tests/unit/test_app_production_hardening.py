@@ -72,6 +72,10 @@ def _production_settings() -> Settings:
             "login_requests_per_minute": 1000,
             "token_requests_per_minute": 1000,
         },
+        browser_sessions={
+            "enabled": False,
+            "secure_only": True,
+        },
         email={"public_base_url": "https://auth.example.com"},
         signing_keys={"rotation_overlap_seconds": 900, "encryption_key": "signing-secret"},
         webhook={
@@ -121,6 +125,8 @@ def _seed_production_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RATE_LIMIT__DEFAULT_REQUESTS_PER_MINUTE", "1000")
     monkeypatch.setenv("RATE_LIMIT__LOGIN_REQUESTS_PER_MINUTE", "1000")
     monkeypatch.setenv("RATE_LIMIT__TOKEN_REQUESTS_PER_MINUTE", "1000")
+    monkeypatch.setenv("BROWSER_SESSIONS__ENABLED", "false")
+    monkeypatch.setenv("BROWSER_SESSIONS__SECURE_ONLY", "true")
     monkeypatch.setenv("EMAIL__PUBLIC_BASE_URL", "https://auth.example.com")
     monkeypatch.setenv("SIGNING_KEYS__ENCRYPTION_KEY", "signing-secret")
     monkeypatch.setenv("WEBHOOK__SECRET_ENCRYPTION_KEY", "webhook-secret")
