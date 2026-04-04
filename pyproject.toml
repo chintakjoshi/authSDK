@@ -42,7 +42,7 @@ dev = [
   "pytest==9.0.2",
   "pytest-asyncio==1.3.0",
   "pytest-cov==7.0.0",
-  "ruff==0.8.4",
+  "ruff==0.15.9",
   "testcontainers[postgres,redis]==4.14.1",
 ]
 
