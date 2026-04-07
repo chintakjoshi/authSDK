@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import BackgroundTasks
 from fastapi.requests import Request
 
 from app.core.browser_sessions import get_browser_session_settings
@@ -15,7 +16,7 @@ from app.routers import otp as otp_router
 from app.schemas.lifecycle import ReauthRequest, SignupRequest
 from app.schemas.otp import RequestActionOTPRequest, VerifyActionOTPRequest
 from app.services.erasure_service import ErasedUserResult, ErasureServiceError
-from app.services.lifecycle_service import LifecycleServiceError
+from app.services.lifecycle_service import LifecycleServiceError, SignupPasswordResult
 from app.services.otp_service import OTPServiceError
 from app.services.token_service import TokenPair
 
@@ -79,7 +80,8 @@ class _LifecycleStub:
     async def signup_password(self, **kwargs: object) -> object:
         if self.signup_error is not None:
             raise self.signup_error
-        return SimpleNamespace(id=uuid4(), email=kwargs["email"], email_verified=False)
+        user = SimpleNamespace(id=uuid4(), email=kwargs["email"], email_verified=False)
+        return SignupPasswordResult(accepted_email=str(kwargs["email"]), created_user=user)
 
     async def validate_access_token(self, **kwargs: object) -> dict[str, object]:
         return self.validate_claims
@@ -179,16 +181,18 @@ async def test_lifecycle_routes_cover_signup_resend_validate_reauth_and_erase() 
     signed_up = await lifecycle_router.signup(
         payload=SignupRequest(email="user@example.com", password="Password123!"),
         request=_request(path="/auth/signup"),
+        background_tasks=BackgroundTasks(),
         db_session=_db(),  # type: ignore[arg-type]
         lifecycle_service=lifecycle_service,  # type: ignore[arg-type]
         audit_service=audit_service,  # type: ignore[arg-type]
         webhook_service=webhook_service,  # type: ignore[arg-type]
     )
-    assert signed_up.email == "user@example.com"
+    assert signed_up.accepted is True
     lifecycle_service.signup_error = LifecycleServiceError("bad", "invalid_credentials", 400)
     signup_error = await lifecycle_router.signup(
         payload=SignupRequest(email="bad@example.com", password="Password123!"),
         request=_request(path="/auth/signup"),
+        background_tasks=BackgroundTasks(),
         db_session=_db(),  # type: ignore[arg-type]
         lifecycle_service=lifecycle_service,  # type: ignore[arg-type]
         audit_service=audit_service,  # type: ignore[arg-type]

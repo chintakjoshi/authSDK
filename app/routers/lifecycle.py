@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -72,14 +72,15 @@ def _extract_bearer_token(request: Request) -> str | None:
 async def signup(
     payload: SignupRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     lifecycle_service: Annotated[LifecycleService, Depends(get_lifecycle_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> SignupResponse | JSONResponse:
-    """Create password user and send signup verification email."""
+    """Accept password signup requests without revealing account existence."""
     try:
-        user = await lifecycle_service.signup_password(
+        signup_result = await lifecycle_service.signup_password(
             db_session=db_session,
             email=payload.email,
             password=payload.password,
@@ -87,7 +88,7 @@ async def signup(
     except LifecycleServiceError as exc:
         await audit_service.record(
             db=db_session,
-            event_type="user.created",
+            event_type="user.signup.accepted",
             actor_type="user",
             success=False,
             request=request,
@@ -98,28 +99,48 @@ async def signup(
 
     await audit_service.record(
         db=db_session,
-        event_type="user.created",
+        event_type="user.signup.accepted",
         actor_type="user",
         success=True,
         request=request,
-        actor_id=str(user.id),
-        target_id=str(user.id),
-        target_type="user",
-        metadata={"provider": "password"},
+        actor_id=(
+            str(signup_result.created_user.id) if signup_result.created_user is not None else None
+        ),
+        target_id=(
+            str(signup_result.created_user.id) if signup_result.created_user is not None else None
+        ),
+        target_type="user" if signup_result.created_user is not None else None,
+        metadata={"provider": "password", "created": signup_result.created},
     )
-    await webhook_service.emit_event(
-        event_type="user.created",
-        data={
-            "user_id": str(user.id),
-            "email_verified": user.email_verified,
-            "provider": "password",
-        },
-    )
-    return SignupResponse(
-        user_id=user.id,
-        email=user.email,
-        email_verified=user.email_verified,
-    )
+    if signup_result.created_user is not None:
+        user = signup_result.created_user
+        if signup_result.verification_link is not None:
+            background_tasks.add_task(
+                lifecycle_service.send_signup_verification_email,
+                user_id=str(user.id),
+                to_email=user.email,
+                verification_link=signup_result.verification_link,
+            )
+        await audit_service.record(
+            db=db_session,
+            event_type="user.created",
+            actor_type="user",
+            success=True,
+            request=request,
+            actor_id=str(user.id),
+            target_id=str(user.id),
+            target_type="user",
+            metadata={"provider": "password"},
+        )
+        await webhook_service.emit_event(
+            event_type="user.created",
+            data={
+                "user_id": str(user.id),
+                "email_verified": user.email_verified,
+                "provider": "password",
+            },
+        )
+    return SignupResponse()
 
 
 @router.get("/auth/verify-email", response_model=VerifyEmailResponse)
