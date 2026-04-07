@@ -132,6 +132,21 @@ Step-up protected endpoints:
 
 ## Common Integration Flows
 
+### Signup
+
+`POST /auth/signup` returns the same success response for both new and already
+registered emails:
+
+```json
+{
+  "accepted": true
+}
+```
+
+This avoids revealing account existence through the public signup API. When the
+email is available, the service still creates the user and schedules the
+verification email after the response is sent.
+
 ### Password Login
 
 Request:

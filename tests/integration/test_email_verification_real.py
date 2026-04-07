@@ -75,7 +75,7 @@ async def test_verify_email_happy_path_marks_user_verified(app_factory, db_sessi
             json={"email": "verify@example.com", "password": "Password123!"},
         )
         assert signup.status_code == 201
-        assert signup.json()["email_verified"] is False
+        assert signup.json() == {"accepted": True}
         assert len(sender.messages) == 1
         assert sender.messages[0].verification_link.startswith(
             "http://localhost:8000/auth/verify-email?token="
@@ -94,6 +94,45 @@ async def test_verify_email_happy_path_marks_user_verified(app_factory, db_sessi
     assert user.email_verified is True
     assert user.email_verify_token_hash is None
     assert user.email_verify_token_expires is None
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_signup_hides_duplicate_email_state(app_factory, db_session) -> None:
+    """Duplicate signup returns the same public response and does not create a second user."""
+    app: FastAPI = app_factory()
+    sender = _CapturingEmailSender()
+    app.dependency_overrides[get_lifecycle_service] = lambda: _build_lifecycle_service(sender)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        first = await client.post(
+            "/auth/signup",
+            json={"email": "duplicate@example.com", "password": "Password123!"},
+        )
+        second = await client.post(
+            "/auth/signup",
+            json={"email": "duplicate@example.com", "password": "Password123!"},
+        )
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert first.json() == {"accepted": True}
+    assert second.json() == {"accepted": True}
+    assert len(sender.messages) == 1
+
+    users = (
+        (
+            await db_session.execute(
+                select(User).where(User.email == "duplicate@example.com", User.deleted_at.is_(None))
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(users) == 1
     app.dependency_overrides.clear()
 
 

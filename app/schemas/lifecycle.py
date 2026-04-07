@@ -16,11 +16,9 @@ class SignupRequest(BaseModel):
 
 
 class SignupResponse(BaseModel):
-    """Password signup response payload."""
+    """Non-enumerating password signup response payload."""
 
-    user_id: UUID
-    email: str
-    email_verified: bool
+    accepted: Literal[True] = True
 
 
 class VerifyEmailResponse(BaseModel):

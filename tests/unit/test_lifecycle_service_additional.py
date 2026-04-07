@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 from redis.exceptions import RedisError
+from sqlalchemy.exc import IntegrityError
 
 from app.core.jwt import TokenValidationError
 from app.services.lifecycle_service import LifecycleService, LifecycleServiceError
@@ -113,11 +114,18 @@ class _SessionServiceStub:
 
 
 class _DBSessionStub:
-    def __init__(self, result: object | None = None) -> None:
+    def __init__(
+        self,
+        result: object | None = None,
+        *,
+        flush_exception: Exception | None = None,
+    ) -> None:
         self.result = result
+        self.flush_exception = flush_exception
         self.added: list[object] = []
         self.flush_count = 0
         self.commit_count = 0
+        self.rollback_count = 0
 
     def add(self, instance: object) -> None:
         self.added.append(instance)
@@ -131,9 +139,14 @@ class _DBSessionStub:
 
     async def flush(self) -> None:
         self.flush_count += 1
+        if self.flush_exception is not None:
+            raise self.flush_exception
 
     async def commit(self) -> None:
         self.commit_count += 1
+
+    async def rollback(self) -> None:
+        self.rollback_count += 1
 
 
 def _service(
@@ -157,14 +170,9 @@ def _service(
 
 
 @pytest.mark.asyncio
-async def test_signup_password_rejects_invalid_or_duplicate_email() -> None:
-    """Signup fails for empty emails and already-registered accounts."""
-    user_service = _UserServiceStub()
-    user_service.users_by_email["registered@example.com"] = _UserRecord(
-        id=uuid4(),
-        email="registered@example.com",
-    )
-    service = _service(user_service=user_service)
+async def test_signup_password_rejects_invalid_email_and_hides_duplicate_email() -> None:
+    """Signup rejects blank emails but accepts duplicates without creating a new user."""
+    service = _service()
 
     with pytest.raises(LifecycleServiceError) as exc_info:
         await service.signup_password(
@@ -174,13 +182,16 @@ async def test_signup_password_rejects_invalid_or_duplicate_email() -> None:
         )
     assert exc_info.value.code == "invalid_credentials"
 
-    with pytest.raises(LifecycleServiceError) as exc_info:
-        await service.signup_password(
-            db_session=_DBSessionStub(),  # type: ignore[arg-type]
-            email="registered@example.com",
-            password="Password123!",
-        )
-    assert exc_info.value.status_code == 409
+    duplicate = await service.signup_password(
+        db_session=_DBSessionStub(
+            result=object(),
+            flush_exception=IntegrityError("insert users", {"email": "registered@example.com"}, None),
+        ),  # type: ignore[arg-type]
+        email="registered@example.com",
+        password="Password123!",
+    )
+    assert duplicate.accepted_email == "registered@example.com"
+    assert duplicate.created is False
 
 
 @pytest.mark.asyncio
@@ -196,17 +207,19 @@ async def test_signup_password_success_sends_verification_and_commits() -> None:
     service._issue_email_verify_token = _issue_token  # type: ignore[assignment]
     db_session = _DBSessionStub()
 
-    user = await service.signup_password(
+    result = await service.signup_password(
         db_session=db_session,  # type: ignore[arg-type]
         email="new@example.com",
         password="Password123!",
     )
 
+    assert result.created is True
+    assert result.created_user is not None
+    user = result.created_user
     assert user.email == "new@example.com"
     assert user.password_hash == "hashed::Password123!"
-    assert sender.verification_links == [
-        "http://localhost:8000/auth/verify-email?token=verify-token"
-    ]
+    assert result.verification_link == "http://localhost:8000/auth/verify-email?token=verify-token"
+    assert sender.verification_links == []
     assert db_session.commit_count == 1
 
 
