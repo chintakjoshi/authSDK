@@ -8,13 +8,14 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from authlib.jose import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI, Request
 from httpx import ASGITransport, AsyncClient
-from jose import jwt
 
 from sdk.client import AuthClient
+from sdk.jwt_utils import decode_unverified_jwt_claims
 from sdk.middleware import JWTAuthMiddleware
 
 
@@ -76,7 +77,7 @@ def _build_token(
         payload["auth_time"] = int(now.timestamp())
     if include_jti:
         payload["jti"] = str(uuid4())
-    return jwt.encode(payload, private_pem, algorithm="RS256", headers={"kid": kid})
+    return jwt.encode({"alg": "RS256", "kid": kid}, payload, private_pem).decode("utf-8")
 
 
 @pytest.mark.asyncio
@@ -253,13 +254,10 @@ async def test_jwt_middleware_rejects_missing_role_claim() -> None:
     """JWT middleware rejects tokens without role claim."""
     private_pem, jwk = _generate_signing_material("kid-1")
     token = _build_token(private_pem, kid="kid-1")
-    payload = jwt.get_unverified_claims(token)
+    payload = decode_unverified_jwt_claims(token)
     payload.pop("role", None)
-    token_without_role = jwt.encode(
-        payload,
-        private_pem,
-        algorithm="RS256",
-        headers={"kid": "kid-1"},
+    token_without_role = jwt.encode({"alg": "RS256", "kid": "kid-1"}, payload, private_pem).decode(
+        "utf-8"
     )
 
     async def auth_handler(request: httpx.Request) -> httpx.Response:

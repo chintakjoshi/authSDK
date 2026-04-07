@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from authlib.jose import jwt as authlib_jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from jose import jwt as jose_jwt
 
 from app.core.jwt import JWTService, TokenValidationError
 
@@ -202,7 +202,8 @@ def test_verify_token_rejects_missing_kid_when_keyset_provided() -> None:
     private_1, public_1 = _generate_keypair()
     jwt_service = JWTService(private_key_pem=private_1, public_key_pem=public_1)
     now = int(datetime.now(UTC).timestamp())
-    token = jose_jwt.encode(
+    token = authlib_jwt.encode(
+        {"alg": "RS256"},
         {
             "jti": "jti-1",
             "iat": now,
@@ -211,8 +212,7 @@ def test_verify_token_rejects_missing_kid_when_keyset_provided() -> None:
             "type": "access",
         },
         private_1,
-        algorithm="RS256",
-    )
+    ).decode("utf-8")
 
     with pytest.raises(TokenValidationError) as exc_info:
         jwt_service.verify_token(

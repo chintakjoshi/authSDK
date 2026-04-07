@@ -10,11 +10,11 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from authlib.jose import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI, Request
 from httpx import ASGITransport, AsyncClient
-from jose import jwt
 from starlette.requests import Request as StarletteRequest
 from starlette.responses import Response
 
@@ -72,7 +72,7 @@ def _build_token(
         "auth_time": int(now.timestamp()),
         "jti": str(uuid4()),
     }
-    return jwt.encode(payload, private_pem, algorithm="RS256", headers={"kid": kid})
+    return jwt.encode({"alg": "RS256", "kid": kid}, payload, private_pem).decode("utf-8")
 
 
 def _request(

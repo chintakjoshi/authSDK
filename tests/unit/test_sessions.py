@@ -9,7 +9,7 @@ from types import MethodType
 from uuid import uuid4
 
 import pytest
-from jose import jwt
+from authlib.jose import jwt
 from redis.exceptions import RedisError
 
 from app.core.sessions import SessionService, SessionStateError
@@ -132,7 +132,7 @@ def _build_access_token(
         "scopes": scopes or [],
         "auth_time": auth_time if auth_time is not None else int(now.timestamp()),
     }
-    return jwt.encode(payload, "session-test-secret", algorithm="HS256")
+    return jwt.encode({"alg": "HS256"}, payload, "session-test-secret").decode("utf-8")
 
 
 @pytest.mark.asyncio

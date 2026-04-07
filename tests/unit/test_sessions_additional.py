@@ -7,7 +7,7 @@ from types import MethodType
 from uuid import uuid4
 
 import pytest
-from jose import jwt
+from authlib.jose import jwt
 from redis.exceptions import RedisError
 
 from app.core.sessions import SessionPayload, SessionService, SessionStateError
@@ -83,7 +83,7 @@ def _access_token(
     }
     if auth_time is not None:
         payload["auth_time"] = auth_time
-    return jwt.encode(payload, "session-secret", algorithm="HS256")
+    return jwt.encode({"alg": "HS256"}, payload, "session-secret").decode("utf-8")
 
 
 @pytest.mark.asyncio

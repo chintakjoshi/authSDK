@@ -5,10 +5,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from authlib.jose import jwt as authlib_jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
-from jose import jwt as jose_jwt
-from jose.exceptions import JWTError
 
 from app.core.jwt import JWTService, TokenValidationError
 from app.core.oauth import GoogleOAuthClient
@@ -46,16 +45,20 @@ def test_jwt_service_covers_additional_claims_and_validation_edges(monkeypatch) 
     assert claims["sub"] == "user-1"
     assert claims["custom"] == "ok"
 
-    monkeypatch.setattr("app.core.jwt.jwt.get_unverified_header", lambda token: (_ for _ in ()).throw(JWTError("bad")))  # type: ignore[arg-type]
+    monkeypatch.setattr(
+        "app.core.jwt.decode_unverified_jwt_header",
+        lambda token: (_ for _ in ()).throw(ValueError("bad")),
+    )
     with pytest.raises(TokenValidationError, match="Invalid token."):
         jwt_service.verify_token("bad-token")
 
-    monkeypatch.setattr("app.core.jwt.jwt.get_unverified_header", lambda token: {"alg": "HS256"})  # type: ignore[arg-type]
+    monkeypatch.setattr("app.core.jwt.decode_unverified_jwt_header", lambda token: {"alg": "HS256"})
     with pytest.raises(TokenValidationError, match="Invalid token algorithm"):
         jwt_service.verify_token("bad-token")
     monkeypatch.undo()
 
-    invalid_type_token = jose_jwt.encode(
+    invalid_type_token = authlib_jwt.encode(
+        {"alg": "RS256", "kid": jwt_service.jwks()["keys"][0]["kid"]},
         {
             "jti": "jti-1",
             "iat": int(datetime.now(UTC).timestamp()),
@@ -64,9 +67,7 @@ def test_jwt_service_covers_additional_claims_and_validation_edges(monkeypatch) 
             "type": "unsupported",
         },
         jwt_service._private_key_pem,
-        algorithm="RS256",
-        headers={"kid": jwt_service.jwks()["keys"][0]["kid"]},
-    )
+    ).decode("utf-8")
     with pytest.raises(TokenValidationError, match="Invalid token type"):
         jwt_service.verify_token(invalid_type_token)
 

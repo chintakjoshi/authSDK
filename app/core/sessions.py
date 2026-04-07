@@ -12,8 +12,6 @@ from hashlib import sha256
 from typing import Protocol
 from uuid import UUID
 
-from jose import jwt
-from jose.exceptions import JWTError
 from redis import asyncio as redis_async
 from redis.asyncio.client import Redis
 from redis.exceptions import RedisError
@@ -21,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.core.jwt import normalize_audiences
+from app.core.jwt import decode_unverified_jwt_claims, normalize_audiences
 from app.models.session import Session
 from app.models.user import User
 
@@ -531,8 +529,8 @@ class SessionService:
     def _extract_access_claims(raw_access_token: str) -> dict[str, object]:
         """Read issued access-token claims without re-verifying the signature."""
         try:
-            claims = jwt.get_unverified_claims(raw_access_token)
-        except JWTError as exc:
+            claims = decode_unverified_jwt_claims(raw_access_token)
+        except ValueError as exc:
             raise SessionStateError("Invalid token.", "invalid_token", 401) from exc
         if str(claims.get("type", "")) != "access":
             raise SessionStateError("Invalid token.", "invalid_token", 401)

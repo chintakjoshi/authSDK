@@ -6,9 +6,9 @@ import time
 from collections.abc import Callable
 from typing import Annotated
 
+from authlib.jose import JoseError
+from authlib.jose.errors import ExpiredTokenError
 from fastapi import Depends, HTTPException, Request
-from jose import jwt
-from jose.exceptions import ExpiredSignatureError, JWTError
 
 from sdk.cache import JWKSCacheManager
 from sdk.client import AuthClient
@@ -16,6 +16,12 @@ from sdk.exceptions import (
     AuthServiceResponseError,
     AuthServiceUnavailableError,
     JWTVerificationError,
+)
+from sdk.jwt_utils import (
+    JWT_ALGORITHM,
+    REQUIRED_REGISTERED_CLAIMS,
+    RS256_JWT,
+    decode_unverified_jwt_header,
 )
 from sdk.types import AuthenticatedJWTIdentity, UserIdentity
 
@@ -127,37 +133,32 @@ def _decode_action_token(
 ) -> dict[str, object]:
     """Decode and validate a short-lived action token."""
     try:
-        header = jwt.get_unverified_header(token)
-    except JWTError as exc:
+        header = decode_unverified_jwt_header(token)
+    except ValueError as exc:
         raise JWTVerificationError("Invalid action token", "action_token_invalid") from exc
 
-    if str(header.get("alg", "")) != "RS256":
+    if str(header.get("alg", "")) != JWT_ALGORITHM:
         raise JWTVerificationError("Invalid action token", "action_token_invalid")
 
     key = _select_key(jwks, header.get("kid"))
     try:
-        claims = jwt.decode(
+        claims = RS256_JWT.decode(
             token,
             key,
-            algorithms=["RS256"],
-            options={
-                "verify_aud": False,
-                "require_jti": True,
-                "require_iat": True,
-                "require_exp": True,
-                "require_sub": True,
-            },
+            claims_options=REQUIRED_REGISTERED_CLAIMS,
         )
-    except ExpiredSignatureError as exc:
+        claims.validate()
+    except ExpiredTokenError as exc:
         raise JWTVerificationError("Invalid action token", "action_token_invalid") from exc
-    except JWTError as exc:
+    except JoseError as exc:
         raise JWTVerificationError("Invalid action token", "action_token_invalid") from exc
+    claims_dict = dict(claims)
 
-    if not _audience_matches(claims.get("aud"), expected_audience):
+    if not _audience_matches(claims_dict.get("aud"), expected_audience):
         raise JWTVerificationError("Invalid action token", "action_token_invalid")
-    if claims.get("type") != "action_token":
+    if claims_dict.get("type") != "action_token":
         raise JWTVerificationError("Invalid action token", "action_token_invalid")
-    return claims
+    return claims_dict
 
 
 def _select_key(jwks: dict[str, object], kid: object) -> dict[str, str]:
