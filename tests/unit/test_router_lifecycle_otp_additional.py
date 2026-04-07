@@ -19,6 +19,8 @@ from app.services.lifecycle_service import LifecycleServiceError
 from app.services.otp_service import OTPServiceError
 from app.services.token_service import TokenPair
 
+pytestmark = pytest.mark.usefixtures("browser_session_settings_env")
+
 
 def _request(
     *,
