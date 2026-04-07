@@ -7,11 +7,11 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import httpx
+from authlib.jose import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Depends, FastAPI, Request
 from httpx import ASGITransport, AsyncClient
-from jose import jwt
 
 from sdk.client import AuthClient
 from sdk.dependencies import (
@@ -63,7 +63,7 @@ def _build_action_token(
         "jti": str(uuid4()),
         "aud": list(audience) if not isinstance(audience, str) else audience,
     }
-    return jwt.encode(payload, private_pem, algorithm="RS256", headers={"kid": kid})
+    return jwt.encode({"alg": "RS256", "kid": kid}, payload, private_pem).decode("utf-8")
 
 
 def _build_app(user_payload: dict[str, object]) -> FastAPI:

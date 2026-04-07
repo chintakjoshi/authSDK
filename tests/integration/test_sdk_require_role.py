@@ -8,11 +8,11 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from authlib.jose import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import Depends, FastAPI
 from httpx import ASGITransport, AsyncClient
-from jose import jwt
 
 from sdk import JWTAuthMiddleware, require_role
 from sdk.client import AuthClient
@@ -61,7 +61,7 @@ def _build_token(private_pem: str, kid: str, role: str) -> str:
         "auth_time": int(now.timestamp()),
         "aud": ["auth-service", "orders-api"],
     }
-    return jwt.encode(payload, private_pem, algorithm="RS256", headers={"kid": kid})
+    return jwt.encode({"alg": "RS256", "kid": kid}, payload, private_pem).decode("utf-8")
 
 
 @pytest.mark.asyncio

@@ -7,9 +7,9 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
+from authlib.jose import jwt
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from jose import jwt
 from sqlalchemy import select
 
 from app.config import get_settings
@@ -425,6 +425,7 @@ async def test_enable_otp_requires_reauth_when_auth_time_is_stale(
             current_access_token, expected_type="access"
         )
         stale_access_token = jwt.encode(
+            {"alg": "RS256", "kid": active_key.kid},
             {
                 **current_claims,
                 "iat": int((datetime.now(UTC) - timedelta(minutes=10)).timestamp()),
@@ -432,9 +433,7 @@ async def test_enable_otp_requires_reauth_when_auth_time_is_stale(
                 "exp": int((datetime.now(UTC) + timedelta(minutes=5)).timestamp()),
             },
             active_key.private_key_pem,
-            algorithm="RS256",
-            headers={"kid": active_key.kid},
-        )
+        ).decode("utf-8")
 
         missing_reauth = await client.post(
             "/auth/otp/enable",

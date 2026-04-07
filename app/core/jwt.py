@@ -3,24 +3,33 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import hmac
+import json
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from typing import Any, Literal
 from uuid import uuid4
 
+from authlib.jose import JoseError, JsonWebToken
+from authlib.jose.errors import ExpiredTokenError
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
-from jose import jwt
-from jose.exceptions import ExpiredSignatureError, JWTError
 
 from app.config import get_settings
 
 TokenType = Literal["access", "refresh", "email_verify", "otp_challenge", "action_token", "m2m"]
 JWT_ALGORITHM = "RS256"
 Audience = str | list[str] | tuple[str, ...] | set[str]
+RS256_JWT = JsonWebToken([JWT_ALGORITHM])
+_REQUIRED_REGISTERED_CLAIMS = {
+    "jti": {"essential": True},
+    "iat": {"essential": True},
+    "exp": {"essential": True},
+    "sub": {"essential": True},
+}
 
 
 class TokenValidationError(Exception):
@@ -68,12 +77,12 @@ class JWTService:
                 if key in payload:
                     continue
                 payload[key] = value
-        return jwt.encode(
+        token = RS256_JWT.encode(
+            {"alg": JWT_ALGORITHM, "kid": signing_kid or self._jwk["kid"]},
             payload,
             signing_private_key_pem or self._private_key_pem,
-            algorithm=JWT_ALGORITHM,
-            headers={"kid": signing_kid or self._jwk["kid"]},
         )
+        return token.decode("utf-8")
 
     def verify_token(
         self,
@@ -84,8 +93,8 @@ class JWTService:
     ) -> dict[str, Any]:
         """Verify token signature and required claims."""
         try:
-            header = jwt.get_unverified_header(token)
-        except JWTError as exc:
+            header = decode_unverified_jwt_header(token)
+        except ValueError as exc:
             raise TokenValidationError("Invalid token.", "invalid_token") from exc
         algorithm = str(header.get("alg", ""))
         if not hmac.compare_digest(algorithm, JWT_ALGORITHM):
@@ -102,21 +111,16 @@ class JWTService:
 
         normalized_expected_audience = normalize_audiences(expected_audience)
         try:
-            payload = jwt.decode(
+            claims = RS256_JWT.decode(
                 token,
                 verification_key,
-                algorithms=[JWT_ALGORITHM],
-                options={
-                    "verify_aud": False,
-                    "require_jti": True,
-                    "require_iat": True,
-                    "require_exp": True,
-                    "require_sub": True,
-                },
+                claims_options=_REQUIRED_REGISTERED_CLAIMS,
             )
-        except ExpiredSignatureError as exc:
+            claims.validate()
+            payload = dict(claims)
+        except ExpiredTokenError as exc:
             raise TokenValidationError("Token has expired.", "token_expired") from exc
-        except JWTError as exc:
+        except JoseError as exc:
             raise TokenValidationError("Invalid token.", "invalid_token") from exc
 
         token_type = str(payload.get("type", ""))
@@ -204,6 +208,47 @@ def get_jwt_service() -> JWTService:
         private_key_pem=settings.jwt.private_key_pem.get_secret_value(),
         public_key_pem=settings.jwt.public_key_pem.get_secret_value(),
     )
+
+
+def decode_unverified_jwt_header(token: str) -> dict[str, Any]:
+    """Decode the compact JWT header without verifying the signature."""
+    return _decode_unverified_jwt_segment(token, index=0, segment_name="header")
+
+
+def decode_unverified_jwt_claims(token: str) -> dict[str, Any]:
+    """Decode the compact JWT payload without verifying the signature."""
+    return _decode_unverified_jwt_segment(token, index=1, segment_name="payload")
+
+
+def _decode_unverified_jwt_segment(
+    token: str,
+    *,
+    index: int,
+    segment_name: str,
+) -> dict[str, Any]:
+    """Parse one compact JWT segment as a JSON object."""
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise ValueError("JWT must contain exactly three segments.")
+
+    segment = parts[index]
+    if not segment:
+        raise ValueError(f"JWT {segment_name} segment is empty.")
+
+    padded_segment = segment + ("=" * (-len(segment) % 4))
+    try:
+        decoded_bytes = base64.urlsafe_b64decode(padded_segment.encode("ascii"))
+    except (binascii.Error, UnicodeEncodeError, ValueError) as exc:
+        raise ValueError(f"JWT {segment_name} segment is not valid base64url.") from exc
+
+    try:
+        value = json.loads(decoded_bytes.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise ValueError(f"JWT {segment_name} segment is not valid JSON.") from exc
+
+    if not isinstance(value, dict):
+        raise ValueError(f"JWT {segment_name} segment must decode to a JSON object.")
+    return value
 
 
 def normalize_audiences(value: object) -> list[str]:

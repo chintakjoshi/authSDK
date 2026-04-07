@@ -6,9 +6,9 @@ import hmac
 from hashlib import sha256
 from typing import Any
 
+from authlib.jose import JoseError
+from authlib.jose.errors import ExpiredTokenError
 from cachetools import TTLCache
-from jose import jwt
-from jose.exceptions import ExpiredSignatureError, JWTError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -19,6 +19,12 @@ from sdk.exceptions import (
     AuthServiceResponseError,
     AuthServiceUnavailableError,
     JWTVerificationError,
+)
+from sdk.jwt_utils import (
+    JWT_ALGORITHM,
+    REQUIRED_REGISTERED_CLAIMS,
+    RS256_JWT,
+    decode_unverified_jwt_header,
 )
 from sdk.types import (
     APIKeyIdentity,
@@ -208,38 +214,33 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
     def _decode_token(self, token: str, jwks: dict[str, Any]) -> dict[str, Any]:
         """Decode token and enforce claim/algorithm constraints."""
         try:
-            header = jwt.get_unverified_header(token)
-        except JWTError as exc:
+            header = decode_unverified_jwt_header(token)
+        except ValueError as exc:
             raise JWTVerificationError("Invalid token.", "invalid_token") from exc
 
         algorithm = str(header.get("alg", ""))
-        if not hmac.compare_digest(algorithm, "RS256"):
+        if not hmac.compare_digest(algorithm, JWT_ALGORITHM):
             raise JWTVerificationError("Invalid token.", "invalid_token")
 
         kid = header.get("kid")
         key = self._select_key(jwks=jwks, kid=str(kid) if kid is not None else None)
-        options = {
-            "require_jti": True,
-            "require_iat": True,
-            "require_exp": True,
-            "require_sub": True,
-        }
         try:
-            claims = jwt.decode(
+            claims = RS256_JWT.decode(
                 token,
                 key,
-                algorithms=["RS256"],
-                options=options | {"verify_aud": False},
+                claims_options=REQUIRED_REGISTERED_CLAIMS,
             )
-        except ExpiredSignatureError as exc:
+            claims.validate()
+        except ExpiredTokenError as exc:
             raise JWTVerificationError("Token has expired.", "token_expired") from exc
-        except JWTError as exc:
+        except JoseError as exc:
             raise JWTVerificationError("Invalid token.", "invalid_token") from exc
+        claims_dict = dict(claims)
 
-        if not _audience_matches(claims.get("aud"), self._expected_audience):
+        if not _audience_matches(claims_dict.get("aud"), self._expected_audience):
             raise JWTVerificationError("Invalid token.", "invalid_token")
 
-        token_type = str(claims.get("type", ""))
+        token_type = str(claims_dict.get("type", ""))
         if token_type not in {"access", "refresh", "m2m"}:
             raise JWTVerificationError("Invalid token.", "invalid_token")
         if self._required_token_type:
@@ -249,7 +250,7 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
             )
             if not token_type_allowed:
                 raise JWTVerificationError("Invalid token.", "invalid_token")
-        return claims
+        return claims_dict
 
     @staticmethod
     def _select_key(jwks: dict[str, Any], kid: str | None) -> dict[str, str]:

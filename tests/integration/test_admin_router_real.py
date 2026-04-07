@@ -8,9 +8,9 @@ from typing import Any
 from uuid import UUID
 
 import pytest
+from authlib.jose import jwt
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from jose import jwt
 from sqlalchemy import select
 
 from app.config import get_settings
@@ -228,6 +228,7 @@ async def _make_stale_access_token(db_session, raw_access_token: str) -> str:
     await db_session.rollback()
     stale_time = datetime.now(UTC) - timedelta(minutes=10)
     return jwt.encode(
+        {"alg": "RS256", "kid": active_key.kid},
         {
             **current_claims,
             "iat": int(stale_time.timestamp()),
@@ -235,9 +236,7 @@ async def _make_stale_access_token(db_session, raw_access_token: str) -> str:
             "exp": int((datetime.now(UTC) + timedelta(minutes=5)).timestamp()),
         },
         active_key.private_key_pem,
-        algorithm="RS256",
-        headers={"kid": active_key.kid},
-    )
+    ).decode("utf-8")
 
 
 @pytest.mark.asyncio
