@@ -244,13 +244,19 @@ async def test_signup_verify_and_resend_cover_rollbacks_and_invalid_paths() -> N
     email_sender.raise_on_verify = True
     service = _service(email_sender=email_sender)
     db_session = _DBSessionStub()
-    with pytest.raises(RuntimeError):
-        await service.signup_password(
-            db_session=db_session,  # type: ignore[arg-type]
-            email="user@example.com",
-            password="Password123!",
-        )
-    assert db_session.rollback_count == 1
+    signup_result = await service.signup_password(
+        db_session=db_session,  # type: ignore[arg-type]
+        email="user@example.com",
+        password="Password123!",
+    )
+    assert signup_result.created is True
+    assert signup_result.verification_link is not None
+    assert db_session.rollback_count == 0
+    await service.send_signup_verification_email(
+        user_id=str(signup_result.created_user.id),  # type: ignore[union-attr]
+        to_email="user@example.com",
+        verification_link=signup_result.verification_link,
+    )
 
     service = _service()
     with pytest.raises(LifecycleServiceError, match="Invalid verification token"):

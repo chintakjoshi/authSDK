@@ -17,7 +17,7 @@ from uuid import UUID
 import structlog
 from redis.asyncio.client import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -58,6 +58,20 @@ class LifecycleServiceError(Exception):
         self.code = code
         self.status_code = status_code
         self.headers = headers or {}
+
+
+@dataclass(frozen=True)
+class SignupPasswordResult:
+    """Outcome for one public password-signup attempt."""
+
+    accepted_email: str
+    created_user: User | None = None
+    verification_link: str | None = None
+
+    @property
+    def created(self) -> bool:
+        """Return True when the signup created a new user record."""
+        return self.created_user is not None
 
 
 class LifecycleEmailSender(Protocol):
@@ -176,18 +190,11 @@ class LifecycleService:
         db_session: AsyncSession,
         email: str,
         password: str,
-    ) -> User:
-        """Create password user and send signup verification link."""
+    ) -> SignupPasswordResult:
+        """Accept a public signup request without revealing whether the email exists."""
         normalized_email = email.strip().lower()
         if not normalized_email:
             raise LifecycleServiceError("Invalid email.", "invalid_credentials", 400)
-
-        existing = await self._user_service.get_user_by_email(
-            db_session=db_session,
-            email=normalized_email,
-        )
-        if existing is not None:
-            raise LifecycleServiceError("Email already registered.", "invalid_credentials", 409)
 
         user = User(
             email=normalized_email,
@@ -197,6 +204,7 @@ class LifecycleService:
             email_verified=False,
         )
         db_session.add(user)
+        verification_link: str | None = None
         try:
             await db_session.flush()
             verification_token, expires_at = await self._issue_email_verify_token(
@@ -205,21 +213,23 @@ class LifecycleService:
             )
             user.email_verify_token_hash = self._hash_verification_token(verification_token)
             user.email_verify_token_expires = expires_at
+            verification_link = self._verification_link(verification_token)
             await db_session.flush()
-            await self._email_sender.send_verification_email(
-                to_email=user.email,
-                verification_link=self._verification_link(verification_token),
-            )
             await db_session.commit()
         except IntegrityError as exc:
             await db_session.rollback()
-            raise LifecycleServiceError(
-                "Email already registered.", "invalid_credentials", 409
-            ) from exc
+            if await self._signup_email_exists(db_session=db_session, email=normalized_email):
+                self._perform_dummy_password_workload(password)
+                return SignupPasswordResult(accepted_email=normalized_email)
+            raise
         except Exception:
             await db_session.rollback()
             raise
-        return user
+        return SignupPasswordResult(
+            accepted_email=user.email,
+            created_user=user,
+            verification_link=verification_link,
+        )
 
     async def verify_email_token(
         self,
@@ -617,6 +627,22 @@ class LifecycleService:
             await db_session.rollback()
             raise
 
+    async def send_signup_verification_email(
+        self,
+        *,
+        user_id: str,
+        to_email: str,
+        verification_link: str,
+    ) -> None:
+        """Deliver a signup verification email outside the request's latency path."""
+        try:
+            await self._email_sender.send_verification_email(
+                to_email=to_email,
+                verification_link=verification_link,
+            )
+        except Exception:
+            logger.exception("signup_verification_email_failed", user_id=user_id)
+
     async def _ensure_access_token_not_revoked(self, claims: dict[str, object]) -> None:
         """Reject access tokens that have been blocklisted on logout."""
         jti = str(claims.get("jti", "")).strip()
@@ -684,6 +710,12 @@ class LifecycleService:
             statement = statement.with_for_update()
         result = await db_session.execute(statement)
         return result.scalar_one_or_none()
+
+    async def _signup_email_exists(self, db_session: AsyncSession, email: str) -> bool:
+        """Return True when any persisted row already uses the email."""
+        statement = select(User.id).where(func.lower(User.email) == email.lower())
+        result = await db_session.execute(statement)
+        return result.scalar_one_or_none() is not None
 
     @staticmethod
     def _hash_verification_token(token: str) -> str:
