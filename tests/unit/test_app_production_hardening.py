@@ -180,9 +180,46 @@ async def test_create_app_enforces_trusted_hosts_and_private_metrics(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_create_app_serves_swagger_ui_with_docs_csp(monkeypatch) -> None:
-    """Swagger UI remains available and gets a docs-specific CSP policy."""
+async def test_create_app_hides_docs_and_openapi_by_default(monkeypatch) -> None:
+    """Swagger UI and OpenAPI stay off unless explicitly enabled."""
     settings = _production_settings()
+    _seed_production_env(monkeypatch)
+    get_settings.cache_clear()
+
+    import app.main as main_module
+
+    main_module = importlib.reload(main_module)
+
+    monkeypatch.setattr(main_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(main_module, "configure_structlog", lambda current_settings: None)
+    monkeypatch.setattr("app.middleware.rate_limit.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "app.middleware.rate_limit.get_rate_limit_redis_client",
+        lambda: _NoopRateLimitRedis(),
+    )
+
+    app = main_module.create_app()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://auth.example.com",
+    ) as client:
+        docs_response = await client.get("/docs")
+        openapi_response = await client.get("/openapi.json")
+
+    assert docs_response.status_code == 404
+    assert openapi_response.status_code == 404
+
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_create_app_serves_swagger_ui_with_docs_csp_when_explicitly_enabled(
+    monkeypatch,
+) -> None:
+    """Swagger UI is available only when app.expose_docs is explicitly enabled."""
+    settings = _production_settings()
+    settings.app.expose_docs = True
     _seed_production_env(monkeypatch)
     get_settings.cache_clear()
 

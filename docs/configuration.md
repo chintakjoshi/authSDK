@@ -90,6 +90,9 @@ Forbidden in production:
   optional JSON array of proxy CIDRs
 - `APP__ALLOWED_HOSTS`
   optional in non-production, required in production
+- `APP__EXPOSE_DOCS`
+  defaults to `false`; set to `true` only when you want `/docs` and
+  `/openapi.json` exposed
 
 ### Database
 

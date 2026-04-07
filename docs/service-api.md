@@ -232,7 +232,7 @@ Browser-session consumers should also expose:
 
 ## OpenAPI
 
-Use these for authoritative schemas:
+Use these for authoritative schemas when `APP__EXPOSE_DOCS=true`:
 
 - `GET /docs`
 - `GET /openapi.json`

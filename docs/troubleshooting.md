@@ -28,7 +28,7 @@ curl http://localhost:8000/health/ready
 
 Useful local UIs:
 
-- Swagger UI: `http://localhost:8000/docs`
+- Swagger UI: `http://localhost:8000/docs` when `APP__EXPOSE_DOCS=true`
 - Mailhog: `http://localhost:8025`
 - Adminer: `http://localhost:8080`
 
