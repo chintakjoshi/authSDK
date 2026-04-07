@@ -17,6 +17,8 @@ from app.schemas.token import LogoutRequest
 from app.schemas.user import LoginRequest
 from app.services.token_service import TokenPair
 
+pytestmark = pytest.mark.usefixtures("browser_session_settings_env")
+
 
 def _request(
     *,
