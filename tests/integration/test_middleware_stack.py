@@ -21,6 +21,10 @@ _SECURITY_HEADERS = {
     "x-content-type-options": "nosniff",
     "strict-transport-security": "max-age=63072000; includeSubDomains; preload",
 }
+_NO_STORE_HEADERS = {
+    "cache-control": "no-store",
+    "pragma": "no-cache",
+}
 
 
 class _InMemoryRateLimitRedis:
@@ -100,12 +104,22 @@ def _build_test_app(login_limit: int = 10) -> FastAPI:
     async def login() -> dict[str, bool]:
         return {"ok": True}
 
+    @app.post("/auth/token")
+    async def token() -> dict[str, bool]:
+        return {"ok": True}
+
     return app
 
 
 def _assert_security_headers(headers: dict[str, str]) -> None:
     """Assert required security headers are set on response."""
     for header_name, expected_value in _SECURITY_HEADERS.items():
+        assert headers.get(header_name) == expected_value
+
+
+def _assert_no_store_headers(headers: dict[str, str]) -> None:
+    """Assert token-bearing responses are marked as non-cacheable."""
+    for header_name, expected_value in _NO_STORE_HEADERS.items():
         assert headers.get(header_name) == expected_value
 
 
@@ -128,10 +142,34 @@ async def test_headers_present_on_success_and_error_responses() -> None:
     assert client_error.status_code == 401
     assert client_error.headers.get("x-correlation-id")
     _assert_security_headers(dict(client_error.headers))
+    for header_name in _NO_STORE_HEADERS:
+        assert header_name not in client_error.headers
 
     assert server_error.status_code == 500
     assert server_error.headers.get("x-correlation-id")
     _assert_security_headers(dict(server_error.headers))
+    for header_name in _NO_STORE_HEADERS:
+        assert header_name not in server_error.headers
+
+
+@pytest.mark.asyncio
+async def test_token_bearing_auth_routes_are_marked_no_store() -> None:
+    """Login and token routes include Cache-Control no-store and Pragma no-cache."""
+    app = _build_test_app()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        login_response = await client.post("/auth/login")
+        token_response = await client.post("/auth/token")
+
+    assert login_response.status_code == 200
+    _assert_security_headers(dict(login_response.headers))
+    _assert_no_store_headers(dict(login_response.headers))
+
+    assert token_response.status_code == 200
+    _assert_security_headers(dict(token_response.headers))
+    _assert_no_store_headers(dict(token_response.headers))
 
 
 @pytest.mark.asyncio
@@ -148,6 +186,8 @@ async def test_rate_limit_rejects_auth_login_with_required_error_code() -> None:
     assert first.status_code == 200
     assert second.status_code == 429
     assert second.json() == {"detail": "Rate limit exceeded.", "code": "rate_limited"}
+    _assert_no_store_headers(dict(first.headers))
+    _assert_no_store_headers(dict(second.headers))
 
 
 @pytest.mark.asyncio

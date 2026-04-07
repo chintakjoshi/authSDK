@@ -9,6 +9,12 @@ from httpx import ASGITransport, AsyncClient
 from app.core.jwt import get_jwt_service
 
 
+def _assert_no_store_headers(headers: dict[str, str]) -> None:
+    """Assert auth-state responses are marked as non-cacheable."""
+    assert headers.get("cache-control") == "no-store"
+    assert headers.get("pragma") == "no-cache"
+
+
 @pytest.mark.asyncio
 async def test_auth_login_refresh_logout_happy_path(
     app_factory,
@@ -27,6 +33,7 @@ async def test_auth_login_refresh_logout_happy_path(
             json={"email": "alice@example.com", "password": "Password123!"},
         )
         assert login_response.status_code == 200
+        _assert_no_store_headers(dict(login_response.headers))
         login_payload = login_response.json()
         assert login_payload["access_token"]
         assert login_payload["refresh_token"]
@@ -46,6 +53,7 @@ async def test_auth_login_refresh_logout_happy_path(
             json={"refresh_token": login_payload["refresh_token"]},
         )
         assert refresh_response.status_code == 200
+        _assert_no_store_headers(dict(refresh_response.headers))
         refresh_payload = refresh_response.json()
         assert refresh_payload["refresh_token"] != login_payload["refresh_token"]
         refresh_access_claims = jwt_service.verify_token(
@@ -64,12 +72,14 @@ async def test_auth_login_refresh_logout_happy_path(
             headers={"authorization": f"Bearer {refresh_payload['access_token']}"},
         )
         assert logout_response.status_code == 204
+        _assert_no_store_headers(dict(logout_response.headers))
 
         refresh_after_logout = await client.post(
             "/auth/token",
             json={"refresh_token": refresh_payload["refresh_token"]},
         )
         assert refresh_after_logout.status_code == 401
+        _assert_no_store_headers(dict(refresh_after_logout.headers))
         assert refresh_after_logout.json()["code"] == "session_expired"
 
 
@@ -88,6 +98,7 @@ async def test_auth_cookie_login_refresh_logout_happy_path(
     ) as client:
         csrf_response = await client.get("/auth/csrf")
         assert csrf_response.status_code == 200
+        _assert_no_store_headers(dict(csrf_response.headers))
         csrf_token = csrf_response.json()["csrf_token"]
 
         login_response = await client.post(
@@ -99,6 +110,7 @@ async def test_auth_cookie_login_refresh_logout_happy_path(
             },
         )
         assert login_response.status_code == 200
+        _assert_no_store_headers(dict(login_response.headers))
         assert login_response.json() == {
             "authenticated": True,
             "session_transport": "cookie",
@@ -122,6 +134,7 @@ async def test_auth_cookie_login_refresh_logout_happy_path(
             },
         )
         assert refresh_response.status_code == 200
+        _assert_no_store_headers(dict(refresh_response.headers))
         assert refresh_response.json() == {
             "authenticated": True,
             "session_transport": "cookie",
@@ -146,6 +159,7 @@ async def test_auth_cookie_login_refresh_logout_happy_path(
             },
         )
         assert logout_response.status_code == 204
+        _assert_no_store_headers(dict(logout_response.headers))
 
         replacement_csrf = await client.get("/auth/csrf")
         assert replacement_csrf.status_code == 200
