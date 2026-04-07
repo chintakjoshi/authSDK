@@ -24,6 +24,7 @@ class AppSettings(BaseModel):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     trusted_proxy_cidrs: list[str] = Field(default_factory=list)
     allowed_hosts: list[str] = Field(default_factory=list)
+    expose_docs: bool = False
 
     @field_validator("trusted_proxy_cidrs", "allowed_hosts")
     @classmethod

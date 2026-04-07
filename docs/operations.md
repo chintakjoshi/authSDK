@@ -53,7 +53,7 @@ Metrics:
 Operationally relevant endpoints:
 
 - `GET /.well-known/jwks.json`
-- `GET /openapi.json`
+- `GET /openapi.json` when `APP__EXPOSE_DOCS=true`
 
 ## Required Production Configuration
 

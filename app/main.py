@@ -19,12 +19,13 @@ def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
     configure_structlog(settings)
+    docs_enabled = settings.app.expose_docs
 
     app = FastAPI(
         title=settings.app.service,
-        docs_url="/docs",
+        docs_url="/docs" if docs_enabled else None,
         redoc_url=None,
-        openapi_url="/openapi.json",
+        openapi_url="/openapi.json" if docs_enabled else None,
     )
     register_exception_handlers(app, environment=settings.app.environment)
 
