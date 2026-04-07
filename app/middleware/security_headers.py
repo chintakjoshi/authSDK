@@ -10,6 +10,19 @@ from starlette.responses import Response
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     """Ensure every response carries mandatory security headers."""
 
+    _NO_STORE_EXACT_PATHS = frozenset(
+        {
+            "/auth/csrf",
+            "/auth/login",
+            "/auth/token",
+            "/auth/logout",
+            "/auth/reauth",
+            "/auth/otp/verify/login",
+            "/auth/otp/verify/action",
+            "/auth/oauth/google/callback",
+            "/auth/saml/callback",
+        }
+    )
     _DEFAULT_CONTENT_SECURITY_POLICY = (
         "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
     )
@@ -39,6 +52,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             if path.startswith("/docs")
             else cls._DEFAULT_CONTENT_SECURITY_POLICY
         )
+        if path in cls._NO_STORE_EXACT_PATHS:
+            headers["Cache-Control"] = "no-store"
+            headers["Pragma"] = "no-cache"
         return headers
 
     async def dispatch(self, request: Request, call_next) -> Response:
