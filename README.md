@@ -1,6 +1,11 @@
 # authSDK
 
 [![Tests](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml)
+[![Lint](https://img.shields.io/github/check-runs/chintakjoshi/authSDK/main?nameFilter=Lint&label=lint)](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml)
+[![Unit Tests](https://img.shields.io/github/check-runs/chintakjoshi/authSDK/main?nameFilter=Unit%20Tests&label=unit%20tests)](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml)
+[![Integration Tests](https://img.shields.io/github/check-runs/chintakjoshi/authSDK/main?nameFilter=Integration%20Tests&label=integration%20tests)](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml)
+[![Migrations](https://img.shields.io/github/check-runs/chintakjoshi/authSDK/main?nameFilter=Migration%20Checks&label=migrations)](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml)
+[![Package Build](https://img.shields.io/github/check-runs/chintakjoshi/authSDK/main?nameFilter=Build%20Packages&label=package%20build)](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml)
 [![Docker Build](https://github.com/chintakjoshi/authSDK/actions/workflows/release.yml/badge.svg)](https://github.com/chintakjoshi/authSDK/actions/workflows/release.yml)
 
 `authSDK` is a central authentication platform plus a reusable Python SDK for
