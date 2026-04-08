@@ -46,6 +46,22 @@ class _InMemoryRateLimitRedis:
         """Return cardinality for key bucket."""
         return len(self._buckets.get(key, {}))
 
+    async def zrange(
+        self,
+        key: str,
+        start: int,
+        end: int,
+        *,
+        withscores: bool = False,
+    ) -> list[tuple[str, float]] | list[str]:
+        """Return members ordered by score for protocol compatibility."""
+        bucket = sorted(self._buckets.get(key, {}).items(), key=lambda item: item[1])
+        stop = None if end == -1 else end + 1
+        window = bucket[start:stop]
+        if withscores:
+            return [(member, float(score)) for member, score in window]
+        return [member for member, _ in window]
+
     async def zadd(self, key: str, mapping: dict[str, int]) -> int:
         """Add mapping entries to bucket and return number of newly-added members."""
         bucket = self._buckets.setdefault(key, {})
@@ -186,6 +202,7 @@ async def test_rate_limit_rejects_auth_login_with_required_error_code() -> None:
     assert first.status_code == 200
     assert second.status_code == 429
     assert second.json() == {"detail": "Rate limit exceeded.", "code": "rate_limited"}
+    assert 1 <= int(second.headers["Retry-After"]) <= 60
     _assert_no_store_headers(dict(first.headers))
     _assert_no_store_headers(dict(second.headers))
 

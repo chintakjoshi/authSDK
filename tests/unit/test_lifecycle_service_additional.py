@@ -185,7 +185,9 @@ async def test_signup_password_rejects_invalid_email_and_hides_duplicate_email()
     duplicate = await service.signup_password(
         db_session=_DBSessionStub(
             result=object(),
-            flush_exception=IntegrityError("insert users", {"email": "registered@example.com"}, None),
+            flush_exception=IntegrityError(
+                "insert users", {"email": "registered@example.com"}, None
+            ),
         ),  # type: ignore[arg-type]
         email="registered@example.com",
         password="Password123!",
