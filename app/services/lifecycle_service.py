@@ -216,7 +216,7 @@ class LifecycleService:
             verification_link = self._verification_link(verification_token)
             await db_session.flush()
             await db_session.commit()
-        except IntegrityError as exc:
+        except IntegrityError:
             await db_session.rollback()
             if await self._signup_email_exists(db_session=db_session, email=normalized_email):
                 self._perform_dummy_password_workload(password)

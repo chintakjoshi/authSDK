@@ -42,6 +42,16 @@ class SlidingWindowRedis(Protocol):
     async def zcard(self, key: str) -> int:
         """Return sorted-set cardinality."""
 
+    async def zrange(
+        self,
+        key: str,
+        start: int,
+        end: int,
+        *,
+        withscores: bool = False,
+    ) -> list[tuple[str, float]] | list[str]:
+        """Return a sorted-set slice ordered by score."""
+
     async def zadd(self, key: str, mapping: dict[str, int]) -> int:
         """Add one or more scored members to sorted set."""
 
@@ -109,9 +119,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             await self._redis.zremrangebyscore(bucket_key, "-inf", window_start)
             current_count = await self._redis.zcard(bucket_key)
             if current_count >= limit:
+                retry_after = await self._retry_after_seconds(bucket_key=bucket_key, now_ms=now_ms)
                 return JSONResponse(
                     status_code=429,
                     content={"detail": "Rate limit exceeded.", "code": "rate_limited"},
+                    headers={"Retry-After": str(retry_after)},
                 )
 
             member = f"{now_ms}:{uuid4()}"
@@ -134,6 +146,16 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 )
 
         return await call_next(request)
+
+    async def _retry_after_seconds(self, *, bucket_key: str, now_ms: int) -> int:
+        """Return the number of seconds until the oldest request leaves the window."""
+        oldest_entries = await self._redis.zrange(bucket_key, 0, 0, withscores=True)
+        if not oldest_entries:
+            return 1
+
+        _, oldest_score = oldest_entries[0]
+        remaining_milliseconds = oldest_score + self._window_milliseconds - now_ms
+        return max(1, math.ceil(remaining_milliseconds / 1000))
 
     def _resolve_limit(self, path: str) -> int:
         """Resolve path-specific limit override."""
