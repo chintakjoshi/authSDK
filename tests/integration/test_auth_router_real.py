@@ -295,6 +295,26 @@ async def test_auth_login_rejects_invalid_credentials(
 
 
 @pytest.mark.asyncio
+async def test_auth_login_rejects_invalid_email_payload(app_factory) -> None:
+    """Malformed login emails are rejected at request validation."""
+    app: FastAPI = app_factory()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.post(
+            "/auth/login",
+            json={"email": "not-an-email", "password": "Password123!"},
+        )
+
+    assert response.status_code == 422
+    _assert_no_store_headers(dict(response.headers))
+    assert response.json()["code"] == "invalid_credentials"
+    assert response.json()["detail"].startswith("Invalid request payload")
+
+
+@pytest.mark.asyncio
 async def test_auth_token_rejects_unknown_refresh_token(app_factory) -> None:
     """Unknown refresh token fails closed."""
     app: FastAPI = app_factory()

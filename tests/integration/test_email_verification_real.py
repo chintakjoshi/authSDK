@@ -137,6 +137,32 @@ async def test_signup_hides_duplicate_email_state(app_factory, db_session) -> No
 
 
 @pytest.mark.asyncio
+async def test_signup_and_public_resend_reject_invalid_email_payloads(app_factory) -> None:
+    """Lifecycle email endpoints reject malformed email addresses with a 422 contract response."""
+    app: FastAPI = app_factory()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        signup = await client.post(
+            "/auth/signup",
+            json={"email": "not-an-email", "password": "Password123!"},
+        )
+        resend = await client.post(
+            "/auth/verify-email/resend/request",
+            json={"email": "still-not-an-email"},
+        )
+
+    assert signup.status_code == 422
+    assert signup.json()["code"] == "invalid_credentials"
+    assert signup.json()["detail"].startswith("Invalid request payload")
+    assert resend.status_code == 422
+    assert resend.json()["code"] == "invalid_credentials"
+    assert resend.json()["detail"].startswith("Invalid request payload")
+
+
+@pytest.mark.asyncio
 async def test_verify_email_rejects_expired_link_with_invalid_verify_token(
     app_factory, db_session
 ) -> None:
