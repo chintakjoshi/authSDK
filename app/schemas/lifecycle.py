@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
+
+EmailAddress = Annotated[EmailStr, Field(max_length=320)]
 
 
 class SignupRequest(BaseModel):
     """Password signup payload."""
 
-    email: str = Field(min_length=3, max_length=320)
+    email: EmailAddress
     password: str = Field(min_length=8, max_length=256)
 
 
@@ -30,7 +32,7 @@ class VerifyEmailResponse(BaseModel):
 class ResendVerifyEmailRequest(BaseModel):
     """Public resend-verification request payload."""
 
-    email: str = Field(min_length=3, max_length=320)
+    email: EmailAddress
 
 
 class ResendVerifyEmailResponse(BaseModel):
@@ -42,7 +44,7 @@ class ResendVerifyEmailResponse(BaseModel):
 class ForgotPasswordRequest(BaseModel):
     """Forgot-password request payload."""
 
-    email: str = Field(min_length=3, max_length=320)
+    email: EmailAddress
 
 
 class ForgotPasswordResponse(BaseModel):

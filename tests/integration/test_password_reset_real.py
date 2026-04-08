@@ -327,3 +327,22 @@ async def test_password_forgot_returns_200_for_unknown_email_without_sending_mai
     assert forgot.json() == {"sent": True}
     assert sender.reset_emails == []
     app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_password_forgot_rejects_invalid_email_payload(app_factory) -> None:
+    """Forgot-password rejects malformed email addresses before lifecycle processing."""
+    app: FastAPI = app_factory()
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        forgot = await client.post(
+            "/auth/password/forgot",
+            json={"email": "not-an-email"},
+        )
+
+    assert forgot.status_code == 422
+    assert forgot.json()["code"] == "invalid_credentials"
+    assert forgot.json()["detail"].startswith("Invalid request payload")
