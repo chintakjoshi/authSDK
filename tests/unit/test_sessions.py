@@ -12,9 +12,11 @@ import pytest
 from authlib.jose import jwt
 from redis.exceptions import RedisError
 
-from app.core.sessions import SessionService, SessionStateError
+from app.core.sessions import RefreshTokenHasher, SessionService, SessionStateError
 from app.models.session import Session
 from app.services.token_service import TokenPair
+
+TEST_REFRESH_TOKEN_HASH_SECRET = "session-hash-secret"
 
 
 @dataclass(frozen=True)
@@ -88,14 +90,19 @@ class _FakeDBSession:
         self.rollback_count += 1
 
 
-def _session_row(raw_refresh_token: str) -> Session:
+def _session_row(raw_refresh_token: str, *, use_legacy_hash: bool = False) -> Session:
     """Build an in-memory session row for tests."""
     now = datetime.now(UTC)
+    hasher = RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET)
     return Session(
         session_id=uuid4(),
         id=uuid4(),
         user_id=uuid4(),
-        hashed_refresh_token=sha256(raw_refresh_token.encode("utf-8")).hexdigest(),
+        hashed_refresh_token=(
+            sha256(raw_refresh_token.encode("utf-8")).hexdigest()
+            if use_legacy_hash
+            else hasher.hash_token(raw_refresh_token)
+        ),
         auth_time=now,
         expires_at=now + timedelta(minutes=10),
         revoked_at=None,
@@ -144,6 +151,7 @@ async def test_create_login_session_stores_hashed_token_and_redis_payload() -> N
         redis_client=redis,
         refresh_token_ttl_seconds=600,
         access_token_ttl_seconds=300,
+        refresh_token_hasher=RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET),
     )
     user_id = uuid4()
 
@@ -161,7 +169,10 @@ async def test_create_login_session_stores_hashed_token_and_redis_payload() -> N
 
     stored = db_session.added[0]
     assert stored.session_id == session_id
-    assert stored.hashed_refresh_token == sha256(b"refresh-token-raw-value").hexdigest()
+    assert stored.hashed_refresh_token == RefreshTokenHasher.from_secret(
+        TEST_REFRESH_TOKEN_HASH_SECRET
+    ).hash_token("refresh-token-raw-value")
+    assert stored.hashed_refresh_token != sha256(b"refresh-token-raw-value").hexdigest()
 
     redis_key = f"session:{session_id}"
     assert redis_key in redis.values
@@ -181,6 +192,7 @@ async def test_rotate_refresh_session_updates_hash_and_ttl() -> None:
         redis_client=redis,
         refresh_token_ttl_seconds=900,
         access_token_ttl_seconds=300,
+        refresh_token_hasher=RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET),
     )
     row = _session_row(raw_refresh_token="old-refresh-token")
     redis.values[f"session:{row.session_id}"] = (
@@ -194,7 +206,9 @@ async def test_rotate_refresh_session_updates_hash_and_ttl() -> None:
         refresh_token_hash: str,
         for_update: bool,
     ) -> Session:
-        assert refresh_token_hash == sha256(b"old-refresh-token").hexdigest()
+        assert refresh_token_hash == RefreshTokenHasher.from_secret(
+            TEST_REFRESH_TOKEN_HASH_SECRET
+        ).hash_token("old-refresh-token")
         assert for_update is True
         return row
 
@@ -237,10 +251,84 @@ async def test_rotate_refresh_session_updates_hash_and_ttl() -> None:
     )
 
     assert token_pair.access_token
-    assert row.hashed_refresh_token == sha256(b"new-refresh-token").hexdigest()
+    assert row.hashed_refresh_token == RefreshTokenHasher.from_secret(
+        TEST_REFRESH_TOKEN_HASH_SECRET
+    ).hash_token("new-refresh-token")
     assert redis.ttls[f"session:{row.session_id}"] == 900
     assert redis.values["session_access:refresh-jti"] == str(row.session_id)
     assert db_session.commit_count == 1
+
+
+@pytest.mark.asyncio
+async def test_rotate_refresh_session_accepts_legacy_sha256_rows_during_hash_migration() -> None:
+    """Legacy SHA-256 session rows remain refreshable and are upgraded on successful rotation."""
+    redis = _FakeRedis()
+    db_session = _FakeDBSession()
+    service = SessionService(
+        redis_client=redis,
+        refresh_token_ttl_seconds=900,
+        access_token_ttl_seconds=300,
+        refresh_token_hasher=RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET),
+    )
+    row = _session_row(raw_refresh_token="old-refresh-token", use_legacy_hash=True)
+    redis.values[f"session:{row.session_id}"] = (
+        '{"user_id":"u1","email":"user@example.com","role":"admin","email_verified":false,"email_otp_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
+    )
+
+    async def _fake_user_lookup(
+        self: SessionService,
+        db_session: _FakeDBSession,
+        user_id: object,
+    ) -> _FakeUser:
+        del db_session
+        assert user_id == row.user_id
+        return _FakeUser(
+            id=row.user_id,
+            email="updated@example.com",
+            role="user",
+            email_verified=True,
+        )
+
+    service._get_active_user = MethodType(_fake_user_lookup, service)  # type: ignore[assignment]
+
+    async def _fake_fetch(
+        self: SessionService,
+        db_session: _FakeDBSession,
+        refresh_token_hash: str,
+        for_update: bool,
+    ) -> Session | None:
+        del db_session
+        assert for_update is True
+        if refresh_token_hash == sha256(b"old-refresh-token").hexdigest():
+            return row
+        return None
+
+    service._fetch_session_by_refresh_hash = MethodType(_fake_fetch, service)  # type: ignore[assignment]
+
+    token_pair = await service.rotate_refresh_session(
+        db_session=db_session,  # type: ignore[arg-type]
+        raw_refresh_token="old-refresh-token",
+        token_issuer=lambda _user_id, email=None, role=None, email_verified=None, scopes=None, auth_time=None: (
+            TokenPair(
+                access_token=_build_access_token(
+                    user_id=_user_id,
+                    email=email or "updated@example.com",
+                    email_verified=bool(email_verified),
+                    role=role or "user",
+                    scopes=scopes,
+                    auth_time=int((auth_time or datetime.now(UTC)).timestamp()),
+                    jti="refresh-jti-legacy",
+                ),
+                refresh_token="new-refresh-token",
+            )
+        ),
+    )
+
+    assert token_pair.refresh_token == "new-refresh-token"
+    assert row.hashed_refresh_token == RefreshTokenHasher.from_secret(
+        TEST_REFRESH_TOKEN_HASH_SECRET
+    ).hash_token("new-refresh-token")
+    assert row.hashed_refresh_token != sha256(b"new-refresh-token").hexdigest()
 
 
 @pytest.mark.asyncio
@@ -253,6 +341,7 @@ async def test_rotate_refresh_session_fails_closed_when_redis_unavailable() -> N
         redis_client=redis,
         refresh_token_ttl_seconds=900,
         access_token_ttl_seconds=300,
+        refresh_token_hasher=RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET),
     )
     row = _session_row(raw_refresh_token="old-refresh-token")
 
@@ -313,6 +402,7 @@ async def test_revoke_session_deletes_redis_key_and_blocklists_jti() -> None:
         redis_client=redis,
         refresh_token_ttl_seconds=900,
         access_token_ttl_seconds=300,
+        refresh_token_hasher=RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET),
     )
     row = _session_row(raw_refresh_token="logout-refresh-token")
     redis.values[f"session:{row.session_id}"] = (
@@ -354,6 +444,7 @@ async def test_revoke_session_fails_closed_when_redis_unavailable() -> None:
         redis_client=redis,
         refresh_token_ttl_seconds=900,
         access_token_ttl_seconds=300,
+        refresh_token_hasher=RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET),
     )
     row = _session_row(raw_refresh_token="logout-refresh-token")
 
@@ -389,6 +480,7 @@ async def test_revoke_user_sessions_marks_all_sessions_revoked_without_committin
         redis_client=redis,
         refresh_token_ttl_seconds=900,
         access_token_ttl_seconds=300,
+        refresh_token_hasher=RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET),
     )
     first = _session_row(raw_refresh_token="refresh-token-1")
     second = _session_row(raw_refresh_token="refresh-token-2")
@@ -437,6 +529,7 @@ async def test_revoke_user_sessions_rolls_back_when_redis_delete_fails() -> None
         redis_client=redis,
         refresh_token_ttl_seconds=900,
         access_token_ttl_seconds=300,
+        refresh_token_hasher=RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET),
     )
     first = _session_row(raw_refresh_token="refresh-token-1")
 
@@ -473,6 +566,7 @@ async def test_validate_access_token_session_accepts_active_bound_session() -> N
         redis_client=redis,
         refresh_token_ttl_seconds=900,
         access_token_ttl_seconds=300,
+        refresh_token_hasher=RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET),
     )
     row = _session_row(raw_refresh_token="refresh-token-1")
     redis.values["session_access:jti-123"] = str(row.session_id)
@@ -513,6 +607,7 @@ async def test_validate_access_token_session_rejects_when_session_payload_missin
         redis_client=redis,
         refresh_token_ttl_seconds=900,
         access_token_ttl_seconds=300,
+        refresh_token_hasher=RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET),
     )
     row = _session_row(raw_refresh_token="refresh-token-1")
     redis.values["session_access:jti-123"] = str(row.session_id)

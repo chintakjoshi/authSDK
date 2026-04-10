@@ -10,9 +10,11 @@ import pytest
 from authlib.jose import jwt
 from redis.exceptions import RedisError
 
-from app.core.sessions import SessionPayload, SessionService, SessionStateError
+from app.core.sessions import RefreshTokenHasher, SessionPayload, SessionService, SessionStateError
 from app.models.session import Session
 from app.services.token_service import TokenPair
+
+TEST_REFRESH_TOKEN_HASH_SECRET = "session-hash-secret"
 
 
 class _RedisStub:
@@ -64,6 +66,7 @@ def _service(redis_client: _RedisStub | None = None) -> SessionService:
         redis_client=redis_client or _RedisStub(),  # type: ignore[arg-type]
         refresh_token_ttl_seconds=900,
         access_token_ttl_seconds=300,
+        refresh_token_hasher=RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET),
     )
 
 
@@ -204,6 +207,18 @@ def test_extract_access_claims_invoke_token_issuer_and_ttl_helpers() -> None:
     assert SessionService._remaining_session_ttl(datetime.now(UTC) - timedelta(seconds=5)) == 1
 
 
+def test_refresh_token_hasher_uses_keyed_hmac_and_exposes_legacy_sha256_fallback() -> None:
+    """Refresh token hashing should use a keyed HMAC while preserving legacy lookup support."""
+    hasher = RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET)
+
+    current_hash = hasher.hash_token("refresh-token")
+    legacy_hash = hasher.legacy_hash_token("refresh-token")
+
+    assert current_hash == hasher.hash_token("refresh-token")
+    assert current_hash != legacy_hash
+    assert legacy_hash == "0eb17643d4e9261163783a420859c92c7d212fa9624106a12b510afbec266120"
+
+
 @pytest.mark.asyncio
 async def test_rotate_refresh_session_rejects_missing_user_and_expired_session() -> None:
     """Refresh rotation fails closed when the session is expired or the user is gone."""
@@ -212,7 +227,9 @@ async def test_rotate_refresh_session_rejects_missing_user_and_expired_session()
         session_id=uuid4(),
         id=uuid4(),
         user_id=uuid4(),
-        hashed_refresh_token=SessionService._hash_token("refresh-token"),
+        hashed_refresh_token=RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET).hash_token(
+            "refresh-token"
+        ),
         auth_time=datetime.now(UTC),
         expires_at=datetime.now(UTC) - timedelta(seconds=1),
         revoked_at=None,

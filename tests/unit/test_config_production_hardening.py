@@ -76,6 +76,7 @@ def test_development_settings_allow_empty_prod_only_fields() -> None:
     settings = _build_settings()
     assert settings.app.environment == "development"
     assert settings.app.allowed_hosts == []
+    assert settings.session_security.refresh_token_hash_key is None
     assert settings.signing_keys.encryption_key is None
     assert settings.webhook.secret_encryption_key is None
 
@@ -91,11 +92,23 @@ def test_development_settings_allow_empty_prod_only_fields() -> None:
             lambda settings: (
                 settings.app.allowed_hosts.append("auth.example.com"),
                 setattr(settings.signing_keys, "encryption_key", "signing-secret"),
+                setattr(settings.webhook, "secret_encryption_key", "webhook-secret"),
+            ),
+            "session_security.refresh_token_hash_key is required in production.",
+        ),
+        (
+            lambda settings: (
+                settings.app.allowed_hosts.append("auth.example.com"),
+                setattr(settings.signing_keys, "encryption_key", "signing-secret"),
+                setattr(settings.session_security, "refresh_token_hash_key", "session-hash-secret"),
             ),
             "webhook.secret_encryption_key is required in production.",
         ),
         (
-            lambda settings: setattr(settings.signing_keys, "encryption_key", "signing-secret"),
+            lambda settings: (
+                setattr(settings.signing_keys, "encryption_key", "signing-secret"),
+                setattr(settings.session_security, "refresh_token_hash_key", "session-hash-secret"),
+            ),
             "app.allowed_hosts must be configured in production.",
         ),
     ],
@@ -114,6 +127,7 @@ def test_production_settings_reject_bootstrap_admin_key_and_insecure_urls() -> N
     settings = _build_settings(environment="production")
     settings.app.allowed_hosts = ["auth.example.com"]
     settings.signing_keys.encryption_key = "signing-secret"
+    settings.session_security.refresh_token_hash_key = "session-hash-secret"
     settings.webhook.secret_encryption_key = "webhook-secret"
     settings.admin_api_key = "dev-bootstrap-key"
 
@@ -138,6 +152,7 @@ def test_production_settings_accept_hardened_configuration() -> None:
     settings = _build_settings(environment="production")
     settings.app.allowed_hosts = ["auth.example.com", "*.auth.example.com"]
     settings.signing_keys.encryption_key = "signing-secret"
+    settings.session_security.refresh_token_hash_key = "session-hash-secret"
     settings.webhook.secret_encryption_key = "webhook-secret"
 
     validated = settings.validate_production_constraints()
