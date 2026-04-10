@@ -227,9 +227,9 @@ async def test_rotate_refresh_session_rejects_missing_user_and_expired_session()
         session_id=uuid4(),
         id=uuid4(),
         user_id=uuid4(),
-        hashed_refresh_token=RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET).hash_token(
-            "refresh-token"
-        ),
+        hashed_refresh_token=RefreshTokenHasher.from_secret(
+            TEST_REFRESH_TOKEN_HASH_SECRET
+        ).hash_token("refresh-token"),
         auth_time=datetime.now(UTC),
         expires_at=datetime.now(UTC) - timedelta(seconds=1),
         revoked_at=None,
