@@ -1,9 +1,11 @@
 """FastAPI application factory."""
 
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from app.config import configure_structlog, get_settings
+from app.config import configure_structlog, get_settings, shutdown_reloadable_singletons
 from app.error_handlers import register_exception_handlers
 from app.middleware.correlation_id import CorrelationIdMiddleware
 from app.middleware.logging import LoggingMiddleware
@@ -13,6 +15,15 @@ from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.middleware.tracing import TracingMiddleware
 from app.routers import admin, apikeys, auth, health, lifecycle, oauth, otp, saml, webhooks
 from app.routers._admin_access import require_admin_access
+
+
+@asynccontextmanager
+async def _app_lifespan(_: FastAPI):
+    """Dispose reloadable singleton resources on application shutdown."""
+    try:
+        yield
+    finally:
+        await shutdown_reloadable_singletons()
 
 
 def create_app() -> FastAPI:
@@ -26,6 +37,7 @@ def create_app() -> FastAPI:
         docs_url="/docs" if docs_enabled else None,
         redoc_url=None,
         openapi_url="/openapi.json" if docs_enabled else None,
+        lifespan=_app_lifespan,
     )
     register_exception_handlers(app, environment=settings.app.environment)
 

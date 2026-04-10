@@ -5,7 +5,6 @@ from __future__ import annotations
 import inspect
 import json
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Any
 
 from redis.asyncio.client import Redis
@@ -14,6 +13,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import reloadable_singleton
 from app.core.oauth import GoogleOAuthClient, OAuthProtocolError, get_google_oauth_client
 from app.core.sessions import SessionService, get_redis_client, get_session_service
 from app.models.user import User, UserIdentity
@@ -405,7 +405,7 @@ class OAuthService:
         return f"oauth_state:{state}"
 
 
-@lru_cache
+@reloadable_singleton
 def get_oauth_service() -> OAuthService:
     """Build and cache OAuth service dependencies."""
     return OAuthService(

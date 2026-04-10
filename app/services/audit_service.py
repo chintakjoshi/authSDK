@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from functools import lru_cache
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -13,6 +12,7 @@ from fastapi import Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import reloadable_singleton
 from app.core.client_ip import extract_client_ip as extract_trusted_client_ip
 from app.db.session import get_session_factory
 from app.models.audit_event import AuditActorType, AuditEvent
@@ -205,7 +205,7 @@ class AuditService:
             )
 
 
-@lru_cache
+@reloadable_singleton
 def get_audit_service() -> AuditService:
     """Create and cache audit service dependency."""
     return AuditService()

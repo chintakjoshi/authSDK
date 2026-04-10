@@ -12,7 +12,6 @@ import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
@@ -26,7 +25,7 @@ from rq_scheduler import Scheduler
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.config import get_settings
+from app.config import get_settings, reloadable_singleton
 from app.db.session import get_session_factory
 from app.models.webhook_delivery import WebhookDelivery, WebhookDeliveryStatus
 from app.models.webhook_endpoint import WebhookEndpoint
@@ -822,7 +821,19 @@ class WebhookService:
         )
 
 
-@lru_cache
+def _close_sync_redis_client(client: Redis) -> None:
+    """Close a previous sync Redis client instance."""
+    close = getattr(client, "close", None)
+    if callable(close):
+        close()
+        return
+
+    disconnect = getattr(getattr(client, "connection_pool", None), "disconnect", None)
+    if callable(disconnect):
+        disconnect()
+
+
+@reloadable_singleton(cleanup=_close_sync_redis_client)
 def get_webhook_redis_connection() -> Redis:
     """Create a sync Redis client for RQ queueing with connection health checks."""
     settings = get_settings()
@@ -834,14 +845,14 @@ def get_webhook_redis_connection() -> Redis:
     )
 
 
-@lru_cache
+@reloadable_singleton
 def get_webhook_queue() -> Queue:
     """Create the RQ queue used for webhook processing."""
     settings = get_settings()
     return Queue(name=settings.webhook.queue_name, connection=get_webhook_redis_connection())
 
 
-@lru_cache
+@reloadable_singleton
 def get_webhook_scheduler() -> Scheduler:
     """Create the RQ scheduler used for delayed retries."""
     settings = get_settings()
@@ -850,7 +861,7 @@ def get_webhook_scheduler() -> Scheduler:
     )
 
 
-@lru_cache
+@reloadable_singleton
 def get_webhook_service() -> WebhookService:
     """Create and cache the webhook service dependency."""
     settings = get_settings()
