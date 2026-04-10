@@ -7,7 +7,6 @@ import smtplib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.message import EmailMessage
-from functools import lru_cache
 from typing import Protocol
 from uuid import UUID
 
@@ -16,7 +15,7 @@ from redis.exceptions import RedisError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
+from app.config import get_settings, reloadable_singleton
 from app.core.jwt import (
     Audience,
     JWTService,
@@ -852,7 +851,7 @@ class OTPService:
         return f"otp_resend_login:{user_id}"
 
 
-@lru_cache
+@reloadable_singleton
 def get_otp_email_sender() -> OTPEmailSender:
     """Create and cache default Mailhog-backed OTP email sender."""
     settings = get_settings()
@@ -863,7 +862,7 @@ def get_otp_email_sender() -> OTPEmailSender:
     )
 
 
-@lru_cache
+@reloadable_singleton
 def get_otp_service() -> OTPService:
     """Create and cache OTP service dependency."""
     settings = get_settings()

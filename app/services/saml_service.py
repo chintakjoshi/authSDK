@@ -6,7 +6,6 @@ import inspect
 import json
 import secrets
 from dataclasses import dataclass
-from functools import lru_cache
 
 from redis.asyncio.client import Redis
 from redis.exceptions import RedisError
@@ -14,6 +13,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import reloadable_singleton
 from app.core.saml import SamlCore, SamlProtocolError, get_saml_core
 from app.core.sessions import SessionService, get_redis_client, get_session_service
 from app.models.user import User, UserIdentity
@@ -402,7 +402,7 @@ class SamlService:
         return f"saml_state:{state}"
 
 
-@lru_cache
+@reloadable_singleton
 def get_saml_service() -> SamlService:
     """Create and cache SAML service dependency."""
     return SamlService(

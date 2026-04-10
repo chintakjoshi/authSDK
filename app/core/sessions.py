@@ -7,7 +7,6 @@ import json
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
 from hashlib import sha256
 from typing import Protocol
 from uuid import UUID
@@ -18,7 +17,7 @@ from redis.exceptions import RedisError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
+from app.config import get_settings, reloadable_singleton
 from app.core.jwt import decode_unverified_jwt_claims, normalize_audiences
 from app.models.session import Session
 from app.models.user import User
@@ -574,14 +573,33 @@ class SessionService:
         return max(int((expires_at - now).total_seconds()), 1)
 
 
-@lru_cache
+async def _close_async_redis_client(client: Redis) -> None:
+    """Close a previous async Redis client instance."""
+    close = getattr(client, "aclose", None)
+    if callable(close):
+        await close()
+        return
+
+    close = getattr(client, "close", None)
+    if callable(close):
+        result = close()
+        if inspect.isawaitable(result):
+            await result
+
+
+@reloadable_singleton(cleanup=_close_async_redis_client)
 def get_redis_client() -> Redis:
     """Create and cache Redis client for async session operations."""
     settings = get_settings()
-    return redis_async.from_url(settings.redis.url, decode_responses=True)
+    return redis_async.from_url(
+        settings.redis.url,
+        decode_responses=True,
+        socket_keepalive=True,
+        health_check_interval=settings.redis.health_check_interval_seconds,
+    )
 
 
-@lru_cache
+@reloadable_singleton
 def get_session_service() -> SessionService:
     """Create and cache session service."""
     settings = get_settings()

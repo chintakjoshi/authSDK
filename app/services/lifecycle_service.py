@@ -8,7 +8,6 @@ import smtplib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
-from functools import lru_cache
 from hashlib import sha256
 from typing import Protocol
 from urllib.parse import urljoin
@@ -21,7 +20,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
+from app.config import get_settings, reloadable_singleton
 from app.core.jwt import JWTService, TokenValidationError, get_jwt_service, normalize_audiences
 from app.core.sessions import (
     SessionService,
@@ -750,7 +749,7 @@ class LifecycleService:
         return urljoin(f"{self._public_base_url}/", f"auth/password/reset?token={token}")
 
 
-@lru_cache
+@reloadable_singleton
 def get_verification_email_sender() -> LifecycleEmailSender:
     """Create and cache default Mailhog SMTP sender."""
     settings = get_settings()
@@ -761,7 +760,7 @@ def get_verification_email_sender() -> LifecycleEmailSender:
     )
 
 
-@lru_cache
+@reloadable_singleton
 def get_lifecycle_service() -> LifecycleService:
     """Create and cache lifecycle service dependency."""
     settings = get_settings()

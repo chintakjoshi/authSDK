@@ -7,13 +7,12 @@ import hmac
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from functools import lru_cache
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
+from app.config import get_settings, reloadable_singleton
 from app.core.jwt import JWTService, get_jwt_service, merge_audiences
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
 from app.models.oauth_client import OAuthClient
@@ -395,7 +394,7 @@ class M2MService:
         return statement
 
 
-@lru_cache
+@reloadable_singleton
 def get_m2m_service() -> M2MService:
     """Create and cache M2M client-credentials service dependency."""
     settings = get_settings()

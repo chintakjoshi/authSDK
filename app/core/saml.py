@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Any
 
 from fastapi import Request
 
-from app.config import get_settings
+from app.config import get_settings, reloadable_singleton
 
 HTTP_POST_BINDING = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
 HTTP_REDIRECT_BINDING = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"
@@ -227,7 +226,7 @@ def _build_saml_settings_from_config() -> dict[str, Any]:
     }
 
 
-@lru_cache
+@reloadable_singleton
 def get_saml_core() -> SamlCore:
     """Create and cache SAML core dependency."""
     return SamlCore(settings_data=_build_saml_settings_from_config())

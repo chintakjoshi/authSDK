@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from functools import lru_cache
 from uuid import UUID
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import reloadable_singleton
 from app.core.api_keys import APIKeyCore
 from app.models.api_key import APIKey
 from app.models.user import User
@@ -364,7 +364,7 @@ class APIKeyService:
         return statement
 
 
-@lru_cache
+@reloadable_singleton
 def get_api_key_service() -> APIKeyService:
     """Create and cache API key service dependency."""
     return APIKeyService(core=APIKeyCore())

@@ -6,7 +6,6 @@ import base64
 import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import serialization
@@ -14,7 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
+from app.config import get_settings, reloadable_singleton
 from app.core.jwt import JWTService
 from app.models.signing_key import SigningKey, SigningKeyStatus
 
@@ -258,7 +257,7 @@ class SigningKeyService:
         return private_key_pem, public_key_pem
 
 
-@lru_cache
+@reloadable_singleton
 def get_signing_key_service() -> SigningKeyService:
     """Create and cache signing-key service from settings."""
     settings = get_settings()

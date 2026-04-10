@@ -4,11 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from functools import lru_cache
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
+from app.config import get_settings, reloadable_singleton
 from app.core.jwt import Audience, JWTService, get_jwt_service, merge_audiences
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
 
@@ -128,7 +127,7 @@ class TokenService:
         return AccessToken(access_token=access_token)
 
 
-@lru_cache
+@reloadable_singleton
 def get_token_service() -> TokenService:
     """Build and cache token service based on application settings."""
     settings = get_settings()

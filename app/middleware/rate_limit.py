@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 import time
-from functools import lru_cache
 from typing import Protocol
 from uuid import uuid4
 
@@ -16,7 +15,7 @@ from redis.exceptions import RedisError
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
 
-from app.config import get_settings
+from app.config import get_settings, reloadable_singleton
 from app.core.client_ip import extract_client_ip
 
 logger = structlog.get_logger(__name__)
@@ -59,11 +58,30 @@ class SlidingWindowRedis(Protocol):
         """Apply TTL to key."""
 
 
-@lru_cache
+async def _close_async_redis_client(client: Redis) -> None:
+    """Close a previous async Redis client instance."""
+    close = getattr(client, "aclose", None)
+    if callable(close):
+        await close()
+        return
+
+    close = getattr(client, "close", None)
+    if callable(close):
+        result = close()
+        if hasattr(result, "__await__"):
+            await result
+
+
+@reloadable_singleton(cleanup=_close_async_redis_client)
 def get_rate_limit_redis_client() -> Redis:
     """Create and cache Redis client used by rate limiter middleware."""
     settings = get_settings()
-    return redis_async.from_url(settings.redis.url, decode_responses=True)
+    return redis_async.from_url(
+        settings.redis.url,
+        decode_responses=True,
+        socket_keepalive=True,
+        health_check_interval=settings.redis.health_check_interval_seconds,
+    )
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):

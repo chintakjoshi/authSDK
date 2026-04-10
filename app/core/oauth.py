@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import hmac
 import secrets
-from functools import lru_cache
 from typing import Any
 
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 from authlib.jose import JoseError, JsonWebKey, jwt
 
-from app.config import get_settings
+from app.config import get_settings, reloadable_singleton
 
 GOOGLE_DISCOVERY_URL = "https://accounts.google.com/.well-known/openid-configuration"
 
@@ -173,7 +172,7 @@ class GoogleOAuthClient:
         )
 
 
-@lru_cache
+@reloadable_singleton
 def get_google_oauth_client() -> GoogleOAuthClient:
     """Build and cache Google OAuth client from settings."""
     settings = get_settings()

@@ -6,13 +6,12 @@ import hmac
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
 from uuid import UUID
 
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
+from app.config import get_settings, reloadable_singleton
 from app.core.sessions import SessionService, SessionStateError, get_session_service
 from app.core.signing_keys import (
     SigningKeyRotationResult,
@@ -733,7 +732,7 @@ class AdminService:
         return int(result.rowcount or 0)
 
 
-@lru_cache
+@reloadable_singleton
 def get_admin_service() -> AdminService:
     """Create and cache the admin orchestration service dependency."""
     settings = get_settings()

@@ -9,7 +9,6 @@ import hmac
 import json
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -18,7 +17,7 @@ from authlib.jose.errors import ExpiredTokenError
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 
-from app.config import get_settings
+from app.config import get_settings, reloadable_singleton
 
 TokenType = Literal["access", "refresh", "email_verify", "otp_challenge", "action_token", "m2m"]
 JWT_ALGORITHM = "RS256"
@@ -200,7 +199,7 @@ class JWTService:
         return cls._calculate_kid(public_key_pem)
 
 
-@lru_cache
+@reloadable_singleton
 def get_jwt_service() -> JWTService:
     """Build and cache the JWT service from application settings."""
     settings = get_settings()

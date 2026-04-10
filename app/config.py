@@ -2,16 +2,32 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import inspect
 import logging
+import os
+from collections import deque, namedtuple
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from functools import lru_cache
-from typing import Any, Literal
+from functools import wraps
+from pathlib import Path
+from threading import Lock, RLock
+from typing import Any, Literal, TypeVar, cast
 
 import structlog
 from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _LOG_CONTEXT: dict[str, str] = {"environment": "development", "service": "auth-service"}
+_CacheInfo = namedtuple("CacheInfo", "hits misses maxsize currsize")
+_UNSET = object()
+_PENDING_SINGLETON_CLEANUPS: deque[tuple[str, Callable[[Any], Any], Any]] = deque()
+_PENDING_SINGLETON_CLEANUPS_LOCK = Lock()
+_REGISTERED_SINGLETON_CLEARERS: list[Callable[[], None]] = []
+_REGISTERED_SINGLETON_CLEARERS_LOCK = Lock()
+_cleanup_logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 
 class AppSettings(BaseModel):
@@ -51,6 +67,7 @@ class RedisSettings(BaseModel):
     """Redis connection settings."""
 
     url: str = Field(description="Redis URL.")
+    health_check_interval_seconds: int = Field(default=30, ge=0)
 
     @field_validator("url")
     @classmethod
@@ -343,7 +360,157 @@ def configure_structlog(settings: Settings) -> None:
     )
 
 
-@lru_cache
+def _settings_source_fingerprint() -> str:
+    """Return a stable fingerprint for the active settings sources."""
+    hasher = hashlib.sha256()
+
+    for key, value in sorted(os.environ.items()):
+        hasher.update(key.encode("utf-8", errors="surrogateescape"))
+        hasher.update(b"\0")
+        hasher.update(value.encode("utf-8", errors="surrogateescape"))
+        hasher.update(b"\0")
+
+    env_file = Settings.model_config.get("env_file")
+    env_files = env_file if isinstance(env_file, list | tuple) else (env_file,)
+    for raw_path in env_files:
+        if raw_path in (None, "", "."):
+            continue
+
+        path = Path(raw_path)
+        hasher.update(str(path.resolve(strict=False)).encode("utf-8", errors="surrogateescape"))
+        try:
+            stat = path.stat()
+        except FileNotFoundError:
+            hasher.update(b"\0")
+            continue
+
+        hasher.update(str(stat.st_mtime_ns).encode("ascii"))
+        hasher.update(b":")
+        hasher.update(str(stat.st_size).encode("ascii"))
+
+    return hasher.hexdigest()
+
+
+async def _run_singleton_cleanup(name: str, cleanup: Callable[[Any], Any], value: Any) -> None:
+    """Run one registered singleton cleanup callback."""
+    try:
+        result = cleanup(value)
+        if inspect.isawaitable(result):
+            await cast(Awaitable[Any], result)
+    except Exception:
+        _cleanup_logger.exception("reloadable_singleton_cleanup_failed", extra={"name": name})
+
+
+def _schedule_singleton_cleanup(name: str, cleanup: Callable[[Any], Any], value: Any) -> None:
+    """Run cleanup immediately when possible or enqueue it for later draining."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        with _PENDING_SINGLETON_CLEANUPS_LOCK:
+            _PENDING_SINGLETON_CLEANUPS.append((name, cleanup, value))
+        return
+
+    loop.create_task(_run_singleton_cleanup(name, cleanup, value))
+
+
+async def flush_pending_singleton_cleanups() -> None:
+    """Drain any deferred singleton cleanup work."""
+    while True:
+        with _PENDING_SINGLETON_CLEANUPS_LOCK:
+            if not _PENDING_SINGLETON_CLEANUPS:
+                return
+            pending = list(_PENDING_SINGLETON_CLEANUPS)
+            _PENDING_SINGLETON_CLEANUPS.clear()
+
+        for name, cleanup, value in pending:
+            await _run_singleton_cleanup(name, cleanup, value)
+
+
+def clear_reloadable_singletons() -> None:
+    """Clear all registered reloadable singleton caches."""
+    with _REGISTERED_SINGLETON_CLEARERS_LOCK:
+        clearers = list(_REGISTERED_SINGLETON_CLEARERS)
+
+    for clear in clearers:
+        clear()
+
+
+async def shutdown_reloadable_singletons() -> None:
+    """Clear all reloadable singletons and close any pending resources."""
+    clear_reloadable_singletons()
+    await flush_pending_singleton_cleanups()
+
+
+def reloadable_singleton(
+    func: Callable[[], _T] | None = None,
+    *,
+    cleanup: Callable[[_T], Any] | None = None,
+) -> Callable[[Callable[[], _T]], Callable[[], _T]] | Callable[[], _T]:
+    """Cache one zero-argument dependency per settings-source fingerprint."""
+
+    def decorator(factory: Callable[[], _T]) -> Callable[[], _T]:
+        lock = RLock()
+        cached_version: str | object = _UNSET
+        cached_value: _T | object = _UNSET
+        hits = 0
+        misses = 0
+        name = f"{factory.__module__}.{factory.__name__}"
+
+        def _clear_cached_value() -> None:
+            nonlocal cached_value, cached_version
+            with lock:
+                previous = cached_value
+                cached_value = _UNSET
+                cached_version = _UNSET
+            if previous is not _UNSET and cleanup is not None:
+                _schedule_singleton_cleanup(name, cast(Callable[[Any], Any], cleanup), previous)
+
+        @wraps(factory)
+        def wrapper() -> _T:
+            nonlocal cached_value, cached_version, hits, misses
+
+            version = _settings_source_fingerprint()
+            if cached_value is not _UNSET and cached_version == version:
+                hits += 1
+                return cast(_T, cached_value)
+
+            with lock:
+                if cached_value is not _UNSET and cached_version == version:
+                    hits += 1
+                    return cast(_T, cached_value)
+
+                previous = cached_value
+                value = factory()
+                cached_value = value
+                cached_version = version
+                misses += 1
+
+            if previous is not _UNSET and cleanup is not None and previous is not value:
+                _schedule_singleton_cleanup(name, cast(Callable[[Any], Any], cleanup), previous)
+
+            return value
+
+        def cache_clear() -> None:
+            _clear_cached_value()
+
+        def cache_info() -> Any:
+            currsize = 0 if cached_value is _UNSET else 1
+            return _CacheInfo(hits, misses, 1, currsize)
+
+        wrapper.cache_clear = cache_clear  # type: ignore[attr-defined]
+        wrapper.cache_info = cache_info  # type: ignore[attr-defined]
+
+        with _REGISTERED_SINGLETON_CLEARERS_LOCK:
+            _REGISTERED_SINGLETON_CLEARERS.append(cache_clear)
+
+        return wrapper
+
+    if func is None:
+        return decorator
+    return decorator(func)
+
+
+@reloadable_singleton
 def get_settings() -> Settings:
-    """Load and cache application settings from environment variables."""
+    """Load application settings from the current environment."""
     return Settings()
