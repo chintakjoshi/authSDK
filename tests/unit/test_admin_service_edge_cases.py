@@ -230,7 +230,9 @@ async def test_admin_helpers_cover_invalid_claims_pagination_and_detail_paths() 
             updated_at=datetime.now(UTC),
         ),
     ]
-    db_session = _DBSessionStub([SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: users))])  # type: ignore[arg-type]
+    db_session = _DBSessionStub(
+        [SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: users))]
+    )  # type: ignore[arg-type]
 
     async def _summary(user):  # type: ignore[no-untyped-def]
         return SimpleNamespace(
@@ -334,7 +336,9 @@ async def test_admin_mutation_and_proxy_helpers_cover_error_mapping() -> None:
     assert _service()._build_user_list_statement(role=None, email="   ") is not None
 
     user = await _service().set_user_email_otp(
-        db_session=_DBSessionStub([SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(id=uuid4()))]),  # type: ignore[arg-type]
+        db_session=_DBSessionStub(
+            [SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(id=uuid4()))]
+        ),  # type: ignore[arg-type]
         user_id=uuid4(),
         enabled=True,
     )

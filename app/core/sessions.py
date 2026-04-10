@@ -7,7 +7,6 @@ import json
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from app.service_registry import registry, service_cached
 from hashlib import sha256
 from typing import Protocol
 from uuid import UUID
@@ -22,6 +21,7 @@ from app.config import get_settings
 from app.core.jwt import decode_unverified_jwt_claims, normalize_audiences
 from app.models.session import Session
 from app.models.user import User
+from app.service_registry import registry, service_cached
 
 
 @dataclass(frozen=True)

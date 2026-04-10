@@ -97,7 +97,9 @@ class _BruteForceStub:
             attempt_count=1,
         )
 
-    async def record_successful_login(self, user_id: str, ip_address=None, user_agent=None) -> object:  # type: ignore[no-untyped-def]
+    async def record_successful_login(
+        self, user_id: str, ip_address=None, user_agent=None
+    ) -> object:  # type: ignore[no-untyped-def]
         del user_id, ip_address, user_agent
         if self.success_error is not None:
             raise self.success_error

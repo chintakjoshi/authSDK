@@ -6,7 +6,6 @@ import base64
 import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from app.service_registry import service_cached
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import serialization
@@ -17,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.core.jwt import JWTService
 from app.models.signing_key import SigningKey, SigningKeyStatus
+from app.service_registry import service_cached
 
 
 @dataclass(frozen=True)

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import hmac
 import secrets
-from app.service_registry import service_cached
 from typing import Any
 
 from authlib.integrations.httpx_client import AsyncOAuth2Client
 from authlib.jose import JoseError, JsonWebKey, jwt
 
 from app.config import get_settings
+from app.service_registry import service_cached
 
 GOOGLE_DISCOVERY_URL = "https://accounts.google.com/.well-known/openid-configuration"
 

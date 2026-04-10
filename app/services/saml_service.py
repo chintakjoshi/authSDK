@@ -6,7 +6,6 @@ import inspect
 import json
 import secrets
 from dataclasses import dataclass
-from app.service_registry import service_cached
 
 from redis.asyncio.client import Redis
 from redis.exceptions import RedisError
@@ -17,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.saml import SamlCore, SamlProtocolError, get_saml_core
 from app.core.sessions import SessionService, get_redis_client, get_session_service
 from app.models.user import User, UserIdentity
+from app.service_registry import service_cached
 from app.services.token_service import TokenPair, TokenService, get_token_service
 
 

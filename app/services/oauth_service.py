@@ -5,7 +5,6 @@ from __future__ import annotations
 import inspect
 import json
 from dataclasses import dataclass
-from app.service_registry import service_cached
 from typing import Any
 
 from redis.asyncio.client import Redis
@@ -17,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.oauth import GoogleOAuthClient, OAuthProtocolError, get_google_oauth_client
 from app.core.sessions import SessionService, get_redis_client, get_session_service
 from app.models.user import User, UserIdentity
+from app.service_registry import service_cached
 from app.services.token_service import TokenPair, TokenService, get_token_service
 
 

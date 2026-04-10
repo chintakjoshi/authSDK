@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -161,6 +160,7 @@ class TestServiceRegistryAsyncCleanup:
 
     def test_register_dispose_without_cached_entry_is_accepted(self) -> None:
         """Registering dispose before creation is allowed (for pre-registration)."""
+
         async def dispose() -> None:
             pass
 

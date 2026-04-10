@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import ipaddress
-from app.service_registry import service_cached
 
 from fastapi import Request
 
 from app.config import get_settings
+from app.service_registry import service_cached
 
 
 def normalize_ip(ip_address: str | None) -> str | None:

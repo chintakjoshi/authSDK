@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from app.service_registry import service_cached
 from uuid import UUID
 
 from sqlalchemy import select
@@ -12,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.sessions import SessionService, SessionStateError, get_session_service
 from app.models.user import User
+from app.service_registry import service_cached
 from app.services.api_key_service import APIKeyService, APIKeyServiceError, get_api_key_service
 from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
 from app.services.user_service import UserService

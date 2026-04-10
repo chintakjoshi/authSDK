@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from app.service_registry import service_cached
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -16,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.client_ip import extract_client_ip as extract_trusted_client_ip
 from app.db.session import get_session_factory
 from app.models.audit_event import AuditActorType, AuditEvent
+from app.service_registry import service_cached
 from app.services.pagination import CursorPage, apply_created_at_cursor, build_page, decode_cursor
 
 logger = structlog.get_logger(__name__)

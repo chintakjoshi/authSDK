@@ -35,9 +35,7 @@ class _QueueStub:
 class _SchedulerStub:
     """Scheduler stub for webhook service unit tests."""
 
-    def enqueue_at(
-        self, scheduled_time, func: str, *args: object, **kwargs: object
-    ) -> object:  # type: ignore[no-untyped-def]
+    def enqueue_at(self, scheduled_time, func: str, *args: object, **kwargs: object) -> object:  # type: ignore[no-untyped-def]
         del scheduled_time, func, args, kwargs
         return object()
 

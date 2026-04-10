@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 import math
 import time
-import inspect
-
-from app.service_registry import registry, service_cached
 from typing import Protocol
 from uuid import uuid4
 
@@ -20,6 +18,7 @@ from starlette.responses import JSONResponse, Response
 
 from app.config import get_settings
 from app.core.client_ip import extract_client_ip
+from app.service_registry import registry, service_cached
 
 logger = structlog.get_logger(__name__)
 _WINDOW_SECONDS = 60

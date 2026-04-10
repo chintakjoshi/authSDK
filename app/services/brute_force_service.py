@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from app.service_registry import service_cached
 
 from fastapi import Request
 from redis.asyncio.client import Redis
@@ -16,6 +15,7 @@ from app.core.client_ip import (
     normalize_ip,
 )
 from app.core.sessions import get_redis_client
+from app.service_registry import service_cached
 
 _FAILED_ATTEMPTS_TTL_SECONDS = 3600
 _DISTRIBUTED_ATTACK_TTL_SECONDS = 300

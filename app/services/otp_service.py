@@ -7,7 +7,6 @@ import smtplib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.message import EmailMessage
-from app.service_registry import service_cached
 from typing import Protocol
 from uuid import UUID
 
@@ -35,6 +34,7 @@ from app.core.sessions import (
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
 from app.models.user import User
 from app.schemas.otp import OTPAction
+from app.service_registry import service_cached
 from app.services.brute_force_service import (
     BruteForceProtectionError,
     BruteForceProtectionService,

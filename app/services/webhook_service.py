@@ -12,7 +12,6 @@ import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from app.service_registry import service_cached
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
@@ -30,6 +29,7 @@ from app.config import get_settings
 from app.db.session import get_session_factory
 from app.models.webhook_delivery import WebhookDelivery, WebhookDeliveryStatus
 from app.models.webhook_endpoint import WebhookEndpoint
+from app.service_registry import service_cached
 from app.services.audit_service import AuditService, get_audit_service
 from app.services.pagination import CursorPage, apply_created_at_cursor, build_page, decode_cursor
 

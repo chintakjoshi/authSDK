@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from app.service_registry import service_cached
 from typing import Any, Literal
 
 import structlog
 from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.service_registry import service_cached
 
 _LOG_CONTEXT: dict[str, str] = {"environment": "development", "service": "auth-service"}
 

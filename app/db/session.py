@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from app.service_registry import registry, service_cached
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -13,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.config import get_settings
+from app.service_registry import registry, service_cached
 
 
 @service_cached

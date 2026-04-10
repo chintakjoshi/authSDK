@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from app.service_registry import service_cached
 from typing import Any
 
 from fastapi import Request
 
 from app.config import get_settings
+from app.service_registry import service_cached
 
 HTTP_POST_BINDING = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST"
 HTTP_REDIRECT_BINDING = "urn:oasis:names:tc:SAML:2.0:bindings:HTTP-Redirect"

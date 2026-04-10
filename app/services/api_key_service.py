@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from app.service_registry import service_cached
 from uuid import UUID
 
 from sqlalchemy import or_, select
@@ -13,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.api_keys import APIKeyCore
 from app.models.api_key import APIKey
 from app.models.user import User
+from app.service_registry import service_cached
 from app.services.pagination import CursorPage, apply_created_at_cursor, build_page, decode_cursor
 
 

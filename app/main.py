@@ -1,7 +1,7 @@
 """FastAPI application factory."""
 
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
 from starlette.middleware.trustedhost import TrustedHostMiddleware

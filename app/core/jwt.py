@@ -9,7 +9,6 @@ import hmac
 import json
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
-from app.service_registry import service_cached
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -19,6 +18,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 
 from app.config import get_settings
+from app.service_registry import service_cached
 
 TokenType = Literal["access", "refresh", "email_verify", "otp_challenge", "action_token", "m2m"]
 JWT_ALGORITHM = "RS256"

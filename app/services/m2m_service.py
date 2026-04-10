@@ -7,7 +7,6 @@ import hmac
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from app.service_registry import service_cached
 from uuid import UUID
 
 from sqlalchemy import select
@@ -17,6 +16,7 @@ from app.config import get_settings
 from app.core.jwt import JWTService, get_jwt_service, merge_audiences
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
 from app.models.oauth_client import OAuthClient
+from app.service_registry import service_cached
 from app.services.pagination import CursorPage, apply_created_at_cursor, build_page, decode_cursor
 
 

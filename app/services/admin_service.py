@@ -6,7 +6,6 @@ import hmac
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from app.service_registry import service_cached
 from uuid import UUID
 
 from sqlalchemy import and_, delete, func, or_, select
@@ -22,6 +21,7 @@ from app.core.signing_keys import (
 from app.models.audit_event import AuditEvent
 from app.models.session import Session
 from app.models.user import User
+from app.service_registry import service_cached
 from app.services.api_key_service import APIKeyService, get_api_key_service
 from app.services.audit_service import AuditService, get_audit_service
 from app.services.brute_force_service import (
