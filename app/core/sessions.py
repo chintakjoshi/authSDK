@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import inspect
 import json
 from collections.abc import Awaitable
@@ -17,10 +18,12 @@ from redis.exceptions import RedisError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings, reloadable_singleton
+from app.config import Settings, get_settings, reloadable_singleton
 from app.core.jwt import decode_unverified_jwt_claims, normalize_audiences
 from app.models.session import Session
 from app.models.user import User
+
+_REFRESH_TOKEN_HASH_CONTEXT = b"auth-service:refresh-token-hash:v1"
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,42 @@ class SessionStateError(Exception):
         self.detail = detail
         self.code = code
         self.status_code = status_code
+
+
+@dataclass(frozen=True)
+class RefreshTokenHasher:
+    """Keyed refresh-token hash helper with legacy SHA-256 compatibility."""
+
+    key: bytes
+
+    @classmethod
+    def from_secret(cls, secret: str) -> RefreshTokenHasher:
+        """Derive a stable HMAC key from configured secret material."""
+        if not secret.strip():
+            raise ValueError("refresh token hash secret must be non-empty.")
+        derived_key = hmac.digest(
+            secret.encode("utf-8"),
+            _REFRESH_TOKEN_HASH_CONTEXT,
+            "sha256",
+        )
+        return cls(key=derived_key)
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> RefreshTokenHasher:
+        """Build hasher from explicit settings or safe local-development fallback."""
+        configured_secret = settings.session_security.refresh_token_hash_key
+        if configured_secret is not None:
+            return cls.from_secret(configured_secret.get_secret_value())
+        return cls.from_secret(settings.jwt.private_key_pem.get_secret_value())
+
+    def hash_token(self, raw_token: str) -> str:
+        """Hash one refresh token using keyed HMAC-SHA256."""
+        return hmac.new(self.key, raw_token.encode("utf-8"), sha256).hexdigest()
+
+    @staticmethod
+    def legacy_hash_token(raw_token: str) -> str:
+        """Return the legacy plain SHA-256 verifier for rollout compatibility."""
+        return sha256(raw_token.encode("utf-8")).hexdigest()
 
 
 class TokenPairLike(Protocol):
@@ -79,10 +118,12 @@ class SessionService:
         redis_client: Redis,
         refresh_token_ttl_seconds: int,
         access_token_ttl_seconds: int,
+        refresh_token_hasher: RefreshTokenHasher,
     ) -> None:
         self._redis = redis_client
         self._refresh_token_ttl_seconds = refresh_token_ttl_seconds
         self._access_token_ttl_seconds = access_token_ttl_seconds
+        self._refresh_token_hasher = refresh_token_hasher
 
     async def create_login_session(
         self,
@@ -142,11 +183,10 @@ class SessionService:
         token_issuer: TokenIssuer,
     ) -> TokenPairLike:
         """Rotate refresh token and return a new access/refresh pair."""
-        incoming_hash = self._hash_token(raw_refresh_token)
         try:
-            session_row = await self._fetch_session_by_refresh_hash(
+            session_row = await self._find_session_for_refresh_token(
                 db_session=db_session,
-                refresh_token_hash=incoming_hash,
+                raw_refresh_token=raw_refresh_token,
                 for_update=True,
             )
             if session_row is None:
@@ -315,11 +355,10 @@ class SessionService:
         access_expiration_epoch: int,
     ) -> None:
         """Revoke a session and blocklist the access token JTI."""
-        refresh_token_hash = self._hash_token(raw_refresh_token)
         try:
-            session_row = await self._fetch_session_by_refresh_hash(
+            session_row = await self._find_session_for_refresh_token(
                 db_session=db_session,
-                refresh_token_hash=refresh_token_hash,
+                raw_refresh_token=raw_refresh_token,
                 for_update=True,
             )
             if session_row is None:
@@ -352,6 +391,34 @@ class SessionService:
         )
         result = await db_session.execute(statement)
         return list(result.scalars().all())
+
+    async def _find_session_for_refresh_token(
+        self,
+        db_session: AsyncSession,
+        raw_refresh_token: str,
+        *,
+        for_update: bool,
+    ) -> Session | None:
+        """Look up one refresh-token session using current and legacy verifiers."""
+        current_hash = self._hash_token(raw_refresh_token)
+        session_row = await self._fetch_session_by_refresh_hash(
+            db_session=db_session,
+            refresh_token_hash=current_hash,
+            for_update=for_update,
+        )
+        if session_row is not None:
+            return session_row
+
+        legacy_hash = self._refresh_token_hasher.legacy_hash_token(raw_refresh_token)
+        if legacy_hash == current_hash:
+            return None
+
+        session_row = await self._fetch_session_by_refresh_hash(
+            db_session=db_session,
+            refresh_token_hash=legacy_hash,
+            for_update=for_update,
+        )
+        return session_row
 
     async def _fetch_session_by_refresh_hash(
         self,
@@ -555,10 +622,9 @@ class SessionService:
     def _access_token_binding_key(access_jti: str) -> str:
         return f"session_access:{access_jti}"
 
-    @staticmethod
-    def _hash_token(raw_token: str) -> str:
-        """Hash token with SHA-256 for persistent storage."""
-        return sha256(raw_token.encode("utf-8")).hexdigest()
+    def _hash_token(self, raw_token: str) -> str:
+        """Hash refresh token with keyed HMAC for persistent storage."""
+        return self._refresh_token_hasher.hash_token(raw_token)
 
     @staticmethod
     def _remaining_lifetime_seconds(expiration_epoch: int) -> int:
@@ -607,4 +673,5 @@ def get_session_service() -> SessionService:
         redis_client=get_redis_client(),
         refresh_token_ttl_seconds=settings.jwt.refresh_token_ttl_seconds,
         access_token_ttl_seconds=settings.jwt.access_token_ttl_seconds,
+        refresh_token_hasher=RefreshTokenHasher.from_settings(settings),
     )

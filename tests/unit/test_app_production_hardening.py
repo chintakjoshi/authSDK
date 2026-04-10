@@ -72,6 +72,7 @@ def _production_settings() -> Settings:
             "login_requests_per_minute": 1000,
             "token_requests_per_minute": 1000,
         },
+        session_security={"refresh_token_hash_key": "session-hash-secret"},
         browser_sessions={
             "enabled": False,
             "secure_only": True,
@@ -129,6 +130,7 @@ def _seed_production_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BROWSER_SESSIONS__SECURE_ONLY", "true")
     monkeypatch.setenv("EMAIL__PUBLIC_BASE_URL", "https://auth.example.com")
     monkeypatch.setenv("SIGNING_KEYS__ENCRYPTION_KEY", "signing-secret")
+    monkeypatch.setenv("SESSION_SECURITY__REFRESH_TOKEN_HASH_KEY", "session-hash-secret")
     monkeypatch.setenv("WEBHOOK__SECRET_ENCRYPTION_KEY", "webhook-secret")
 
 

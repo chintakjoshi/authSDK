@@ -123,6 +123,12 @@ class AuthSettings(BaseModel):
     require_verified_email_for_password_login: bool = True
 
 
+class SessionSecuritySettings(BaseModel):
+    """Security settings for persisted session verifiers."""
+
+    refresh_token_hash_key: SecretStr | None = None
+
+
 class BrowserSessionSettings(BaseModel):
     """Browser-cookie session settings for web application consumers."""
 
@@ -290,6 +296,7 @@ class Settings(BaseSettings):
     saml: SAMLSettings
     rate_limit: RateLimitSettings
     auth: AuthSettings = AuthSettings()
+    session_security: SessionSecuritySettings = SessionSecuritySettings()
     browser_sessions: BrowserSessionSettings = BrowserSessionSettings()
     signing_keys: SigningKeySettings = SigningKeySettings()
     email: EmailSettings = EmailSettings()
@@ -311,6 +318,8 @@ class Settings(BaseSettings):
             raise ValueError("app.allowed_hosts cannot include '*' in production.")
         if self.signing_keys.encryption_key is None:
             raise ValueError("signing_keys.encryption_key is required in production.")
+        if self.session_security.refresh_token_hash_key is None:
+            raise ValueError("session_security.refresh_token_hash_key is required in production.")
         if self.webhook.secret_encryption_key is None:
             raise ValueError("webhook.secret_encryption_key is required in production.")
         if self.oauth.google_redirect_uri.scheme != "https":
