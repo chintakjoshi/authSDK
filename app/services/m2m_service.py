@@ -7,7 +7,7 @@ import hmac
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from functools import lru_cache
+from app.service_registry import service_cached
 from uuid import UUID
 
 from sqlalchemy import select
@@ -395,7 +395,7 @@ class M2MService:
         return statement
 
 
-@lru_cache
+@service_cached
 def get_m2m_service() -> M2MService:
     """Create and cache M2M client-credentials service dependency."""
     settings = get_settings()

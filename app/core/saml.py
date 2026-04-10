@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
+from app.service_registry import service_cached
 from typing import Any
 
 from fastapi import Request
@@ -227,7 +227,7 @@ def _build_saml_settings_from_config() -> dict[str, Any]:
     }
 
 
-@lru_cache
+@service_cached
 def get_saml_core() -> SamlCore:
     """Create and cache SAML core dependency."""
     return SamlCore(settings_data=_build_saml_settings_from_config())

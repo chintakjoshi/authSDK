@@ -6,7 +6,7 @@ import hmac
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
+from app.service_registry import service_cached
 from uuid import UUID
 
 from sqlalchemy import and_, delete, func, or_, select
@@ -733,7 +733,7 @@ class AdminService:
         return int(result.rowcount or 0)
 
 
-@lru_cache
+@service_cached
 def get_admin_service() -> AdminService:
     """Create and cache the admin orchestration service dependency."""
     settings = get_settings()

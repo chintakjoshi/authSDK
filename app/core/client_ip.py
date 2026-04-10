@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
-from functools import lru_cache
+from app.service_registry import service_cached
 
 from fastapi import Request
 
@@ -20,7 +20,7 @@ def normalize_ip(ip_address: str | None) -> str | None:
         return None
 
 
-@lru_cache
+@service_cached
 def get_trusted_proxy_networks() -> tuple[ipaddress._BaseNetwork, ...]:
     """Parse configured trusted proxy CIDRs once per settings load."""
     networks: list[ipaddress._BaseNetwork] = []

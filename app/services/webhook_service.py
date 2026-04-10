@@ -12,7 +12,7 @@ import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
+from app.service_registry import service_cached
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
@@ -822,7 +822,7 @@ class WebhookService:
         )
 
 
-@lru_cache
+@service_cached
 def get_webhook_redis_connection() -> Redis:
     """Create a sync Redis client for RQ queueing with connection health checks."""
     settings = get_settings()
@@ -834,14 +834,14 @@ def get_webhook_redis_connection() -> Redis:
     )
 
 
-@lru_cache
+@service_cached
 def get_webhook_queue() -> Queue:
     """Create the RQ queue used for webhook processing."""
     settings = get_settings()
     return Queue(name=settings.webhook.queue_name, connection=get_webhook_redis_connection())
 
 
-@lru_cache
+@service_cached
 def get_webhook_scheduler() -> Scheduler:
     """Create the RQ scheduler used for delayed retries."""
     settings = get_settings()
@@ -850,7 +850,7 @@ def get_webhook_scheduler() -> Scheduler:
     )
 
 
-@lru_cache
+@service_cached
 def get_webhook_service() -> WebhookService:
     """Create and cache the webhook service dependency."""
     settings = get_settings()

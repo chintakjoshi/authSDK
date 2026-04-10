@@ -157,7 +157,10 @@ def _issue_token_pair(
 
 def _password_login_requires_verified_email() -> bool:
     """Return whether password login is blocked until email verification completes."""
-    return bool(get_settings().auth.require_verified_email_for_password_login)
+    try:
+        return bool(get_settings().auth.require_verified_email_for_password_login)
+    except Exception:
+        return False
 
 
 @router.post(

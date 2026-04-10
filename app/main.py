@@ -1,5 +1,8 @@
 """FastAPI application factory."""
 
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
+
 from fastapi import Depends, FastAPI
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -13,6 +16,14 @@ from app.middleware.security_headers import SecurityHeadersMiddleware
 from app.middleware.tracing import TracingMiddleware
 from app.routers import admin, apikeys, auth, health, lifecycle, oauth, otp, saml, webhooks
 from app.routers._admin_access import require_admin_access
+from app.service_registry import async_clear_all
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Manage application startup/shutdown lifecycle."""
+    yield
+    await async_clear_all()
 
 
 def create_app() -> FastAPI:
@@ -23,6 +34,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=settings.app.service,
+        lifespan=lifespan,
         docs_url="/docs" if docs_enabled else None,
         redoc_url=None,
         openapi_url="/openapi.json" if docs_enabled else None,

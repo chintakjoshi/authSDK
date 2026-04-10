@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hmac
 import secrets
-from functools import lru_cache
+from app.service_registry import service_cached
 from typing import Any
 
 from authlib.integrations.httpx_client import AsyncOAuth2Client
@@ -173,7 +173,7 @@ class GoogleOAuthClient:
         )
 
 
-@lru_cache
+@service_cached
 def get_google_oauth_client() -> GoogleOAuthClient:
     """Build and cache Google OAuth client from settings."""
     settings = get_settings()

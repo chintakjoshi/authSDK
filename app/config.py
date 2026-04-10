@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from functools import lru_cache
+from app.service_registry import service_cached
 from typing import Any, Literal
 
 import structlog
@@ -343,7 +343,7 @@ def configure_structlog(settings: Settings) -> None:
     )
 
 
-@lru_cache
+@service_cached
 def get_settings() -> Settings:
     """Load and cache application settings from environment variables."""
     return Settings()

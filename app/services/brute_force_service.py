@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
+from app.service_registry import service_cached
 
 from fastapi import Request
 from redis.asyncio.client import Redis
@@ -281,7 +281,7 @@ def normalize_user_agent(user_agent: str | None) -> str | None:
     return normalized or None
 
 
-@lru_cache
+@service_cached
 def get_brute_force_service() -> BruteForceProtectionService:
     """Create and cache brute-force protection dependency."""
     return BruteForceProtectionService(redis_client=get_redis_client())

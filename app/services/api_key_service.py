@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from functools import lru_cache
+from app.service_registry import service_cached
 from uuid import UUID
 
 from sqlalchemy import or_, select
@@ -364,7 +364,7 @@ class APIKeyService:
         return statement
 
 
-@lru_cache
+@service_cached
 def get_api_key_service() -> APIKeyService:
     """Create and cache API key service dependency."""
     return APIKeyService(core=APIKeyCore())

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import math
 import time
-from functools import lru_cache
+import inspect
+
+from app.service_registry import registry, service_cached
 from typing import Protocol
 from uuid import uuid4
 
@@ -59,11 +61,21 @@ class SlidingWindowRedis(Protocol):
         """Apply TTL to key."""
 
 
-@lru_cache
+@service_cached
 def get_rate_limit_redis_client() -> Redis:
     """Create and cache Redis client used by rate limiter middleware."""
     settings = get_settings()
-    return redis_async.from_url(settings.redis.url, decode_responses=True)
+    client = redis_async.from_url(settings.redis.url, decode_responses=True)
+
+    async def _dispose() -> None:
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if callable(close):
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+
+    registry.register_dispose(get_rate_limit_redis_client._registry_key, _dispose)
+    return client
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):

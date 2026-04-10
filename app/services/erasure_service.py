@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from functools import lru_cache
+from app.service_registry import service_cached
 from uuid import UUID
 
 from sqlalchemy import select
@@ -144,7 +144,7 @@ class ErasureService:
         return user.email == cls._anonymized_email(user.id)
 
 
-@lru_cache
+@service_cached
 def get_erasure_service() -> ErasureService:
     """Create and cache the GDPR erasure service dependency."""
     return ErasureService(

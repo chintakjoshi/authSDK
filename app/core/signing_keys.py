@@ -6,7 +6,7 @@ import base64
 import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
+from app.service_registry import service_cached
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import serialization
@@ -258,7 +258,7 @@ class SigningKeyService:
         return private_key_pem, public_key_pem
 
 
-@lru_cache
+@service_cached
 def get_signing_key_service() -> SigningKeyService:
     """Create and cache signing-key service from settings."""
     settings = get_settings()

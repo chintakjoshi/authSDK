@@ -9,7 +9,7 @@ import hmac
 import json
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
+from app.service_registry import service_cached
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -200,7 +200,7 @@ class JWTService:
         return cls._calculate_kid(public_key_pem)
 
 
-@lru_cache
+@service_cached
 def get_jwt_service() -> JWTService:
     """Build and cache the JWT service from application settings."""
     settings = get_settings()

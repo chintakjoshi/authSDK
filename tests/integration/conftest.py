@@ -44,56 +44,10 @@ def _generate_rsa_keypair() -> tuple[str, str]:
 
 
 def _clear_dependency_caches() -> None:
-    """Clear all relevant singleton/lru-cache dependencies between test phases."""
-    from app.config import get_settings
-    from app.core.jwt import get_jwt_service
-    from app.core.oauth import get_google_oauth_client
-    from app.core.saml import get_saml_core
-    from app.core.sessions import get_redis_client, get_session_service
-    from app.core.signing_keys import get_signing_key_service
-    from app.db.session import get_engine, get_session_factory
-    from app.middleware.rate_limit import get_rate_limit_redis_client
-    from app.services.admin_service import get_admin_service
-    from app.services.api_key_service import get_api_key_service
-    from app.services.brute_force_service import get_brute_force_service
-    from app.services.erasure_service import get_erasure_service
-    from app.services.lifecycle_service import get_lifecycle_service, get_verification_email_sender
-    from app.services.oauth_service import get_oauth_service
-    from app.services.otp_service import get_otp_email_sender, get_otp_service
-    from app.services.saml_service import get_saml_service
-    from app.services.token_service import get_token_service
-    from app.services.webhook_service import (
-        get_webhook_queue,
-        get_webhook_redis_connection,
-        get_webhook_scheduler,
-        get_webhook_service,
-    )
+    """Clear all cached service singletons between test phases."""
+    from app.service_registry import clear_all
 
-    get_settings.cache_clear()
-    get_engine.cache_clear()
-    get_session_factory.cache_clear()
-    get_jwt_service.cache_clear()
-    get_redis_client.cache_clear()
-    get_rate_limit_redis_client.cache_clear()
-    get_session_service.cache_clear()
-    get_google_oauth_client.cache_clear()
-    get_saml_core.cache_clear()
-    get_signing_key_service.cache_clear()
-    get_token_service.cache_clear()
-    get_api_key_service.cache_clear()
-    get_admin_service.cache_clear()
-    get_brute_force_service.cache_clear()
-    get_erasure_service.cache_clear()
-    get_verification_email_sender.cache_clear()
-    get_lifecycle_service.cache_clear()
-    get_otp_email_sender.cache_clear()
-    get_otp_service.cache_clear()
-    get_oauth_service.cache_clear()
-    get_saml_service.cache_clear()
-    get_webhook_redis_connection.cache_clear()
-    get_webhook_queue.cache_clear()
-    get_webhook_scheduler.cache_clear()
-    get_webhook_service.cache_clear()
+    clear_all()
 
 
 async def _close_async_client(client: Any) -> None:

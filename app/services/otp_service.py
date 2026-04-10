@@ -7,7 +7,7 @@ import smtplib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.message import EmailMessage
-from functools import lru_cache
+from app.service_registry import service_cached
 from typing import Protocol
 from uuid import UUID
 
@@ -852,7 +852,7 @@ class OTPService:
         return f"otp_resend_login:{user_id}"
 
 
-@lru_cache
+@service_cached
 def get_otp_email_sender() -> OTPEmailSender:
     """Create and cache default Mailhog-backed OTP email sender."""
     settings = get_settings()
@@ -863,7 +863,7 @@ def get_otp_email_sender() -> OTPEmailSender:
     )
 
 
-@lru_cache
+@service_cached
 def get_otp_service() -> OTPService:
     """Create and cache OTP service dependency."""
     settings = get_settings()

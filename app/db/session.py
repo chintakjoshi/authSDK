@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from functools import lru_cache
+from app.service_registry import registry, service_cached
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -15,14 +15,16 @@ from sqlalchemy.ext.asyncio import (
 from app.config import get_settings
 
 
-@lru_cache
+@service_cached
 def get_engine() -> AsyncEngine:
     """Build and cache the async SQLAlchemy engine."""
     settings = get_settings()
-    return create_async_engine(settings.database.url, pool_pre_ping=True)
+    engine = create_async_engine(settings.database.url, pool_pre_ping=True)
+    registry.register_dispose(get_engine._registry_key, engine.dispose)
+    return engine
 
 
-@lru_cache
+@service_cached
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
     """Build and cache the async session factory."""
     return async_sessionmaker(bind=get_engine(), autoflush=False, expire_on_commit=False)

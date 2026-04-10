@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from functools import lru_cache
+from app.service_registry import service_cached
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -128,7 +128,7 @@ class TokenService:
         return AccessToken(access_token=access_token)
 
 
-@lru_cache
+@service_cached
 def get_token_service() -> TokenService:
     """Build and cache token service based on application settings."""
     settings = get_settings()

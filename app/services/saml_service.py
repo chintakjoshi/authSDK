@@ -6,7 +6,7 @@ import inspect
 import json
 import secrets
 from dataclasses import dataclass
-from functools import lru_cache
+from app.service_registry import service_cached
 
 from redis.asyncio.client import Redis
 from redis.exceptions import RedisError
@@ -402,7 +402,7 @@ class SamlService:
         return f"saml_state:{state}"
 
 
-@lru_cache
+@service_cached
 def get_saml_service() -> SamlService:
     """Create and cache SAML service dependency."""
     return SamlService(

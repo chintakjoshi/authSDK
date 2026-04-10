@@ -7,7 +7,7 @@ import json
 from collections.abc import Awaitable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import lru_cache
+from app.service_registry import registry, service_cached
 from hashlib import sha256
 from typing import Protocol
 from uuid import UUID
@@ -574,14 +574,24 @@ class SessionService:
         return max(int((expires_at - now).total_seconds()), 1)
 
 
-@lru_cache
+@service_cached
 def get_redis_client() -> Redis:
     """Create and cache Redis client for async session operations."""
     settings = get_settings()
-    return redis_async.from_url(settings.redis.url, decode_responses=True)
+    client = redis_async.from_url(settings.redis.url, decode_responses=True)
+
+    async def _dispose() -> None:
+        close = getattr(client, "aclose", None) or getattr(client, "close", None)
+        if callable(close):
+            result = close()
+            if inspect.isawaitable(result):
+                await result
+
+    registry.register_dispose(get_redis_client._registry_key, _dispose)
+    return client
 
 
-@lru_cache
+@service_cached
 def get_session_service() -> SessionService:
     """Create and cache session service."""
     settings = get_settings()

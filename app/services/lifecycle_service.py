@@ -8,7 +8,7 @@ import smtplib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
-from functools import lru_cache
+from app.service_registry import service_cached
 from hashlib import sha256
 from typing import Protocol
 from urllib.parse import urljoin
@@ -750,7 +750,7 @@ class LifecycleService:
         return urljoin(f"{self._public_base_url}/", f"auth/password/reset?token={token}")
 
 
-@lru_cache
+@service_cached
 def get_verification_email_sender() -> LifecycleEmailSender:
     """Create and cache default Mailhog SMTP sender."""
     settings = get_settings()
@@ -761,7 +761,7 @@ def get_verification_email_sender() -> LifecycleEmailSender:
     )
 
 
-@lru_cache
+@service_cached
 def get_lifecycle_service() -> LifecycleService:
     """Create and cache lifecycle service dependency."""
     settings = get_settings()

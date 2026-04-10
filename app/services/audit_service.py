@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from functools import lru_cache
+from app.service_registry import service_cached
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
@@ -205,7 +205,7 @@ class AuditService:
             )
 
 
-@lru_cache
+@service_cached
 def get_audit_service() -> AuditService:
     """Create and cache audit service dependency."""
     return AuditService()

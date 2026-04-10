@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import json
 from dataclasses import dataclass
-from functools import lru_cache
+from app.service_registry import service_cached
 from typing import Any
 
 from redis.asyncio.client import Redis
@@ -405,7 +405,7 @@ class OAuthService:
         return f"oauth_state:{state}"
 
 
-@lru_cache
+@service_cached
 def get_oauth_service() -> OAuthService:
     """Build and cache OAuth service dependencies."""
     return OAuthService(
