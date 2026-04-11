@@ -23,7 +23,14 @@ async def _dispose_async_engine(engine: AsyncEngine) -> None:
 def get_engine() -> AsyncEngine:
     """Build and cache the async SQLAlchemy engine."""
     settings = get_settings()
-    return create_async_engine(settings.database.url, pool_pre_ping=True)
+    return create_async_engine(
+        settings.database.url,
+        pool_pre_ping=True,
+        pool_size=settings.database.pool_size,
+        max_overflow=settings.database.max_overflow,
+        pool_timeout=settings.database.pool_timeout_seconds,
+        pool_recycle=settings.database.pool_recycle_seconds,
+    )
 
 
 @reloadable_singleton

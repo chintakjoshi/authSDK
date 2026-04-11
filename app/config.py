@@ -55,6 +55,10 @@ class DatabaseSettings(BaseModel):
     """Database connection settings."""
 
     url: str = Field(description="Async SQLAlchemy URL using asyncpg driver.")
+    pool_size: int = Field(default=20, ge=1)
+    max_overflow: int = Field(default=20, ge=0)
+    pool_timeout_seconds: int = Field(default=30, ge=1)
+    pool_recycle_seconds: int = Field(default=1800, ge=1)
 
     @field_validator("url")
     @classmethod

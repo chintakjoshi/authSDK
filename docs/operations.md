@@ -125,6 +125,19 @@ Tune these if the Redis path is behind an idle-sensitive proxy or load balancer:
 The worker intentionally keeps its blocking dequeue window below common managed
 Redis idle timeouts.
 
+## Database Pool Tuning
+
+The API uses explicit SQLAlchemy pool tuning rather than library defaults. The
+main knobs are:
+
+- `DATABASE__POOL_SIZE`
+- `DATABASE__MAX_OVERFLOW`
+- `DATABASE__POOL_TIMEOUT_SECONDS`
+- `DATABASE__POOL_RECYCLE_SECONDS`
+
+`DATABASE__POOL_RECYCLE_SECONDS` is especially important for managed Postgres
+providers and proxies that silently drop older idle connections.
+
 ## Retention Purge
 
 The scheduler registers the recurring retention-purge job only when:
