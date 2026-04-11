@@ -9,7 +9,7 @@ import pytest
 import app.core.sessions as sessions_module
 import app.db.session as db_session_module
 import app.middleware.rate_limit as rate_limit_module
-from app.config import get_settings
+from app.config import flush_pending_singleton_cleanups, get_settings, reloadable_singleton
 
 
 class _AsyncRedisClientStub:
@@ -230,3 +230,33 @@ async def test_get_session_service_refreshes_nested_dependencies_when_settings_c
     assert second._access_token_ttl_seconds == 450
     assert first._refresh_token_ttl_seconds == 600
     assert second._refresh_token_ttl_seconds == 1200
+
+
+@pytest.mark.asyncio
+async def test_flush_pending_singleton_cleanups_waits_for_in_loop_cleanup_tasks() -> None:
+    """Flushing singleton cleanups should await tasks already scheduled on the active loop."""
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    cleaned_values: list[object] = []
+    value = object()
+
+    async def _cleanup(stale_value: object) -> None:
+        cleanup_started.set()
+        await release_cleanup.wait()
+        cleaned_values.append(stale_value)
+
+    @reloadable_singleton(cleanup=_cleanup)
+    def _get_singleton() -> object:
+        return value
+
+    _get_singleton()
+    _get_singleton.cache_clear()  # type: ignore[attr-defined]
+    await cleanup_started.wait()
+
+    flush_task = asyncio.create_task(flush_pending_singleton_cleanups())
+    await asyncio.sleep(0)
+
+    assert not flush_task.done()
+    release_cleanup.set()
+    await flush_task
+    assert cleaned_values == [value]
