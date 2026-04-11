@@ -441,7 +441,9 @@ class RateLimitMiddleware:
 
         await self.app(scope, downstream_receive, send)
 
-    async def _evaluate_request(self, request: Request, *, body: bytes | None = None) -> Response | None:
+    async def _evaluate_request(
+        self, request: Request, *, body: bytes | None = None
+    ) -> Response | None:
         """Return an immediate response when a request must be rejected."""
         limit = self._resolve_limit(request.url.path)
         bucket_key = await self._build_bucket_key(request, body=body)
