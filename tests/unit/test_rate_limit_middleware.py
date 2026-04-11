@@ -6,11 +6,15 @@ import types
 
 import pytest
 import starlette.middleware.base as base_middleware
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from redis.exceptions import RedisError
 
 import app.middleware.rate_limit as rate_limit_module
+from app.config import get_settings
+from app.core.jwt import JWTService
 from app.middleware.rate_limit import RateLimitMiddleware
 
 
@@ -89,6 +93,55 @@ class _InMemoryRedis:
     async def expire(self, key: str, ttl_seconds: int) -> bool:
         del key, ttl_seconds
         return True
+
+
+def _issue_test_jwt_service(monkeypatch: pytest.MonkeyPatch) -> JWTService:
+    """Configure valid JWT signing material for middleware identity-resolution tests."""
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    public_key_pem = (
+        private_key.public_key()
+        .public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode("utf-8")
+    )
+    monkeypatch.setenv("JWT__PRIVATE_KEY_PEM", private_key_pem)
+    monkeypatch.setenv("JWT__PUBLIC_KEY_PEM", public_key_pem)
+    get_settings.cache_clear()
+    return JWTService(private_key_pem=private_key_pem, public_key_pem=public_key_pem)
+
+
+def _header_ip_extractor(request) -> str | None:  # type: ignore[no-untyped-def]
+    """Resolve a synthetic client IP from test headers."""
+    return request.headers.get("x-test-client-ip") or "127.0.0.1"
+
+
+def _build_rate_limited_app(redis_stub: _InMemoryRedis) -> FastAPI:
+    """Create a test app with low rate limits for identity-bucketing coverage."""
+    app = FastAPI()
+    app.add_middleware(
+        RateLimitMiddleware,
+        redis_client=redis_stub,
+        default_requests_per_minute=1,
+        login_requests_per_minute=1,
+        token_requests_per_minute=1,
+    )
+
+    @app.get("/admin/users")
+    async def admin_users() -> dict[str, bool]:
+        return {"ok": True}
+
+    @app.post("/auth/token")
+    async def refresh_token() -> dict[str, bool]:
+        return {"ok": True}
+
+    return app
 
 
 def _build_app() -> FastAPI:
@@ -231,3 +284,136 @@ async def test_rate_limit_middleware_does_not_use_base_http_streaming_wrapper(
     assert response.status_code == 200
     assert response.json() == {"status": "live"}
     assert streaming_wrapper_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_allows_different_authenticated_users_from_same_ip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Different authenticated users behind one NAT should not share a rate-limit bucket."""
+    jwt_service = _issue_test_jwt_service(monkeypatch)
+    redis_stub = _InMemoryRedis()
+    app = _build_rate_limited_app(redis_stub)
+
+    user_one_token = jwt_service.issue_token(
+        subject="user-1",
+        token_type="access",
+        expires_in_seconds=60,
+        audience="auth-service",
+    )
+    user_two_token = jwt_service.issue_token(
+        subject="user-2",
+        token_type="access",
+        expires_in_seconds=60,
+        audience="auth-service",
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        first = await client.get(
+            "/admin/users",
+            headers={"Authorization": f"Bearer {user_one_token}"},
+        )
+        second = await client.get(
+            "/admin/users",
+            headers={"Authorization": f"Bearer {user_two_token}"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_applies_same_user_limit_across_ips_for_authenticated_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One authenticated user should share a rate-limit bucket even after IP changes."""
+    jwt_service = _issue_test_jwt_service(monkeypatch)
+    monkeypatch.setattr(rate_limit_module, "extract_client_ip", _header_ip_extractor)
+    redis_stub = _InMemoryRedis()
+    app = _build_rate_limited_app(redis_stub)
+
+    first_token = jwt_service.issue_token(
+        subject="user-1",
+        token_type="access",
+        expires_in_seconds=60,
+        audience="auth-service",
+    )
+    second_token = jwt_service.issue_token(
+        subject="user-1",
+        token_type="access",
+        expires_in_seconds=60,
+        audience="auth-service",
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        first = await client.get(
+            "/admin/users",
+            headers={
+                "Authorization": f"Bearer {first_token}",
+                "X-Test-Client-Ip": "198.51.100.10",
+            },
+        )
+        second = await client.get(
+            "/admin/users",
+            headers={
+                "Authorization": f"Bearer {second_token}",
+                "X-Test-Client-Ip": "203.0.113.20",
+            },
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_applies_same_user_limit_across_ips_for_refresh_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refresh-token traffic should be bucketed by the authenticated subject, not only IP."""
+    jwt_service = _issue_test_jwt_service(monkeypatch)
+    monkeypatch.setattr(rate_limit_module, "extract_client_ip", _header_ip_extractor)
+    redis_stub = _InMemoryRedis()
+    app = _build_rate_limited_app(redis_stub)
+
+    first_refresh_token = jwt_service.issue_token(
+        subject="user-1",
+        token_type="refresh",
+        expires_in_seconds=60,
+        audience="auth-service",
+    )
+    second_refresh_token = jwt_service.issue_token(
+        subject="user-1",
+        token_type="refresh",
+        expires_in_seconds=60,
+        audience="auth-service",
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        first = await client.post(
+            "/auth/token",
+            headers={
+                "Content-Type": "application/json",
+                "X-Test-Client-Ip": "198.51.100.10",
+            },
+            json={"refresh_token": first_refresh_token},
+        )
+        second = await client.post(
+            "/auth/token",
+            headers={
+                "Content-Type": "application/json",
+                "X-Test-Client-Ip": "203.0.113.20",
+            },
+            json={"refresh_token": second_refresh_token},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 429
