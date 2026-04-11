@@ -98,6 +98,14 @@ Forbidden in production:
 
 - `DATABASE__URL`
   must use the `postgresql+asyncpg://` SQLAlchemy URL form
+- `DATABASE__POOL_SIZE`
+  steady-state SQLAlchemy pool size, defaults to `20`
+- `DATABASE__MAX_OVERFLOW`
+  extra connections permitted above `DATABASE__POOL_SIZE`, defaults to `20`
+- `DATABASE__POOL_TIMEOUT_SECONDS`
+  how long to wait for a pooled connection before failing, defaults to `30`
+- `DATABASE__POOL_RECYCLE_SECONDS`
+  maximum connection age before SQLAlchemy recycles it on checkout, defaults to `1800`
 
 ### Redis
 

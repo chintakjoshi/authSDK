@@ -76,9 +76,31 @@ def test_development_settings_allow_empty_prod_only_fields() -> None:
     settings = _build_settings()
     assert settings.app.environment == "development"
     assert settings.app.allowed_hosts == []
+    assert settings.database.pool_size == 20
+    assert settings.database.max_overflow == 20
+    assert settings.database.pool_timeout_seconds == 30
+    assert settings.database.pool_recycle_seconds == 1800
     assert settings.session_security.refresh_token_hash_key is None
     assert settings.signing_keys.encryption_key is None
     assert settings.webhook.secret_encryption_key is None
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("pool_size", 0),
+        ("max_overflow", -1),
+        ("pool_timeout_seconds", 0),
+        ("pool_recycle_seconds", 0),
+    ],
+)
+def test_database_settings_reject_invalid_pool_tuning(field_name: str, value: int) -> None:
+    """Database pool tuning should reject invalid non-positive values."""
+    with pytest.raises(ValueError):
+        DatabaseSettings(
+            url="postgresql+asyncpg://user:pass@db.example.com:5432/auth_service",
+            **{field_name: value},
+        )
 
 
 @pytest.mark.parametrize(

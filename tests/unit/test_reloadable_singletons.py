@@ -40,6 +40,10 @@ def _seed_minimal_env(
     monkeypatch: pytest.MonkeyPatch,
     *,
     database_url: str = "postgresql+asyncpg://user:pass@db.example.com:5432/auth_service",
+    database_pool_size: str = "20",
+    database_max_overflow: str = "20",
+    database_pool_timeout_seconds: str = "30",
+    database_pool_recycle_seconds: str = "1800",
     redis_url: str = "redis://redis.example.com:6379/0",
     access_ttl_seconds: str = "900",
     refresh_ttl_seconds: str = "604800",
@@ -48,6 +52,10 @@ def _seed_minimal_env(
     monkeypatch.setenv("APP__ENVIRONMENT", "development")
     monkeypatch.setenv("APP__SERVICE", "auth-service")
     monkeypatch.setenv("DATABASE__URL", database_url)
+    monkeypatch.setenv("DATABASE__POOL_SIZE", database_pool_size)
+    monkeypatch.setenv("DATABASE__MAX_OVERFLOW", database_max_overflow)
+    monkeypatch.setenv("DATABASE__POOL_TIMEOUT_SECONDS", database_pool_timeout_seconds)
+    monkeypatch.setenv("DATABASE__POOL_RECYCLE_SECONDS", database_pool_recycle_seconds)
     monkeypatch.setenv("REDIS__URL", redis_url)
     monkeypatch.setenv("JWT__ALGORITHM", "RS256")
     monkeypatch.setenv("JWT__PRIVATE_KEY_PEM", "private-key")
@@ -196,6 +204,40 @@ async def test_get_engine_refreshes_and_disposes_previous_engine_on_database_url
         "postgresql+asyncpg://user:pass@db-a.example.com:5432/auth_service",
         "postgresql+asyncpg://user:pass@db-b.example.com:5432/auth_service",
     ]
+
+
+def test_get_engine_applies_configured_pool_tuning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Engine factory should pass validated pool tuning to SQLAlchemy."""
+    _seed_minimal_env(
+        monkeypatch,
+        database_pool_size="32",
+        database_max_overflow="48",
+        database_pool_timeout_seconds="45",
+        database_pool_recycle_seconds="2700",
+    )
+    _clear_reloadable_getters()
+    captured: dict[str, object] = {}
+
+    def _create_async_engine(url: str, **kwargs: object) -> _AsyncEngineStub:
+        captured["url"] = url
+        captured["kwargs"] = dict(kwargs)
+        return _AsyncEngineStub(url)
+
+    monkeypatch.setattr(db_session_module, "create_async_engine", _create_async_engine)
+
+    engine = db_session_module.get_engine()
+
+    assert engine is not None
+    assert captured == {
+        "url": "postgresql+asyncpg://user:pass@db.example.com:5432/auth_service",
+        "kwargs": {
+            "pool_pre_ping": True,
+            "pool_size": 32,
+            "max_overflow": 48,
+            "pool_timeout": 45,
+            "pool_recycle": 2700,
+        },
+    }
 
 
 @pytest.mark.asyncio
