@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import secrets
 import smtplib
 from dataclasses import dataclass
@@ -102,9 +103,9 @@ class MailhogVerificationEmailSender:
             to_email=to_email,
             subject=subject,
             body=f"Open this link to verify your account: {verification_link}",
-            html_body=(
-                "<p>Open this link to verify your account:</p>"
-                f'<p><a href="{verification_link}">{verification_link}</a></p>'
+            html_body=self._html_link_message(
+                intro_text="Open this link to verify your account:",
+                link=verification_link,
             ),
         )
 
@@ -115,9 +116,9 @@ class MailhogVerificationEmailSender:
             to_email=to_email,
             subject="Reset your password",
             body=f"Open this link to reset your password: {reset_link}",
-            html_body=(
-                "<p>Open this link to reset your password:</p>"
-                f'<p><a href="{reset_link}">{reset_link}</a></p>'
+            html_body=self._html_link_message(
+                intro_text="Open this link to reset your password:",
+                link=reset_link,
             ),
         )
 
@@ -148,6 +149,13 @@ class MailhogVerificationEmailSender:
 
         with smtplib.SMTP(self.host, self.port, timeout=10) as smtp:
             smtp.send_message(message)
+
+    @staticmethod
+    def _html_link_message(*, intro_text: str, link: str) -> str:
+        """Build one HTML paragraph pair with a safely escaped anchor."""
+        escaped_intro = html.escape(intro_text, quote=False)
+        escaped_link = html.escape(link, quote=True)
+        return f'<p>{escaped_intro}</p><p><a href="{escaped_link}">{escaped_link}</a></p>'
 
 
 class LifecycleService:

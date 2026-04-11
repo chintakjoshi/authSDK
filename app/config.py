@@ -24,6 +24,8 @@ _CacheInfo = namedtuple("CacheInfo", "hits misses maxsize currsize")
 _UNSET = object()
 _PENDING_SINGLETON_CLEANUPS: deque[tuple[str, Callable[[Any], Any], Any]] = deque()
 _PENDING_SINGLETON_CLEANUPS_LOCK = Lock()
+_SCHEDULED_SINGLETON_CLEANUPS: set[asyncio.Task[None]] = set()
+_SCHEDULED_SINGLETON_CLEANUPS_LOCK = Lock()
 _REGISTERED_SINGLETON_CLEARERS: list[Callable[[], None]] = []
 _REGISTERED_SINGLETON_CLEARERS_LOCK = Lock()
 _cleanup_logger = logging.getLogger(__name__)
@@ -410,6 +412,18 @@ async def _run_singleton_cleanup(name: str, cleanup: Callable[[Any], Any], value
         _cleanup_logger.exception("reloadable_singleton_cleanup_failed", extra={"name": name})
 
 
+def _track_singleton_cleanup_task(task: asyncio.Task[None]) -> None:
+    """Track one in-loop singleton cleanup task until it finishes."""
+    with _SCHEDULED_SINGLETON_CLEANUPS_LOCK:
+        _SCHEDULED_SINGLETON_CLEANUPS.add(task)
+
+    def _discard(completed_task: asyncio.Task[None]) -> None:
+        with _SCHEDULED_SINGLETON_CLEANUPS_LOCK:
+            _SCHEDULED_SINGLETON_CLEANUPS.discard(completed_task)
+
+    task.add_done_callback(_discard)
+
+
 def _schedule_singleton_cleanup(name: str, cleanup: Callable[[Any], Any], value: Any) -> None:
     """Run cleanup immediately when possible or enqueue it for later draining."""
     try:
@@ -419,20 +433,49 @@ def _schedule_singleton_cleanup(name: str, cleanup: Callable[[Any], Any], value:
             _PENDING_SINGLETON_CLEANUPS.append((name, cleanup, value))
         return
 
-    loop.create_task(_run_singleton_cleanup(name, cleanup, value))
+    task = loop.create_task(_run_singleton_cleanup(name, cleanup, value))
+    _track_singleton_cleanup_task(task)
+
+
+async def _await_scheduled_singleton_cleanups() -> None:
+    """Await tracked cleanup tasks bound to the current running loop."""
+    running_loop = asyncio.get_running_loop()
+
+    while True:
+        with _SCHEDULED_SINGLETON_CLEANUPS_LOCK:
+            tasks = [
+                task
+                for task in _SCHEDULED_SINGLETON_CLEANUPS
+                if not task.done() and task.get_loop() is running_loop
+            ]
+
+        if not tasks:
+            return
+
+        await asyncio.gather(*tasks)
 
 
 async def flush_pending_singleton_cleanups() -> None:
-    """Drain any deferred singleton cleanup work."""
+    """Drain deferred and in-flight singleton cleanup work."""
     while True:
         with _PENDING_SINGLETON_CLEANUPS_LOCK:
-            if not _PENDING_SINGLETON_CLEANUPS:
-                return
             pending = list(_PENDING_SINGLETON_CLEANUPS)
             _PENDING_SINGLETON_CLEANUPS.clear()
 
         for name, cleanup, value in pending:
             await _run_singleton_cleanup(name, cleanup, value)
+
+        await _await_scheduled_singleton_cleanups()
+
+        with _PENDING_SINGLETON_CLEANUPS_LOCK:
+            has_pending = bool(_PENDING_SINGLETON_CLEANUPS)
+        with _SCHEDULED_SINGLETON_CLEANUPS_LOCK:
+            has_scheduled = any(
+                not task.done() and task.get_loop() is asyncio.get_running_loop()
+                for task in _SCHEDULED_SINGLETON_CLEANUPS
+            )
+        if not has_pending and not has_scheduled:
+            return
 
 
 def clear_reloadable_singletons() -> None:

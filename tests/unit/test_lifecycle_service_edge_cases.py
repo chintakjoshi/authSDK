@@ -238,6 +238,59 @@ async def test_mailhog_sender_covers_to_thread_and_smtp(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_mailhog_sender_escapes_links_in_html_email_parts(monkeypatch) -> None:
+    """Lifecycle emails HTML-escape links before interpolating them into anchor tags."""
+    sender = MailhogVerificationEmailSender(
+        host="mailhog", port=1025, email_from="from@example.com"
+    )
+    messages: list[object] = []
+
+    async def _fake_to_thread(func, **kwargs):  # type: ignore[no-untyped-def]
+        return func(**kwargs)
+
+    class _SMTP:
+        def __init__(self, host: str, port: int, timeout: int) -> None:
+            assert host == "mailhog"
+            assert port == 1025
+            assert timeout == 10
+
+        def __enter__(self) -> _SMTP:
+            return self
+
+        def __exit__(self, exc_type, exc, tb) -> None:  # type: ignore[no-untyped-def]
+            return None
+
+        def send_message(self, message) -> None:  # type: ignore[no-untyped-def]
+            messages.append(message)
+
+    monkeypatch.setattr("app.services.lifecycle_service.asyncio.to_thread", _fake_to_thread)
+    monkeypatch.setattr("app.services.lifecycle_service.smtplib.SMTP", _SMTP)
+
+    verification_link = 'https://verify.example/token?value="quoted"&x=<tag>'
+    reset_link = 'https://reset.example/token?value="quoted"&x=<tag>'
+
+    await sender.send_verification_email("user@example.com", verification_link)
+    await sender.send_password_reset_email("user@example.com", reset_link)
+
+    verification_html = messages[0].get_body(preferencelist=("html",)).get_content()
+    reset_html = messages[1].get_body(preferencelist=("html",)).get_content()
+
+    assert (
+        'href="https://verify.example/token?value=&quot;quoted&quot;&amp;x=&lt;tag&gt;"'
+        in verification_html
+    )
+    assert (
+        ">https://verify.example/token?value=&quot;quoted&quot;&amp;x=&lt;tag&gt;<"
+        in verification_html
+    )
+    assert (
+        'href="https://reset.example/token?value=&quot;quoted&quot;&amp;x=&lt;tag&gt;"'
+        in reset_html
+    )
+    assert ">https://reset.example/token?value=&quot;quoted&quot;&amp;x=&lt;tag&gt;<" in reset_html
+
+
+@pytest.mark.asyncio
 async def test_signup_verify_and_resend_cover_rollbacks_and_invalid_paths() -> None:
     """Lifecycle signup/verify/resend cover rollback and invalid-token branches."""
     email_sender = _EmailSenderStub()
