@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import reloadable_singleton
+from app.core.callable_compat import add_supported_kwarg, get_callable_parameter_names
 from app.core.saml import SamlCore, SamlProtocolError, get_saml_core
 from app.core.sessions import SessionService, get_redis_client, get_session_service
 from app.models.user import User, UserIdentity
@@ -65,31 +66,28 @@ class SamlService:
     ):
         """Issue token pair while tolerating legacy test doubles."""
         issue_method = self._token_service.issue_token_pair
-        try:
-            signature = inspect.signature(issue_method)
-        except (TypeError, ValueError):
-            signature = None
-        if signature and "db_session" in signature.parameters:
-            kwargs: dict[str, object] = {
-                "db_session": db_session,
-                "user_id": user_id,
-                "email": email,
-                "scopes": scopes,
-            }
-            if "role" in signature.parameters:
-                kwargs["role"] = role
-            if "email_verified" in signature.parameters:
-                kwargs["email_verified"] = email_verified
-            if "email_otp_enabled" in signature.parameters:
-                kwargs["email_otp_enabled"] = email_otp_enabled
-            return issue_method(**kwargs)
-        kwargs = {"user_id": user_id, "email": email, "scopes": scopes}
-        if signature and "role" in signature.parameters:
-            kwargs["role"] = role
-        if signature and "email_verified" in signature.parameters:
-            kwargs["email_verified"] = email_verified
-        if signature and "email_otp_enabled" in signature.parameters:
-            kwargs["email_otp_enabled"] = email_otp_enabled
+        supported_parameters = get_callable_parameter_names(issue_method)
+        kwargs: dict[str, object] = {"user_id": user_id, "email": email, "scopes": scopes}
+        if supported_parameters is not None and "db_session" in supported_parameters:
+            kwargs["db_session"] = db_session
+        add_supported_kwarg(
+            kwargs,
+            supported_parameters=supported_parameters,
+            name="role",
+            value=role,
+        )
+        add_supported_kwarg(
+            kwargs,
+            supported_parameters=supported_parameters,
+            name="email_verified",
+            value=email_verified,
+        )
+        add_supported_kwarg(
+            kwargs,
+            supported_parameters=supported_parameters,
+            name="email_otp_enabled",
+            value=email_otp_enabled,
+        )
         return issue_method(**kwargs)
 
     async def create_login_url(self, request_data: dict[str, str], relay_state: str | None) -> str:

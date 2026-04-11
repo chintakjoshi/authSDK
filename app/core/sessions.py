@@ -19,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings, reloadable_singleton
+from app.core.callable_compat import add_supported_kwarg, get_callable_parameter_names
 from app.core.jwt import decode_unverified_jwt_claims, normalize_audiences
 from app.models.session import Session
 from app.models.user import User
@@ -574,21 +575,30 @@ class SessionService:
         auth_time: datetime,
     ) -> TokenPairLike | Awaitable[TokenPairLike]:
         """Call token issuer while supporting legacy callbacks."""
-        try:
-            signature = inspect.signature(token_issuer)
-        except (TypeError, ValueError):
-            signature = None
+        supported_parameters = get_callable_parameter_names(token_issuer)
         kwargs: dict[str, object] = {"email": email, "role": role, "scopes": scopes}
-        if signature and "email_verified" in signature.parameters:
-            kwargs["email_verified"] = email_verified
-        if signature and "email_otp_enabled" in signature.parameters:
-            kwargs["email_otp_enabled"] = email_otp_enabled
-        if signature and "audiences" in signature.parameters:
+        add_supported_kwarg(
+            kwargs,
+            supported_parameters=supported_parameters,
+            name="email_verified",
+            value=email_verified,
+        )
+        add_supported_kwarg(
+            kwargs,
+            supported_parameters=supported_parameters,
+            name="email_otp_enabled",
+            value=email_otp_enabled,
+        )
+        if supported_parameters is not None and "audiences" in supported_parameters:
             kwargs["audiences"] = audiences
-        elif signature and "audience" in signature.parameters:
+        elif supported_parameters is not None and "audience" in supported_parameters:
             kwargs["audience"] = audiences
-        if signature and "auth_time" in signature.parameters:
-            kwargs["auth_time"] = auth_time
+        add_supported_kwarg(
+            kwargs,
+            supported_parameters=supported_parameters,
+            name="auth_time",
+            value=auth_time,
+        )
         return token_issuer(user_id, **kwargs)
 
     @staticmethod

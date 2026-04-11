@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 
 import pytest
 
+import app.core.callable_compat as callable_compat
 from app.core.saml import SamlAssertion, SamlLoginRequest, SamlProtocolError
 from app.models.user import UserIdentity
 from app.services.saml_service import SamlService, SamlServiceError, SamlStateRecord
@@ -210,6 +212,77 @@ async def test_complete_callback_maps_parse_failures_and_creates_session() -> No
     assert session_service.calls[0]["email"] == "saml@example.com"
 
 
+def test_issue_token_pair_caches_signature_inspection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SAML token issuance should reuse cached callable inspection results."""
+    captured_kwargs: list[dict[str, object]] = []
+    signature_calls = 0
+    original_signature = inspect.signature
+
+    class _ModernTokenService:
+        def issue_token_pair(
+            self,
+            *,
+            db_session: object,
+            user_id: str,
+            email: str,
+            role: str,
+            email_verified: bool,
+            email_otp_enabled: bool,
+            scopes: list[str],
+        ) -> TokenPair:
+            captured_kwargs.append(
+                {
+                    "db_session": db_session,
+                    "user_id": user_id,
+                    "email": email,
+                    "role": role,
+                    "email_verified": email_verified,
+                    "email_otp_enabled": email_otp_enabled,
+                    "scopes": scopes,
+                }
+            )
+            return TokenPair(access_token="access-token", refresh_token="refresh-token")
+
+    def _counting_signature(callable_obj: object) -> inspect.Signature | None:
+        nonlocal signature_calls
+        signature_calls += 1
+        return original_signature(callable_obj)
+
+    callable_compat.clear_callable_parameter_name_cache()
+    monkeypatch.setattr(callable_compat.inspect, "signature", _counting_signature)
+
+    service = SamlService(
+        saml_core=_SamlCoreStub(),  # type: ignore[arg-type]
+        token_service=_ModernTokenService(),  # type: ignore[arg-type]
+        session_service=_SessionServiceStub(),  # type: ignore[arg-type]
+        redis_client=_RedisStub(),  # type: ignore[arg-type]
+    )
+    first = service._issue_token_pair(
+        db_session=object(),  # type: ignore[arg-type]
+        user_id="user-1",
+        email="saml@example.com",
+        role="admin",
+        email_verified=True,
+        email_otp_enabled=False,
+        scopes=["orders:read"],
+    )
+    second = service._issue_token_pair(
+        db_session=object(),  # type: ignore[arg-type]
+        user_id="user-2",
+        email="saml-2@example.com",
+        role="user",
+        email_verified=False,
+        email_otp_enabled=True,
+        scopes=["orders:write"],
+    )
+
+    assert first.access_token == "access-token"
+    assert second.refresh_token == "refresh-token"
+    assert signature_calls == 1
+    assert captured_kwargs[0]["user_id"] == "user-1"
+    assert captured_kwargs[1]["user_id"] == "user-2"
+
+
 @pytest.mark.asyncio
 async def test_issue_token_pair_and_identity_upsert_cover_remaining_paths(monkeypatch) -> None:
     """SAML service covers legacy token issuers and both user-identity upsert branches."""
@@ -226,7 +299,8 @@ async def test_issue_token_pair_and_identity_upsert_cover_remaining_paths(monkey
         session_service=_SessionServiceStub(),  # type: ignore[arg-type]
         redis_client=_RedisStub(),  # type: ignore[arg-type]
     )
-    monkeypatch.setattr("app.services.saml_service.inspect.signature", lambda _: None)
+    callable_compat.clear_callable_parameter_name_cache()
+    monkeypatch.setattr("app.core.callable_compat.inspect.signature", lambda _: None)
     issued = service._issue_token_pair(
         db_session=object(),  # type: ignore[arg-type]
         user_id="user-1",

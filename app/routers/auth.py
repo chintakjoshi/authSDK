@@ -26,6 +26,7 @@ from app.core.browser_sessions import (
 from app.core.browser_sessions import (
     extract_bearer_token as _shared_extract_bearer_token,
 )
+from app.core.callable_compat import add_supported_kwarg, get_callable_parameter_names
 from app.core.jwt import JWTService, TokenValidationError, get_jwt_service
 from app.core.sessions import SessionService, SessionStateError, get_session_service
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
@@ -115,43 +116,47 @@ def _issue_token_pair(
 ):
     """Issue token pair while supporting legacy test doubles without db_session arg."""
     issue_method = token_service.issue_token_pair
-    try:
-        signature = inspect.signature(issue_method)
-    except (TypeError, ValueError):
-        signature = None
-    if signature and "db_session" in signature.parameters:
-        kwargs: dict[str, object] = {
-            "db_session": db_session,
-            "user_id": user_id,
-            "email": email,
-            "scopes": scopes,
-        }
-        if role is not None and "role" in signature.parameters:
-            kwargs["role"] = role
-        if email_verified is not None and "email_verified" in signature.parameters:
-            kwargs["email_verified"] = email_verified
-        if email_otp_enabled is not None and "email_otp_enabled" in signature.parameters:
-            kwargs["email_otp_enabled"] = email_otp_enabled
-        if audience is not None and "audience" in signature.parameters:
-            kwargs["audience"] = audience
-        if audience is not None and "audiences" in signature.parameters:
-            kwargs["audiences"] = audience
-        if auth_time is not None and "auth_time" in signature.parameters:
-            kwargs["auth_time"] = auth_time
-        return issue_method(**kwargs)
+    supported_parameters = get_callable_parameter_names(issue_method)
     kwargs: dict[str, object] = {"user_id": user_id, "email": email, "scopes": scopes}
-    if signature and role is not None and "role" in signature.parameters:
-        kwargs["role"] = role
-    if signature and email_verified is not None and "email_verified" in signature.parameters:
-        kwargs["email_verified"] = email_verified
-    if signature and email_otp_enabled is not None and "email_otp_enabled" in signature.parameters:
-        kwargs["email_otp_enabled"] = email_otp_enabled
-    if signature and audience is not None and "audience" in signature.parameters:
-        kwargs["audience"] = audience
-    if signature and audience is not None and "audiences" in signature.parameters:
-        kwargs["audiences"] = audience
-    if signature and auth_time is not None and "auth_time" in signature.parameters:
-        kwargs["auth_time"] = auth_time
+    if supported_parameters is not None and "db_session" in supported_parameters:
+        kwargs["db_session"] = db_session
+
+    add_supported_kwarg(
+        kwargs,
+        supported_parameters=supported_parameters,
+        name="role",
+        value=role,
+    )
+    add_supported_kwarg(
+        kwargs,
+        supported_parameters=supported_parameters,
+        name="email_verified",
+        value=email_verified,
+    )
+    add_supported_kwarg(
+        kwargs,
+        supported_parameters=supported_parameters,
+        name="email_otp_enabled",
+        value=email_otp_enabled,
+    )
+    add_supported_kwarg(
+        kwargs,
+        supported_parameters=supported_parameters,
+        name="audience",
+        value=audience,
+    )
+    add_supported_kwarg(
+        kwargs,
+        supported_parameters=supported_parameters,
+        name="audiences",
+        value=audience,
+    )
+    add_supported_kwarg(
+        kwargs,
+        supported_parameters=supported_parameters,
+        name="auth_time",
+        value=auth_time,
+    )
     return issue_method(**kwargs)
 
 

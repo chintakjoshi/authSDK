@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from uuid import uuid4
 import pytest
 from fastapi.requests import Request
 
+import app.core.callable_compat as callable_compat
 from app.core.sessions import SessionStateError
 from app.routers import auth as auth_router
 from app.schemas.token import LogoutRequest
@@ -168,6 +170,88 @@ def _db() -> object:
     return object()
 
 
+def test_issue_token_pair_caches_signature_inspection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Token issuance reuses cached signature inspection for repeated calls."""
+    captured_kwargs: list[dict[str, object]] = []
+    signature_calls = 0
+    original_signature = inspect.signature
+
+    class _TokenServiceWithModernSignature:
+        def issue_token_pair(
+            self,
+            *,
+            db_session: object,
+            user_id: str,
+            email: str | None = None,
+            role: str = "user",
+            email_verified: bool = False,
+            email_otp_enabled: bool = False,
+            scopes: list[str] | None = None,
+            audience: str | None = None,
+            auth_time: datetime | None = None,
+        ) -> TokenPair:
+            captured_kwargs.append(
+                {
+                    "db_session": db_session,
+                    "user_id": user_id,
+                    "email": email,
+                    "role": role,
+                    "email_verified": email_verified,
+                    "email_otp_enabled": email_otp_enabled,
+                    "scopes": scopes,
+                    "audience": audience,
+                    "auth_time": auth_time,
+                }
+            )
+            return TokenPair(access_token="access-token", refresh_token="refresh-token")
+
+    def _counting_signature(callable_obj: object) -> inspect.Signature | None:
+        nonlocal signature_calls
+        signature_calls += 1
+        return original_signature(callable_obj)
+
+    callable_compat.clear_callable_parameter_name_cache()
+    monkeypatch.setattr(callable_compat.inspect, "signature", _counting_signature)
+
+    service = _TokenServiceWithModernSignature()
+    first_auth_time = datetime.now(UTC)
+    second_auth_time = first_auth_time + timedelta(seconds=30)
+
+    first = auth_router._issue_token_pair(
+        token_service=service,  # type: ignore[arg-type]
+        db_session=_db(),  # type: ignore[arg-type]
+        user_id="user-1",
+        email="user-1@example.com",
+        role="admin",
+        email_verified=True,
+        email_otp_enabled=True,
+        scopes=["svc:read"],
+        audience="orders-api",
+        auth_time=first_auth_time,
+    )
+    second = auth_router._issue_token_pair(
+        token_service=service,  # type: ignore[arg-type]
+        db_session=_db(),  # type: ignore[arg-type]
+        user_id="user-2",
+        email="user-2@example.com",
+        role="user",
+        email_verified=False,
+        email_otp_enabled=False,
+        scopes=["svc:write"],
+        audience="billing-api",
+        auth_time=second_auth_time,
+    )
+
+    assert first.access_token == "access-token"
+    assert second.refresh_token == "refresh-token"
+    assert signature_calls == 1
+    assert captured_kwargs[0]["user_id"] == "user-1"
+    assert captured_kwargs[0]["db_session"] is not None
+    assert captured_kwargs[0]["audience"] == "orders-api"
+    assert captured_kwargs[1]["user_id"] == "user-2"
+    assert captured_kwargs[1]["audience"] == "billing-api"
+
+
 @pytest.mark.asyncio
 async def test_auth_helpers_and_login_fail_closed_branches(monkeypatch) -> None:
     """Auth helpers and login cover missing-user and brute-force failure wrappers."""
@@ -188,7 +272,8 @@ async def test_auth_helpers_and_login_fail_closed_branches(monkeypatch) -> None:
             captured_kwargs.update(kwargs)
             return TokenPair(access_token="a", refresh_token="r")
 
-    monkeypatch.setattr("app.routers.auth.inspect.signature", lambda _: None)
+    callable_compat.clear_callable_parameter_name_cache()
+    monkeypatch.setattr("app.core.callable_compat.inspect.signature", lambda _: None)
     issued = auth_router._issue_token_pair(
         token_service=_LegacyTokenService(),  # type: ignore[arg-type]
         db_session=_db(),  # type: ignore[arg-type]
