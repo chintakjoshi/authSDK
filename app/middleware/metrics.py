@@ -6,10 +6,8 @@ from dataclasses import dataclass
 from threading import Lock
 from time import perf_counter
 
-from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import PlainTextResponse, Response
-from starlette.types import Receive, Scope, Send
+from starlette.responses import PlainTextResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 
 @dataclass
@@ -86,30 +84,44 @@ def _format_labels(method: str, path: str, status: str) -> str:
 DEFAULT_METRICS_REGISTRY = MetricsRegistry()
 
 
-class MetricsMiddleware(BaseHTTPMiddleware):
+class MetricsMiddleware:
     """Record metrics for all responses, including failed requests."""
 
-    def __init__(self, app, registry: MetricsRegistry = DEFAULT_METRICS_REGISTRY) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        registry: MetricsRegistry = DEFAULT_METRICS_REGISTRY,
+    ) -> None:
         """Initialize middleware with optional custom metrics registry."""
-        super().__init__(app)
+        self.app = app
         self._registry = registry
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Capture request counts and durations."""
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
         start = perf_counter()
-        path = request.url.path
+        path = scope["path"]
         status_code = 500
+        method = scope["method"]
+
+        async def send_with_status_capture(message: Message) -> None:
+            """Capture the response status code while forwarding ASGI events."""
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
 
         try:
-            response = await call_next(request)
-            status_code = response.status_code
-            return response
+            await self.app(scope, receive, send_with_status_capture)
         finally:
-            route = request.scope.get("route")
+            route = scope.get("route")
             if route is not None:
                 path = getattr(route, "path", path)
             self._registry.record(
-                method=request.method,
+                method=method,
                 path=path,
                 status=str(status_code),
                 duration_seconds=perf_counter() - start,

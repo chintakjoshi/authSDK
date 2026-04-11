@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 import pytest
+import starlette.middleware.base as base_middleware
 from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient
 
@@ -225,3 +226,30 @@ async def test_metrics_include_rejected_requests() -> None:
         r'auth_service_http_requests_total\{[^}]*method="POST"[^}]*path="/auth/login"[^}]*status="429"[^}]*\}\s+1(?:\.0+)?',
         metrics_response.text,
     )
+
+
+@pytest.mark.asyncio
+async def test_middleware_stack_does_not_use_base_http_streaming_wrappers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production middleware stack runs without BaseHTTPMiddleware wrappers."""
+    app = _build_test_app()
+    streaming_wrapper_calls = 0
+    original_init = base_middleware._StreamingResponse.__init__
+
+    def _tracking_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal streaming_wrapper_calls
+        streaming_wrapper_calls += 1
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(base_middleware._StreamingResponse, "__init__", _tracking_init)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/ok")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+    assert streaming_wrapper_calls == 0

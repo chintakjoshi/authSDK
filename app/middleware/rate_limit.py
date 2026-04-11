@@ -12,8 +12,8 @@ from fastapi import Request
 from redis import asyncio as redis_async
 from redis.asyncio.client import Redis
 from redis.exceptions import RedisError
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse, Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.config import get_settings, reloadable_singleton
 from app.core.client_ip import extract_client_ip
@@ -84,19 +84,19 @@ def get_rate_limit_redis_client() -> Redis:
     )
 
 
-class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Apply per-client sliding-window request limits."""
+class RateLimitMiddleware:
+    """Apply per-client sliding-window request limits as pure ASGI middleware."""
 
     def __init__(
         self,
-        app,
+        app: ASGIApp,
         redis_client: SlidingWindowRedis | None = None,
         default_requests_per_minute: int | None = None,
         login_requests_per_minute: int | None = None,
         token_requests_per_minute: int | None = None,
     ) -> None:
         """Initialize middleware with optional explicit limits for testability."""
-        super().__init__(app)
+        self.app = app
         settings = None
         if (
             redis_client is None
@@ -126,8 +126,22 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             self._token_limit = token_requests_per_minute
         self._window_milliseconds = _WINDOW_SECONDS * 1000
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Reject requests exceeding the configured per-minute threshold."""
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope)
+        response = await self._evaluate_request(request)
+        if response is not None:
+            await response(scope, receive, send)
+            return
+
+        await self.app(scope, receive, send)
+
+    async def _evaluate_request(self, request: Request) -> Response | None:
+        """Return an immediate response when a request must be rejected."""
         limit = self._resolve_limit(request.url.path)
         bucket_key = self._build_bucket_key(request)
         now_ms = int(time.time() * 1000)
@@ -162,8 +176,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                         "code": "rate_limit_unavailable",
                     },
                 )
-
-        return await call_next(request)
+        return None
 
     async def _retry_after_seconds(self, *, bucket_key: str, now_ms: int) -> int:
         """Return the number of seconds until the oldest request leaves the window."""

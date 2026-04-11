@@ -5,6 +5,7 @@ from __future__ import annotations
 import types
 
 import pytest
+import starlette.middleware.base as base_middleware
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from redis.exceptions import RedisError
@@ -190,3 +191,43 @@ async def test_rate_limit_rejection_includes_retry_after_header(
         "code": "rate_limited",
     }
     assert second.headers["Retry-After"] == "60"
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_middleware_does_not_use_base_http_streaming_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rate limiter runs as pure ASGI middleware without BaseHTTPMiddleware wrappers."""
+    redis_stub = _InMemoryRedis()
+    app = FastAPI()
+    app.add_middleware(
+        RateLimitMiddleware,
+        redis_client=redis_stub,
+        default_requests_per_minute=100,
+        login_requests_per_minute=10,
+        token_requests_per_minute=10,
+    )
+
+    @app.get("/health/live")
+    async def live() -> dict[str, str]:
+        return {"status": "live"}
+
+    streaming_wrapper_calls = 0
+    original_init = base_middleware._StreamingResponse.__init__
+
+    def _tracking_init(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal streaming_wrapper_calls
+        streaming_wrapper_calls += 1
+        return original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(base_middleware._StreamingResponse, "__init__", _tracking_init)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        response = await client.get("/health/live")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "live"}
+    assert streaming_wrapper_calls == 0
