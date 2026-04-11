@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 try:
     from opentelemetry import trace
@@ -18,33 +16,44 @@ except ModuleNotFoundError:  # pragma: no cover - exercised only in stripped loc
     _OTEL_AVAILABLE = False
 
 
-class TracingMiddleware(BaseHTTPMiddleware):
+class TracingMiddleware:
     """Create an OpenTelemetry span for request handler execution."""
 
-    def __init__(self, app) -> None:
+    def __init__(self, app: ASGIApp) -> None:
         """Initialize tracer instance."""
-        super().__init__(app)
+        self.app = app
         self._tracer = trace.get_tracer("app.middleware.tracing") if _OTEL_AVAILABLE else None
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Trace request processing and attach key HTTP attributes."""
-        if self._tracer is None:
-            return await call_next(request)
+        if scope["type"] != "http" or self._tracer is None:
+            await self.app(scope, receive, send)
+            return
 
-        span_name = f"{request.method} {request.url.path}"
+        method = scope["method"]
+        path = scope["path"]
+        status_code = 500
+
+        async def send_with_status_capture(message: Message) -> None:
+            """Capture the response status code while forwarding ASGI events."""
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
+
+        span_name = f"{method} {path}"
         with self._tracer.start_as_current_span(span_name) as span:
-            span.set_attribute("http.method", request.method)
-            span.set_attribute("http.target", request.url.path)
+            span.set_attribute("http.method", method)
+            span.set_attribute("http.target", path)
             try:
-                response = await call_next(request)
+                await self.app(scope, receive, send_with_status_capture)
             except Exception as exc:
                 span.record_exception(exc)
                 span.set_status(Status(StatusCode.ERROR))  # type: ignore[operator]
                 raise
 
-            span.set_attribute("http.status_code", response.status_code)
-            if response.status_code >= 500:
+            span.set_attribute("http.status_code", status_code)
+            if status_code >= 500:
                 span.set_status(Status(StatusCode.ERROR))  # type: ignore[operator]
             else:
                 span.set_status(Status(StatusCode.OK))  # type: ignore[operator]
-            return response

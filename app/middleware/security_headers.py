@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import Request
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+class SecurityHeadersMiddleware:
     """Ensure every response carries mandatory security headers."""
 
     _NO_STORE_EXACT_PATHS = frozenset(
@@ -57,9 +56,24 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             headers["Pragma"] = "no-cache"
         return headers
 
-    async def dispatch(self, request: Request, call_next) -> Response:
+    def __init__(self, app: ASGIApp) -> None:
+        """Initialize middleware with the downstream ASGI application."""
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Append security headers to all application responses."""
-        response = await call_next(request)
-        for header_name, header_value in self._headers_for_path(request.url.path).items():
-            response.headers[header_name] = header_value
-        return response
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        response_headers = self._headers_for_path(scope["path"])
+
+        async def send_with_security_headers(message: Message) -> None:
+            """Inject mandatory security headers into the response start event."""
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(raw=message["headers"])
+                for header_name, header_value in response_headers.items():
+                    headers[header_name] = header_value
+            await send(message)
+
+        await self.app(scope, receive, send_with_security_headers)
