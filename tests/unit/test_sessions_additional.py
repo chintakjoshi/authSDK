@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from datetime import UTC, datetime, timedelta
 from types import MethodType
 from uuid import uuid4
@@ -10,6 +11,7 @@ import pytest
 from authlib.jose import jwt
 from redis.exceptions import RedisError
 
+import app.core.callable_compat as callable_compat
 from app.core.sessions import RefreshTokenHasher, SessionPayload, SessionService, SessionStateError
 from app.models.session import Session
 from app.services.token_service import TokenPair
@@ -205,6 +207,69 @@ def test_extract_access_claims_invoke_token_issuer_and_ttl_helpers() -> None:
 
     assert SessionService._remaining_lifetime_seconds(int(datetime.now(UTC).timestamp()) - 10) == 1
     assert SessionService._remaining_session_ttl(datetime.now(UTC) - timedelta(seconds=5)) == 1
+
+
+def test_invoke_token_issuer_caches_signature_inspection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refresh token issuer compatibility should inspect one callable signature only once."""
+    signature_calls = 0
+    original_signature = inspect.signature
+
+    def _issuer(
+        user_id: str,
+        email: str | None = None,
+        role: str | None = None,
+        email_verified: bool | None = None,
+        email_otp_enabled: bool | None = None,
+        scopes: list[str] | None = None,
+        audiences: list[str] | None = None,
+        auth_time: datetime | None = None,
+    ) -> TokenPair:
+        return TokenPair(
+            access_token=(
+                f"{user_id}:{email}:{role}:{email_verified}:{email_otp_enabled}:"
+                f"{scopes}:{audiences}:{auth_time}"
+            ),
+            refresh_token="refresh-token",
+        )
+
+    def _counting_signature(callable_obj: object) -> inspect.Signature | None:
+        nonlocal signature_calls
+        signature_calls += 1
+        return original_signature(callable_obj)
+
+    callable_compat.clear_callable_parameter_name_cache()
+    monkeypatch.setattr(callable_compat.inspect, "signature", _counting_signature)
+    first_auth_time = datetime(2025, 1, 1, tzinfo=UTC)
+    second_auth_time = first_auth_time + timedelta(minutes=5)
+
+    first = SessionService._invoke_token_issuer(
+        _issuer,
+        "user-1",
+        "user@example.com",
+        "admin",
+        True,
+        False,
+        ["orders:read"],
+        ["auth-service", "orders-api"],
+        first_auth_time,
+    )
+    second = SessionService._invoke_token_issuer(
+        _issuer,
+        "user-2",
+        "user-2@example.com",
+        "user",
+        False,
+        True,
+        ["orders:write"],
+        ["auth-service"],
+        second_auth_time,
+    )
+
+    assert first.access_token.startswith("user-1:user@example.com:admin:True:False")
+    assert second.access_token.startswith("user-2:user-2@example.com:user:False:True")
+    assert signature_calls == 1
 
 
 def test_refresh_token_hasher_uses_keyed_hmac_and_exposes_legacy_sha256_fallback() -> None:
