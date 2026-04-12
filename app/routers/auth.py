@@ -54,7 +54,7 @@ from app.services.brute_force_service import (
 from app.services.m2m_service import M2MService, M2MServiceError, get_m2m_service
 from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
 from app.services.token_service import TokenService, get_token_service
-from app.services.user_service import UserService
+from app.services.user_service import UserService, get_user_service
 from app.services.webhook_service import WebhookService, get_webhook_service
 
 router = APIRouter(tags=["auth"])
@@ -66,12 +66,6 @@ def _auth_service_audience() -> str:
         return get_settings().app.service
     except Exception:
         return "auth-service"
-
-
-def get_user_service() -> UserService:
-    """Provide the user service dependency."""
-    return UserService()
-
 
 def _error_response(
     status_code: int,

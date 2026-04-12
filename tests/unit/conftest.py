@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from app.config import get_settings
+from app.services.user_service import get_user_service
 
 
 @pytest.fixture(autouse=True)
@@ -40,8 +41,10 @@ def default_settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RATE_LIMIT__LOGIN_REQUESTS_PER_MINUTE", "10")
     monkeypatch.setenv("RATE_LIMIT__TOKEN_REQUESTS_PER_MINUTE", "30")
     get_settings.cache_clear()
+    get_user_service.cache_clear()
     yield
     get_settings.cache_clear()
+    get_user_service.cache_clear()
 
 
 @pytest.fixture
@@ -57,5 +60,7 @@ def browser_session_settings_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BROWSER_SESSIONS__CSRF_COOKIE_PATH", "/")
     monkeypatch.setenv("BROWSER_SESSIONS__CSRF_HEADER_NAME", "X-CSRF-Token")
     get_settings.cache_clear()
+    get_user_service.cache_clear()
     yield
     get_settings.cache_clear()
+    get_user_service.cache_clear()
