@@ -67,6 +67,7 @@ def _auth_service_audience() -> str:
     except Exception:
         return "auth-service"
 
+
 def _error_response(
     status_code: int,
     detail: str,
