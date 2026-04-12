@@ -62,6 +62,7 @@ def _clear_dependency_caches() -> None:
     from app.services.otp_service import get_otp_email_sender, get_otp_service
     from app.services.saml_service import get_saml_service
     from app.services.token_service import get_token_service
+    from app.services.user_service import get_user_service
     from app.services.webhook_service import (
         get_webhook_queue,
         get_webhook_redis_connection,
@@ -90,6 +91,7 @@ def _clear_dependency_caches() -> None:
     get_otp_service.cache_clear()
     get_oauth_service.cache_clear()
     get_saml_service.cache_clear()
+    get_user_service.cache_clear()
     get_webhook_redis_connection.cache_clear()
     get_webhook_queue.cache_clear()
     get_webhook_scheduler.cache_clear()

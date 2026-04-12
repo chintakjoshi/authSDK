@@ -43,7 +43,7 @@ from app.services.pagination import (
     build_page,
     decode_cursor,
 )
-from app.services.user_service import UserService, UserServiceError
+from app.services.user_service import UserService, UserServiceError, get_user_service
 from app.services.webhook_service import (
     DeletedWebhookEndpoint,
     WebhookService,
@@ -737,7 +737,7 @@ def get_admin_service() -> AdminService:
     """Create and cache the admin orchestration service dependency."""
     settings = get_settings()
     return AdminService(
-        user_service=UserService(),
+        user_service=get_user_service(),
         session_service=get_session_service(),
         otp_service=get_otp_service(),
         brute_force_service=get_brute_force_service(),

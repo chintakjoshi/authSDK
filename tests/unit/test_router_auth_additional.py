@@ -170,6 +170,34 @@ def _db() -> object:
     return object()
 
 
+def test_get_user_service_reuses_singleton_instance(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Auth dependency should reuse one cached user-service instance per config version."""
+    provider = auth_router.get_user_service
+    cache_clear = getattr(provider, "cache_clear", None)
+    if callable(cache_clear):
+        cache_clear()
+
+    created = 0
+    original_init = auth_router.UserService.__init__
+
+    def _counting_init(self) -> None:  # type: ignore[no-untyped-def]
+        nonlocal created
+        created += 1
+        original_init(self)
+
+    monkeypatch.setattr(auth_router.UserService, "__init__", _counting_init)
+
+    try:
+        first = provider()
+        second = provider()
+    finally:
+        if callable(cache_clear):
+            cache_clear()
+
+    assert first is second
+    assert created == 1
+
+
 def test_issue_token_pair_caches_signature_inspection(monkeypatch: pytest.MonkeyPatch) -> None:
     """Token issuance reuses cached signature inspection for repeated calls."""
     captured_kwargs: list[dict[str, object]] = []

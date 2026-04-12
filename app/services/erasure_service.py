@@ -14,7 +14,7 @@ from app.core.sessions import SessionService, SessionStateError, get_session_ser
 from app.models.user import User
 from app.services.api_key_service import APIKeyService, APIKeyServiceError, get_api_key_service
 from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
-from app.services.user_service import UserService
+from app.services.user_service import UserService, get_user_service
 
 
 @dataclass(frozen=True)
@@ -148,7 +148,7 @@ class ErasureService:
 def get_erasure_service() -> ErasureService:
     """Create and cache the GDPR erasure service dependency."""
     return ErasureService(
-        user_service=UserService(),
+        user_service=get_user_service(),
         session_service=get_session_service(),
         otp_service=get_otp_service(),
         api_key_service=get_api_key_service(),

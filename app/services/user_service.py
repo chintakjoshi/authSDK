@@ -11,6 +11,7 @@ from passlib.context import CryptContext
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import reloadable_singleton
 from app.models.user import User, UserIdentity
 from app.services.audit_service import AuditService
 
@@ -211,3 +212,9 @@ class UserService:
                 "last_admin_protected",
                 409,
             )
+
+
+@reloadable_singleton
+def get_user_service() -> UserService:
+    """Create and cache the shared user-service dependency."""
+    return UserService()

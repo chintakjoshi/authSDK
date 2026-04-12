@@ -37,7 +37,7 @@ from app.services.brute_force_service import (
     get_brute_force_service,
 )
 from app.services.token_service import TokenService, get_token_service
-from app.services.user_service import UserService
+from app.services.user_service import UserService, get_user_service
 
 logger = structlog.get_logger(__name__)
 
@@ -775,7 +775,7 @@ def get_lifecycle_service() -> LifecycleService:
     return LifecycleService(
         jwt_service=get_jwt_service(),
         signing_key_service=get_signing_key_service(),
-        user_service=UserService(),
+        user_service=get_user_service(),
         token_service=get_token_service(),
         brute_force_service=get_brute_force_service(),
         session_service=get_session_service(),
