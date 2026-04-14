@@ -8,7 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.core.jwt import get_jwt_service
@@ -231,6 +231,9 @@ class _AuditServiceStub:
     async def record(self, **kwargs: Any) -> None:
         event = {key: value for key, value in kwargs.items() if key != "db"}
         self.events.append(event)
+
+    def enqueue_record(self, background_tasks: BackgroundTasks, **kwargs: Any) -> None:
+        background_tasks.add_task(self.record, db=None, **kwargs)
 
 
 class _WebhookServiceStub:

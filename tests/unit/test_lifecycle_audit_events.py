@@ -7,7 +7,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from app.dependencies import get_database_session
@@ -68,6 +68,9 @@ class _AuditServiceStub:
     async def record(self, **kwargs: Any) -> None:
         """Capture audit call arguments excluding DB session."""
         self.events.append({key: value for key, value in kwargs.items() if key != "db"})
+
+    def enqueue_record(self, background_tasks: BackgroundTasks, **kwargs: Any) -> None:
+        background_tasks.add_task(self.record, db=None, **kwargs)
 
 
 class _WebhookServiceStub:

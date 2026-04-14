@@ -86,8 +86,8 @@ async def signup(
             password=payload.password,
         )
     except LifecycleServiceError as exc:
-        await audit_service.record(
-            db=db_session,
+        audit_service.enqueue_record(
+            background_tasks,
             event_type="user.signup.accepted",
             actor_type="user",
             success=False,
@@ -97,8 +97,8 @@ async def signup(
         )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
 
-    await audit_service.record(
-        db=db_session,
+    audit_service.enqueue_record(
+        background_tasks,
         event_type="user.signup.accepted",
         actor_type="user",
         success=True,
@@ -121,8 +121,8 @@ async def signup(
                 to_email=user.email,
                 verification_link=signup_result.verification_link,
             )
-        await audit_service.record(
-            db=db_session,
+        audit_service.enqueue_record(
+            background_tasks,
             event_type="user.created",
             actor_type="user",
             success=True,

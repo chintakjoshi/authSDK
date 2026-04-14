@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi import BackgroundTasks
 from fastapi.requests import Request
 from starlette.responses import Response
 
@@ -59,6 +60,9 @@ def _request(
 class _AuditStub:
     async def record(self, **kwargs: object) -> None:
         del kwargs
+
+    def enqueue_record(self, background_tasks: BackgroundTasks, **kwargs: object) -> None:
+        background_tasks.add_task(self.record, db=None, **kwargs)
 
 
 class _WebhookStub:
@@ -201,6 +205,7 @@ async def test_login_cookie_transport_sets_session_cookies_and_omits_raw_tokens(
             path="/auth/login",
             headers=_cookie_headers(),
         ),
+        background_tasks=BackgroundTasks(),
         db_session=_db(),  # type: ignore[arg-type]
         user_service=_UserServiceStub(),  # type: ignore[arg-type]
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]
@@ -243,6 +248,7 @@ async def test_login_infers_cookie_transport_from_browser_session_context_withou
             path="/auth/login",
             headers=_cookie_headers(include_transport_header=False),
         ),
+        background_tasks=BackgroundTasks(),
         db_session=_db(),  # type: ignore[arg-type]
         user_service=_UserServiceStub(),  # type: ignore[arg-type]
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]
@@ -286,6 +292,7 @@ async def test_login_explicit_token_transport_overrides_browser_session_context(
                 **_cookie_headers(include_transport_header=False),
             },
         ),
+        background_tasks=BackgroundTasks(),
         db_session=_db(),  # type: ignore[arg-type]
         user_service=_UserServiceStub(),  # type: ignore[arg-type]
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]

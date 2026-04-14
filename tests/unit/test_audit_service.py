@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
 
+from fastapi import BackgroundTasks
+
 import app.core.client_ip as client_ip_module
 from app.services import audit_service as audit_module
 from app.services.audit_service import AuditService
@@ -159,3 +161,45 @@ async def test_record_ignores_forwarded_for_from_untrusted_peer(monkeypatch) -> 
     )
 
     assert session.added[0].ip_address == "10.0.0.7"
+
+
+async def test_enqueue_record_defers_execution_and_snapshots_request_state(monkeypatch) -> None:
+    """Deferred audit dispatch should snapshot request data and run only in background tasks."""
+    service = AuditService()
+    background_tasks = BackgroundTasks()
+    captured_calls: list[dict[str, Any]] = []
+    original_metadata = {"provider": "password", "nested": {"attempt": 1}}
+    request = _RequestStub(
+        headers={"user-agent": "pytest-agent/1.0"},
+        correlation_id="cid-123",
+    )
+
+    async def _record(**kwargs: Any) -> None:
+        captured_calls.append(kwargs)
+
+    monkeypatch.setattr(service, "record", _record)
+
+    service.enqueue_record(
+        background_tasks,
+        event_type="user.login.success",
+        actor_type="user",
+        success=True,
+        request=request,  # type: ignore[arg-type]
+        actor_id=str(uuid4()),
+        metadata=original_metadata,
+    )
+
+    original_metadata["nested"]["attempt"] = 99
+    request.headers["user-agent"] = "mutated-agent/2.0"
+
+    assert captured_calls == []
+    assert len(background_tasks.tasks) == 1
+
+    await background_tasks()
+
+    assert len(captured_calls) == 1
+    assert captured_calls[0]["db"] is None
+    assert isinstance(captured_calls[0]["request"], audit_module.AuditRequestSnapshot)
+    assert captured_calls[0]["request"].headers["user-agent"] == "pytest-agent/1.0"
+    assert captured_calls[0]["request"].correlation_id == "cid-123"
+    assert captured_calls[0]["metadata"]["nested"]["attempt"] == 1
