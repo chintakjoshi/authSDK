@@ -367,6 +367,55 @@ async def test_self_service_erasure_revokes_sessions_cleans_otp_and_scrubs_pii(
 
 
 @pytest.mark.asyncio
+async def test_erased_email_can_be_registered_again(
+    app_factory,
+    user_factory,
+    db_session,
+) -> None:
+    """Erasing an account frees the original email for a subsequent signup."""
+    app: FastAPI = app_factory()
+    user = await user_factory("re-register@example.com", "Password123!")
+    erased_user_id = user.id
+
+    erasure_service = get_erasure_service()
+    result = await erasure_service.erase_user(db_session=db_session, user_id=erased_user_id)
+
+    assert result.anonymized_email == f"deleted_{erased_user_id}@erased.invalid"
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        signup = await client.post(
+            "/auth/signup",
+            json={"email": "re-register@example.com", "password": "NewPassword123!"},
+        )
+
+    assert signup.status_code == 201
+    assert signup.json() == {"accepted": True}
+
+    db_session.expire_all()
+    active_users = (
+        (
+            await db_session.execute(
+                select(User).where(
+                    User.email == "re-register@example.com",
+                    User.deleted_at.is_(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    erased_user = (await db_session.execute(select(User).where(User.id == erased_user_id))).scalar_one()
+
+    assert len(active_users) == 1
+    assert active_users[0].id != erased_user_id
+    assert erased_user.email == f"deleted_{erased_user_id}@erased.invalid"
+    assert erased_user.deleted_at is not None
+
+
+@pytest.mark.asyncio
 async def test_admin_erasure_requires_action_token_and_is_idempotent(
     app_factory,
     user_factory,
