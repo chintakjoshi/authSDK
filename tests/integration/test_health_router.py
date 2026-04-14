@@ -63,7 +63,7 @@ async def test_health_ready_returns_503_when_postgres_is_down() -> None:
         response = await client.get("/health/ready")
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "Service not ready.", "code": "session_expired"}
+    assert response.json() == {"detail": "Service not ready.", "code": "service_unavailable"}
 
 
 @pytest.mark.asyncio
@@ -76,4 +76,4 @@ async def test_health_ready_returns_503_when_redis_is_down() -> None:
         response = await client.get("/health/ready")
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "Service not ready.", "code": "session_expired"}
+    assert response.json() == {"detail": "Service not ready.", "code": "service_unavailable"}

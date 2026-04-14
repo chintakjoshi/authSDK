@@ -49,6 +49,6 @@ async def ready(
     if not postgres_ready or not redis_ready:
         raise HTTPException(
             status_code=503,
-            detail={"detail": "Service not ready.", "code": "session_expired"},
+            detail={"detail": "Service not ready.", "code": "service_unavailable"},
         )
     return {"status": "ready"}
