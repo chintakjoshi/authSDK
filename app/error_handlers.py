@@ -46,6 +46,7 @@ VALID_ERROR_CODES = {
     "not_found",
     "method_not_allowed",
     "service_unavailable",
+    "internal_server_error",
 }
 
 _DEFAULT_ERROR_CODE_BY_STATUS: dict[int, str] = {
@@ -56,6 +57,7 @@ _DEFAULT_ERROR_CODE_BY_STATUS: dict[int, str] = {
     405: "method_not_allowed",
     422: "invalid_credentials",
     429: "rate_limited",
+    500: "internal_server_error",
     503: "service_unavailable",
 }
 
@@ -191,4 +193,4 @@ def register_exception_handlers(app: FastAPI, environment: str) -> None:
             error=str(exc),
         )
         detail = _sanitize_detail(str(exc), 500, environment)
-        return _error_response(status_code=500, detail=detail, code="invalid_token")
+        return _error_response(status_code=500, detail=detail, code="internal_server_error")

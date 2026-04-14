@@ -1,4 +1,4 @@
-# authSDK
+# AuthSDK
 
 [![Unit Tests](https://img.shields.io/github/check-runs/chintakjoshi/authSDK/main?nameFilter=Unit%20Tests&label=unit%20tests)](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml)
 [![Integration Tests](https://img.shields.io/github/check-runs/chintakjoshi/authSDK/main?nameFilter=Integration%20Tests&label=integration%20tests)](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml)
@@ -6,7 +6,7 @@
 [![Container Publish](https://github.com/chintakjoshi/authSDK/actions/workflows/release.yml/badge.svg)](https://github.com/chintakjoshi/authSDK/actions/workflows/release.yml)
 [![Lint](https://img.shields.io/github/check-runs/chintakjoshi/authSDK/main?nameFilter=Lint&label=lint)](https://github.com/chintakjoshi/authSDK/actions/workflows/ci.yml)
 
-`authSDK` is a central authentication platform plus a reusable Python SDK for
+AuthSDK is a central authentication platform plus a reusable Python SDK for
 downstream services.
 
 For browser applications, the recommended integration path is now same-origin
