@@ -32,6 +32,7 @@ ErrorCode = Literal[
     "not_found",
     "method_not_allowed",
     "service_unavailable",
+    "internal_server_error",
 ]
 
 

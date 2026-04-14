@@ -80,7 +80,10 @@ async def test_unhandled_error_hides_internal_detail_in_production() -> None:
         response = await client.get("/auth/unhandled")
 
     assert response.status_code == 500
-    assert response.json() == {"detail": "Internal server error.", "code": "invalid_token"}
+    assert response.json() == {
+        "detail": "Internal server error.",
+        "code": "internal_server_error",
+    }
 
 
 @pytest.mark.asyncio
