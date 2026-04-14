@@ -29,6 +29,9 @@ ErrorCode = Literal[
     "reauth_required",
     "invalid_scope",
     "invalid_webhook_url",
+    "not_found",
+    "method_not_allowed",
+    "service_unavailable",
 ]
 
 

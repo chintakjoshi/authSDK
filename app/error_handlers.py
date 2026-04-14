@@ -43,17 +43,20 @@ VALID_ERROR_CODES = {
     "otp_action_mismatch",
     "email_not_verified",
     "otp_issuance_blocked",
+    "not_found",
+    "method_not_allowed",
+    "service_unavailable",
 }
 
 _DEFAULT_ERROR_CODE_BY_STATUS: dict[int, str] = {
     400: "invalid_credentials",
     401: "invalid_token",
     403: "invalid_token",
-    404: "invalid_token",
-    405: "invalid_token",
+    404: "not_found",
+    405: "method_not_allowed",
     422: "invalid_credentials",
     429: "rate_limited",
-    503: "session_expired",
+    503: "service_unavailable",
 }
 
 logger = structlog.get_logger(__name__)

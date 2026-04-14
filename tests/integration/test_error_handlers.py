@@ -28,6 +28,18 @@ def _build_error_app(environment: str = "production") -> FastAPI:
     async def auth_validation(required_value: int) -> dict[str, int]:
         return {"required_value": required_value}
 
+    @app.get("/auth/http-404")
+    async def auth_http_404() -> None:
+        raise HTTPException(status_code=404, detail="Not found.")
+
+    @app.get("/auth/http-503")
+    async def auth_http_503() -> None:
+        raise HTTPException(status_code=503, detail="Backend unavailable.")
+
+    @app.get("/auth/get-only")
+    async def auth_get_only() -> dict[str, bool]:
+        return {"ok": True}
+
     return app
 
 
@@ -69,3 +81,45 @@ async def test_unhandled_error_hides_internal_detail_in_production() -> None:
 
     assert response.status_code == 500
     assert response.json() == {"detail": "Internal server error.", "code": "invalid_token"}
+
+
+@pytest.mark.asyncio
+async def test_not_found_error_uses_semantically_correct_default_code() -> None:
+    """404 HTTP exceptions without explicit codes should not masquerade as invalid tokens."""
+    app = _build_error_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get("/auth/http-404")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not found.", "code": "not_found"}
+
+
+@pytest.mark.asyncio
+async def test_method_not_allowed_uses_semantically_correct_default_code() -> None:
+    """405 framework errors should expose a method-specific machine-readable code."""
+    app = _build_error_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post("/auth/get-only")
+
+    assert response.status_code == 405
+    assert response.json() == {"detail": "Method Not Allowed", "code": "method_not_allowed"}
+
+
+@pytest.mark.asyncio
+async def test_service_unavailable_uses_infrastructure_failure_default_code() -> None:
+    """503 HTTP exceptions without explicit codes should signal service unavailability."""
+    app = _build_error_app()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get("/auth/http-503")
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Backend unavailable.",
+        "code": "service_unavailable",
+    }
