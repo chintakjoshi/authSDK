@@ -407,7 +407,9 @@ async def test_erased_email_can_be_registered_again(
         .scalars()
         .all()
     )
-    erased_user = (await db_session.execute(select(User).where(User.id == erased_user_id))).scalar_one()
+    erased_user = (
+        await db_session.execute(select(User).where(User.id == erased_user_id))
+    ).scalar_one()
 
     assert len(active_users) == 1
     assert active_users[0].id != erased_user_id
