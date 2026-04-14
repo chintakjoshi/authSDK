@@ -56,9 +56,14 @@ def _request(
 class _AuditStub:
     def __init__(self) -> None:
         self.events: list[str] = []
+        self.enqueued_events: list[str] = []
 
     async def record(self, **kwargs: object) -> None:
         self.events.append(str(kwargs["event_type"]))
+
+    def enqueue_record(self, background_tasks: BackgroundTasks, **kwargs: object) -> None:
+        self.enqueued_events.append(str(kwargs["event_type"]))
+        background_tasks.add_task(self.record, db=None, **kwargs)
 
 
 class _WebhookStub:
@@ -343,6 +348,33 @@ async def test_lifecycle_routes_cover_signup_resend_validate_reauth_and_erase() 
         webhook_service=webhook_service,  # type: ignore[arg-type]
     )
     assert erased.user_id
+
+
+@pytest.mark.asyncio
+async def test_signup_queues_audit_events_in_background_tasks() -> None:
+    """Signup should defer accepted/user-created audit writes until background execution."""
+    lifecycle_service = _LifecycleStub()
+    audit_service = _AuditStub()
+    webhook_service = _WebhookStub()
+    background_tasks = BackgroundTasks()
+
+    response = await lifecycle_router.signup(
+        payload=SignupRequest(email="user@example.com", password="Password123!"),
+        request=_request(path="/auth/signup"),
+        background_tasks=background_tasks,
+        db_session=_db(),  # type: ignore[arg-type]
+        lifecycle_service=lifecycle_service,  # type: ignore[arg-type]
+        audit_service=audit_service,  # type: ignore[arg-type]
+        webhook_service=webhook_service,  # type: ignore[arg-type]
+    )
+
+    assert response.accepted is True
+    assert audit_service.events == []
+    assert audit_service.enqueued_events == ["user.signup.accepted", "user.created"]
+
+    await background_tasks()
+
+    assert audit_service.events == ["user.signup.accepted", "user.created"]
 
 
 @pytest.mark.asyncio

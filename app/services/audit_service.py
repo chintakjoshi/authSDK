@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from copy import deepcopy
+from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 import structlog
-from fastapi import Request
+from fastapi import BackgroundTasks, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +19,12 @@ from app.config import reloadable_singleton
 from app.core.client_ip import extract_client_ip as extract_trusted_client_ip
 from app.db.session import get_session_factory
 from app.models.audit_event import AuditActorType, AuditEvent
-from app.services.pagination import CursorPage, apply_created_at_cursor, build_page, decode_cursor
+from app.services.pagination import (
+    CursorPage,
+    apply_created_at_cursor,
+    build_page,
+    decode_cursor,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -33,6 +41,40 @@ _SENSITIVE_KEY_PARTS = (
     "token",
 )
 _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+@dataclass(frozen=True)
+class AuditRequestSnapshot:
+    """Serializable request context captured for deferred audit writes."""
+
+    headers: dict[str, str]
+    client_host: str | None
+    correlation_id: str | None
+
+    @classmethod
+    def capture(cls, request: Request) -> AuditRequestSnapshot:
+        """Capture the minimum request fields needed for a later audit write."""
+        raw_correlation_id = getattr(getattr(request, "state", None), "correlation_id", None)
+        if raw_correlation_id is None:
+            raw_correlation_id = request.headers.get("x-correlation-id")
+
+        return cls(
+            headers={str(key).lower(): value for key, value in request.headers.items()},
+            client_host=getattr(getattr(request, "client", None), "host", None),
+            correlation_id=None if raw_correlation_id is None else str(raw_correlation_id),
+        )
+
+    def to_request_like(self) -> Any:
+        """Build a lightweight request-like object for existing extraction helpers."""
+        client = None
+        if self.client_host is not None:
+            client = SimpleNamespace(host=self.client_host)
+
+        return SimpleNamespace(
+            headers=self.headers,
+            client=client,
+            state=SimpleNamespace(correlation_id=self.correlation_id),
+        )
 
 
 def _is_sensitive_key(key: str) -> bool:
@@ -114,6 +156,44 @@ def _sanitize_metadata(metadata: dict[str, Any] | None) -> dict[str, Any] | None
 class AuditService:
     """Persist immutable audit events without affecting auth outcomes."""
 
+    def enqueue_record(
+        self,
+        background_tasks: BackgroundTasks,
+        *,
+        event_type: str,
+        actor_type: str,
+        success: bool,
+        request: Request,
+        actor_id: str | None = None,
+        target_id: str | None = None,
+        target_type: str | None = None,
+        failure_reason: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Schedule one audit write to run after the response has been sent."""
+        try:
+            background_tasks.add_task(
+                self.record,
+                db=None,
+                event_type=event_type,
+                actor_type=actor_type,
+                success=success,
+                request=AuditRequestSnapshot.capture(request),
+                actor_id=actor_id,
+                target_id=target_id,
+                target_type=target_type,
+                failure_reason=failure_reason,
+                metadata=deepcopy(metadata) if metadata is not None else None,
+            )
+        except Exception as exc:
+            logger.error(
+                "audit_enqueue_failed",
+                event_type=event_type,
+                actor_type=actor_type,
+                success=success,
+                error=str(exc),
+            )
+
     async def list_events_page(
         self,
         db_session: AsyncSession,
@@ -150,11 +230,11 @@ class AuditService:
 
     async def record(
         self,
-        db: AsyncSession,
+        db: AsyncSession | Any | None,
         event_type: str,
         actor_type: str,
         success: bool,
-        request: Request,
+        request: Request | AuditRequestSnapshot,
         actor_id: str | None = None,
         target_id: str | None = None,
         target_type: str | None = None,
@@ -162,6 +242,10 @@ class AuditService:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """Write one append-only audit row and swallow write failures."""
+        request_like = (
+            request.to_request_like() if isinstance(request, AuditRequestSnapshot) else request
+        )
+
         try:
             normalized_actor_type = AuditActorType(actor_type)
         except ValueError:
@@ -173,16 +257,16 @@ class AuditService:
             actor_type=normalized_actor_type,
             target_id=_coerce_uuid(target_id),
             target_type=target_type.strip() if target_type else None,
-            ip_address=_coerce_ip(extract_trusted_client_ip(request)),
-            user_agent=request.headers.get("user-agent"),
-            correlation_id=_extract_correlation_id(request),
+            ip_address=_coerce_ip(extract_trusted_client_ip(request_like)),
+            user_agent=request_like.headers.get("user-agent"),
+            correlation_id=_extract_correlation_id(request_like),
             success=success,
             failure_reason=failure_reason.strip() if failure_reason else None,
             event_metadata=_sanitize_metadata(metadata),
         )
 
         try:
-            if isinstance(db, AsyncSession):
+            if db is None or isinstance(db, AsyncSession):
                 session_factory = get_session_factory()
                 async with session_factory() as audit_db:
                     audit_db.add(audit_event)

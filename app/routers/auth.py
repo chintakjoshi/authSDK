@@ -7,7 +7,7 @@ import json
 from typing import Annotated
 from urllib.parse import parse_qs
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -167,6 +167,7 @@ def _password_login_requires_verified_email() -> bool:
 async def login(
     payload: LoginRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     user_service: Annotated[UserService, Depends(get_user_service)],
     token_service: Annotated[TokenService, Depends(get_token_service)],
@@ -187,8 +188,8 @@ async def login(
 
     if user is None or user.password_hash is None:
         user_service.dummy_verify()
-        await audit_service.record(
-            db=db_session,
+        audit_service.enqueue_record(
+            background_tasks,
             event_type="user.login.failure",
             actor_type="user",
             success=False,
@@ -205,8 +206,8 @@ async def login(
     try:
         await brute_force_service.ensure_not_locked(str(user.id))
     except BruteForceProtectionError as exc:
-        await audit_service.record(
-            db=db_session,
+        audit_service.enqueue_record(
+            background_tasks,
             event_type="user.login.failure",
             actor_type="user",
             success=False,
@@ -231,8 +232,8 @@ async def login(
                 ip_address=client_ip,
             )
         except BruteForceProtectionError as exc:
-            await audit_service.record(
-                db=db_session,
+            audit_service.enqueue_record(
+                background_tasks,
                 event_type="user.login.failure",
                 actor_type="user",
                 success=False,
@@ -249,8 +250,8 @@ async def login(
             )
 
         if failure_decision.locked:
-            await audit_service.record(
-                db=db_session,
+            audit_service.enqueue_record(
+                background_tasks,
                 event_type="user.locked",
                 actor_type="user",
                 success=False,
@@ -275,8 +276,8 @@ async def login(
                     "distributed_attack": failure_decision.distributed_attack,
                 },
             )
-            await audit_service.record(
-                db=db_session,
+            audit_service.enqueue_record(
+                background_tasks,
                 event_type="user.login.failure",
                 actor_type="user",
                 success=False,
@@ -292,8 +293,8 @@ async def login(
                 headers={"Retry-After": str(failure_decision.retry_after or 1)},
             )
 
-        await audit_service.record(
-            db=db_session,
+        audit_service.enqueue_record(
+            background_tasks,
             event_type="user.login.failure",
             actor_type="user",
             success=False,
@@ -311,8 +312,8 @@ async def login(
     if _password_login_requires_verified_email() and not bool(
         getattr(user, "email_verified", False)
     ):
-        await audit_service.record(
-            db=db_session,
+        audit_service.enqueue_record(
+            background_tasks,
             event_type="user.login.failure",
             actor_type="user",
             success=False,
@@ -344,8 +345,8 @@ async def login(
                 headers=exc.headers,
             )
 
-        await audit_service.record(
-            db=db_session,
+        audit_service.enqueue_record(
+            background_tasks,
             event_type="user.login.otp_required",
             actor_type="user",
             success=True,
@@ -353,8 +354,8 @@ async def login(
             actor_id=challenge.user_id,
             metadata={"provider": "password"},
         )
-        await audit_service.record(
-            db=db_session,
+        audit_service.enqueue_record(
+            background_tasks,
             event_type="otp.sent",
             actor_type="user",
             success=True,
@@ -375,8 +376,8 @@ async def login(
             user_agent=user_agent,
         )
     except BruteForceProtectionError as exc:
-        await audit_service.record(
-            db=db_session,
+        audit_service.enqueue_record(
+            background_tasks,
             event_type="user.login.failure",
             actor_type="user",
             success=False,
@@ -429,8 +430,8 @@ async def login(
         )
         return _error_response(status_code=exc.status_code, detail=exc.detail, code=exc.code)
 
-    await audit_service.record(
-        db=db_session,
+    audit_service.enqueue_record(
+        background_tasks,
         event_type="user.login.success",
         actor_type="user",
         success=True,
@@ -439,8 +440,8 @@ async def login(
         metadata={"provider": "password"},
     )
     if suspicious_login.suspicious:
-        await audit_service.record(
-            db=db_session,
+        audit_service.enqueue_record(
+            background_tasks,
             event_type="user.login.suspicious",
             actor_type="user",
             success=True,
@@ -448,8 +449,8 @@ async def login(
             actor_id=str(user.id),
             metadata={"provider": "password", **suspicious_login.metadata},
         )
-    await audit_service.record(
-        db=db_session,
+    audit_service.enqueue_record(
+        background_tasks,
         event_type="session.created",
         actor_type="user",
         success=True,
@@ -467,8 +468,8 @@ async def login(
             "provider": "password",
         },
     )
-    await audit_service.record(
-        db=db_session,
+    audit_service.enqueue_record(
+        background_tasks,
         event_type="token.issued",
         actor_type="user",
         success=True,

@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi import BackgroundTasks
 from fastapi.requests import Request
 
 import app.core.callable_compat as callable_compat
@@ -56,8 +57,16 @@ def _request(
 
 
 class _AuditStub:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+        self.enqueued_events: list[dict[str, object]] = []
+
     async def record(self, **kwargs: object) -> None:
-        return None
+        self.events.append(dict(kwargs))
+
+    def enqueue_record(self, background_tasks: BackgroundTasks, **kwargs: object) -> None:
+        self.enqueued_events.append(dict(kwargs))
+        background_tasks.add_task(self.record, db=None, **kwargs)
 
 
 class _WebhookStub:
@@ -325,6 +334,7 @@ async def test_auth_helpers_and_login_fail_closed_branches(monkeypatch) -> None:
     response = await auth_router.login(
         payload=LoginRequest(email="missing@example.com", password="Password123!"),
         request=_request(path="/auth/login"),
+        background_tasks=BackgroundTasks(),
         db_session=_db(),  # type: ignore[arg-type]
         user_service=user_service,  # type: ignore[arg-type]
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]
@@ -350,6 +360,7 @@ async def test_auth_helpers_and_login_fail_closed_branches(monkeypatch) -> None:
     locked = await auth_router.login(
         payload=LoginRequest(email="user@example.com", password="Password123!"),
         request=_request(path="/auth/login"),
+        background_tasks=BackgroundTasks(),
         db_session=_db(),  # type: ignore[arg-type]
         user_service=user_service,  # type: ignore[arg-type]
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]
@@ -367,6 +378,7 @@ async def test_auth_helpers_and_login_fail_closed_branches(monkeypatch) -> None:
     login_backend_error = await auth_router.login(
         payload=LoginRequest(email="user@example.com", password="Password123!"),
         request=_request(path="/auth/login"),
+        background_tasks=BackgroundTasks(),
         db_session=_db(),  # type: ignore[arg-type]
         user_service=user_service,  # type: ignore[arg-type]
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]
@@ -397,6 +409,7 @@ async def test_login_allows_unverified_user_when_policy_disabled(monkeypatch) ->
     response = await auth_router.login(
         payload=LoginRequest(email="user@example.com", password="Password123!"),
         request=_request(path="/auth/login"),
+        background_tasks=BackgroundTasks(),
         db_session=_db(),  # type: ignore[arg-type]
         user_service=user_service,  # type: ignore[arg-type]
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]
@@ -409,6 +422,55 @@ async def test_login_allows_unverified_user_when_policy_disabled(monkeypatch) ->
 
     assert response.access_token == "access-token"
     assert response.refresh_token == "refresh-token"
+
+
+@pytest.mark.asyncio
+async def test_login_queues_success_audit_events_in_background_tasks(monkeypatch) -> None:
+    """Successful password login should defer audit writes until background execution."""
+    user_service = _UserServiceStub()
+    user_service.user = SimpleNamespace(
+        id=uuid4(),
+        email="user@example.com",
+        password_hash="hashed",
+        email_verified=True,
+        email_otp_enabled=False,
+        role="user",
+    )
+    user_service.verify_password_result = True
+    background_tasks = BackgroundTasks()
+    audit_service = _AuditStub()
+
+    monkeypatch.setattr(auth_router, "_password_login_requires_verified_email", lambda: True)
+
+    response = await auth_router.login(
+        payload=LoginRequest(email="user@example.com", password="Password123!"),
+        request=_request(path="/auth/login"),
+        background_tasks=background_tasks,
+        db_session=_db(),  # type: ignore[arg-type]
+        user_service=user_service,  # type: ignore[arg-type]
+        token_service=_TokenServiceStub(),  # type: ignore[arg-type]
+        session_service=_SessionStub(),  # type: ignore[arg-type]
+        otp_service=SimpleNamespace(),  # type: ignore[arg-type]
+        brute_force_service=_BruteForceStub(),  # type: ignore[arg-type]
+        audit_service=audit_service,  # type: ignore[arg-type]
+        webhook_service=_WebhookStub(),  # type: ignore[arg-type]
+    )
+
+    assert response.access_token == "access-token"
+    assert audit_service.events == []
+    assert [event["event_type"] for event in audit_service.enqueued_events] == [
+        "user.login.success",
+        "session.created",
+        "token.issued",
+    ]
+
+    await background_tasks()
+
+    assert [event["event_type"] for event in audit_service.events] == [
+        "user.login.success",
+        "session.created",
+        "token.issued",
+    ]
 
 
 @pytest.mark.asyncio
