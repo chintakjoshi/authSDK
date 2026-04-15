@@ -43,6 +43,14 @@ class OAuthServiceError(Exception):
 class OAuthService:
     """Coordinates OAuth state, callback exchange, and identity upsert."""
 
+    _ATOMIC_GET_AND_DELETE_SCRIPT = """
+local value = redis.call("GET", KEYS[1])
+if value then
+    redis.call("DEL", KEYS[1])
+end
+return value
+"""
+
     def __init__(
         self,
         oauth_client: GoogleOAuthClient,
@@ -383,9 +391,7 @@ class OAuthService:
             if hasattr(self._redis, "getdel"):
                 raw_payload = await self._redis.getdel(key)
             else:
-                raw_payload = await self._redis.get(key)
-                if raw_payload is not None:
-                    await self._redis.delete(key)
+                raw_payload = await self._redis.eval(self._ATOMIC_GET_AND_DELETE_SCRIPT, 1, key)
         except RedisError as exc:
             raise OAuthServiceError("OAuth state mismatch.", "oauth_state_mismatch", 503) from exc
 
