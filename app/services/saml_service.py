@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import inspect
 import json
 import secrets
@@ -13,7 +14,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import reloadable_singleton
+from app.config import get_settings, reloadable_singleton
 from app.core.callable_compat import add_supported_kwarg, get_callable_parameter_names
 from app.core.saml import SamlCore, SamlProtocolError, get_saml_core
 from app.core.sessions import SessionService, get_redis_client, get_session_service
@@ -36,6 +37,28 @@ class SamlStateRecord:
     """Serialized SAML request state stored in Redis."""
 
     request_id: str
+    redirect_uri: str | None = None
+    relay_state: str | None = None
+    audience: str | None = None
+
+
+@dataclass(frozen=True)
+class SamlCallbackCompletion:
+    """Completed SAML login result including optional caller context."""
+
+    token_pair: TokenPair
+    redirect_uri: str | None = None
+    relay_state: str | None = None
+
+    @property
+    def access_token(self) -> str:
+        """Expose access token for compatibility with token-pair call sites."""
+        return self.token_pair.access_token
+
+    @property
+    def refresh_token(self) -> str:
+        """Expose refresh token for compatibility with token-pair call sites."""
+        return self.token_pair.refresh_token
 
 
 class SamlService:
@@ -55,11 +78,13 @@ return value
         token_service: TokenService,
         session_service: SessionService,
         redis_client: Redis,
+        allowed_redirect_uris: tuple[str, ...] = (),
     ) -> None:
         self._saml_core = saml_core
         self._token_service = token_service
         self._session_service = session_service
         self._redis = redis_client
+        self._allowed_redirect_uris = allowed_redirect_uris
         self._state_ttl_seconds = 600
 
     def _issue_token_pair(
@@ -71,6 +96,7 @@ return value
         email_verified: bool,
         email_otp_enabled: bool,
         scopes: list[str],
+        audience: str | None = None,
     ):
         """Issue token pair while tolerating legacy test doubles."""
         issue_method = self._token_service.issue_token_pair
@@ -96,10 +122,29 @@ return value
             name="email_otp_enabled",
             value=email_otp_enabled,
         )
+        add_supported_kwarg(
+            kwargs,
+            supported_parameters=supported_parameters,
+            name="audience",
+            value=audience,
+        )
+        add_supported_kwarg(
+            kwargs,
+            supported_parameters=supported_parameters,
+            name="audiences",
+            value=audience,
+        )
         return issue_method(**kwargs)
 
-    async def create_login_url(self, request_data: dict[str, str], relay_state: str | None) -> str:
+    async def create_login_url(
+        self,
+        request_data: dict[str, str],
+        relay_state: str | None,
+        audience: str | None = None,
+    ) -> str:
         """Create SAML login redirect URL."""
+        normalized_relay_state = self._normalize_optional_string(relay_state)
+        redirect_uri = self._resolve_post_auth_redirect_uri(normalized_relay_state)
         try:
             state_token = self._generate_state_token()
             login_request = self._saml_core.login_url(
@@ -110,7 +155,12 @@ return value
             raise SamlServiceError(exc.detail, exc.code, exc.status_code) from exc
         await self._store_state(
             state=state_token,
-            record=SamlStateRecord(request_id=login_request.request_id),
+            record=SamlStateRecord(
+                request_id=login_request.request_id,
+                redirect_uri=redirect_uri,
+                relay_state=None if redirect_uri is not None else normalized_relay_state,
+                audience=self._normalize_optional_string(audience),
+            ),
         )
         return login_request.redirect_url
 
@@ -118,7 +168,7 @@ return value
         self,
         db_session: AsyncSession,
         request_data: dict[str, str],
-    ) -> TokenPair:
+    ) -> SamlCallbackCompletion:
         """Validate SAML assertion, resolve identity, and issue tokens."""
         relay_state = self._extract_relay_state(request_data)
         state_record = await self._consume_state(relay_state)
@@ -144,6 +194,7 @@ return value
             email_verified=user.email_verified,
             email_otp_enabled=user.email_otp_enabled,
             scopes=[],
+            audience=state_record.audience,
         )
         token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
         await self._session_service.create_login_session(
@@ -157,7 +208,11 @@ return value
             raw_access_token=token_pair.access_token,
             raw_refresh_token=token_pair.refresh_token,
         )
-        return token_pair
+        return SamlCallbackCompletion(
+            token_pair=token_pair,
+            redirect_uri=state_record.redirect_uri,
+            relay_state=state_record.relay_state,
+        )
 
     def metadata_xml(self) -> str:
         """Return current SP metadata XML."""
@@ -349,7 +404,14 @@ return value
             await self._redis.setex(
                 self._state_key(state),
                 self._state_ttl_seconds,
-                json.dumps({"request_id": record.request_id}),
+                json.dumps(
+                    {
+                        "request_id": record.request_id,
+                        "redirect_uri": record.redirect_uri,
+                        "relay_state": record.relay_state,
+                        "audience": record.audience,
+                    }
+                ),
             )
         except RedisError as exc:
             raise SamlServiceError(
@@ -405,13 +467,32 @@ return value
         """Build Redis key for one-time SAML request state."""
         return f"saml_state:{state}"
 
+    def _resolve_post_auth_redirect_uri(self, redirect_uri: str | None) -> str | None:
+        """Validate an optional post-auth redirect target against the allowlist."""
+        if redirect_uri is None:
+            return None
+        for allowed in self._allowed_redirect_uris:
+            if hmac.compare_digest(redirect_uri, allowed):
+                return redirect_uri
+        return None
+
+    @staticmethod
+    def _normalize_optional_string(value: str | None) -> str | None:
+        """Normalize optional string inputs and treat blanks as missing."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
 
 @reloadable_singleton
 def get_saml_service() -> SamlService:
     """Create and cache SAML service dependency."""
+    settings = get_settings()
     return SamlService(
         saml_core=get_saml_core(),
         token_service=get_token_service(),
         session_service=get_session_service(),
         redis_client=get_redis_client(),
+        allowed_redirect_uris=tuple(str(uri) for uri in settings.oauth.redirect_uri_allowlist),
     )

@@ -27,17 +27,19 @@ class _SamlCoreStub:
         self.login_error: SamlProtocolError | None = None
         self.parse_error: SamlProtocolError | None = None
         self.metadata_error: SamlProtocolError | None = None
+        self.last_relay_state: str | None = None
 
     def login_url(
         self,
         request_data: dict[str, str],
         relay_state: str | None,
     ) -> SamlLoginRequest:
-        del request_data, relay_state
+        del request_data
         if self.login_error is not None:
             raise self.login_error
+        self.last_relay_state = relay_state
         return SamlLoginRequest(
-            redirect_url="https://idp.example.com/login",
+            redirect_url=f"https://idp.example.com/login?RelayState={relay_state}",
             request_id="request-1",
         )
 
@@ -177,12 +179,14 @@ class _DBSessionStub:
 def _service(
     saml_core: _SamlCoreStub | None = None,
     session_service: _SessionServiceStub | None = None,
+    allowed_redirect_uris: tuple[str, ...] = (),
 ) -> SamlService:
     return SamlService(
         saml_core=saml_core or _SamlCoreStub(),  # type: ignore[arg-type]
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]
         session_service=session_service or _SessionServiceStub(),  # type: ignore[arg-type]
         redis_client=_RedisStub(),  # type: ignore[arg-type]
+        allowed_redirect_uris=allowed_redirect_uris,
     )
 
 
@@ -202,6 +206,43 @@ async def test_create_login_url_and_metadata_map_protocol_failures() -> None:
     with pytest.raises(SamlServiceError) as exc_info:
         service.metadata_xml()
     assert exc_info.value.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_create_login_url_preserves_caller_relay_state_and_requested_audience() -> None:
+    """SAML login initiation should retain caller context even when RelayState is internalized."""
+    saml_core = _SamlCoreStub()
+    service = _service(
+        saml_core=saml_core, allowed_redirect_uris=("https://app.example.com/post-auth",)
+    )
+
+    redirect_url = await service.create_login_url(
+        {},
+        "https://app.example.com/post-auth",
+        audience="orders-api",
+    )
+    relay_state = redirect_url.split("RelayState=", 1)[1]
+    state_record = await service._consume_state(relay_state)
+
+    assert saml_core.last_relay_state == relay_state
+    assert relay_state != "https://app.example.com/post-auth"
+    assert state_record.redirect_uri == "https://app.example.com/post-auth"
+    assert state_record.relay_state is None
+    assert state_record.audience == "orders-api"
+
+
+@pytest.mark.asyncio
+async def test_create_login_url_preserves_opaque_relay_state_when_not_redirect_uri() -> None:
+    """SAML login initiation should keep opaque caller relay state for compatibility."""
+    saml_core = _SamlCoreStub()
+    service = _service(saml_core=saml_core)
+
+    redirect_url = await service.create_login_url({}, "client-flow-state")
+    relay_state = redirect_url.split("RelayState=", 1)[1]
+    state_record = await service._consume_state(relay_state)
+
+    assert state_record.redirect_uri is None
+    assert state_record.relay_state == "client-flow-state"
 
 
 @pytest.mark.asyncio
@@ -240,8 +281,82 @@ async def test_complete_callback_maps_parse_failures_and_creates_session() -> No
         request_data={"post_data": {"SAMLResponse": "ok", "RelayState": "relay-state"}},
     )
 
-    assert result == TokenPair(access_token="access-token", refresh_token="refresh-token")
+    assert result.access_token == "access-token"
+    assert result.refresh_token == "refresh-token"
+    assert result.redirect_uri is None
+    assert result.relay_state is None
     assert session_service.calls[0]["email"] == "saml@example.com"
+
+
+@pytest.mark.asyncio
+async def test_complete_callback_preserves_redirect_context_and_requested_audience() -> None:
+    """SAML callback should issue the requested audience and return caller redirect context."""
+    captured_kwargs: dict[str, object] = {}
+
+    class _AudienceTokenService:
+        async def issue_token_pair(
+            self,
+            *,
+            db_session: object,
+            user_id: str,
+            email: str,
+            role: str,
+            email_verified: bool,
+            email_otp_enabled: bool,
+            scopes: list[str],
+            audience: str | None = None,
+        ) -> TokenPair:
+            captured_kwargs.update(
+                {
+                    "db_session": db_session,
+                    "user_id": user_id,
+                    "email": email,
+                    "role": role,
+                    "email_verified": email_verified,
+                    "email_otp_enabled": email_otp_enabled,
+                    "scopes": scopes,
+                    "audience": audience,
+                }
+            )
+            return TokenPair(access_token="access-token", refresh_token="refresh-token")
+
+    service = SamlService(
+        saml_core=_SamlCoreStub(),  # type: ignore[arg-type]
+        token_service=_AudienceTokenService(),  # type: ignore[arg-type]
+        session_service=_SessionServiceStub(),  # type: ignore[arg-type]
+        redis_client=_RedisStub(),  # type: ignore[arg-type]
+        allowed_redirect_uris=("https://app.example.com/post-auth",),
+    )
+
+    async def _upsert(**kwargs: object) -> _UserStub:
+        return _UserStub(
+            id="user-1",
+            email="saml@example.com",
+            role="user",
+            email_verified=True,
+        )
+
+    service._upsert_identity_then_resolve_user = _upsert  # type: ignore[assignment]
+    await service._store_state(  # type: ignore[attr-defined]
+        state="relay-state",
+        record=SamlStateRecord(
+            request_id="request-1",
+            redirect_uri="https://app.example.com/post-auth",
+            relay_state="client-flow-state",
+            audience="orders-api",
+        ),
+    )
+
+    result = await service.complete_callback(
+        db_session=object(),  # type: ignore[arg-type]
+        request_data={"post_data": {"SAMLResponse": "ok", "RelayState": "relay-state"}},
+    )
+
+    assert result.access_token == "access-token"
+    assert result.refresh_token == "refresh-token"
+    assert result.redirect_uri == "https://app.example.com/post-auth"
+    assert result.relay_state == "client-flow-state"
+    assert captured_kwargs["audience"] == "orders-api"
 
 
 @pytest.mark.asyncio

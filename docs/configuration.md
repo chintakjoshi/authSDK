@@ -24,7 +24,10 @@ Examples:
 
 ```text
 APP__ALLOWED_HOSTS=["auth.example.com","api.auth.example.com"]
-OAUTH__REDIRECT_URI_ALLOWLIST=["https://app.example.com/callback"]
+OAUTH__REDIRECT_URI_ALLOWLIST=[
+  "https://auth.example.com/auth/oauth/google/callback",
+  "https://app.example.com/post-auth"
+]
 ```
 
 ## Required Baseline Settings
@@ -129,6 +132,8 @@ Forbidden in production:
 - `OAUTH__GOOGLE_CLIENT_SECRET`
 - `OAUTH__GOOGLE_REDIRECT_URI`
 - `OAUTH__REDIRECT_URI_ALLOWLIST`
+  include the auth-service Google callback URI and any browser post-auth return
+  URLs that should be accepted for OAuth or SAML completion redirects
 
 ### SAML
 

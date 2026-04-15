@@ -6,6 +6,7 @@ import pytest
 from starlette.responses import Response
 
 from app.core.browser_sessions import (
+    build_cookie_session_redirect_response,
     build_cookie_session_response,
     get_browser_session_settings,
     set_access_cookie,
@@ -60,3 +61,23 @@ def test_build_cookie_session_response_sets_persistent_auth_cookies() -> None:
 
     assert "max-age=900" in access_header.lower()
     assert "max-age=604800" in refresh_header.lower()
+
+
+def test_build_cookie_session_redirect_response_sets_auth_and_csrf_cookies() -> None:
+    """Federated browser completions should redirect while minting session and CSRF cookies."""
+    response = build_cookie_session_redirect_response(
+        redirect_url="https://app.example.com/post-auth",
+        access_token="access-token",
+        refresh_token="refresh-token",
+    )
+
+    settings = get_browser_session_settings()
+    access_header = _header_for_cookie(response, settings.access_cookie_name)
+    refresh_header = _header_for_cookie(response, settings.refresh_cookie_name)
+    csrf_header = _header_for_cookie(response, settings.csrf_cookie_name)
+
+    assert response.status_code == 303
+    assert response.headers["location"] == "https://app.example.com/post-auth"
+    assert "max-age=900" in access_header.lower()
+    assert "max-age=604800" in refresh_header.lower()
+    assert "httponly" not in csrf_header.lower()

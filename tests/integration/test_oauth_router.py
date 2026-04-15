@@ -33,8 +33,13 @@ class _OAuthServiceStub:
         self.login_url = login_url
         self.callback_result = callback_result
 
-    async def build_google_login_url(self, redirect_uri: str | None) -> str:
+    async def build_google_login_url(
+        self,
+        redirect_uri: str | None,
+        audience: str | None = None,
+    ) -> str:
         """Return deterministic login URL for redirect tests."""
+        del redirect_uri, audience
         return self.login_url
 
     async def complete_google_callback(

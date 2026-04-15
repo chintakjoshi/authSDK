@@ -28,9 +28,13 @@ class _TokenPairStub:
 class _OAuthServiceStub:
     """OAuth service stub for router audit tests."""
 
-    async def build_google_login_url(self, redirect_uri: str | None) -> str:
+    async def build_google_login_url(
+        self,
+        redirect_uri: str | None,
+        audience: str | None = None,
+    ) -> str:
         """Return deterministic authorization URL."""
-        del redirect_uri
+        del redirect_uri, audience
         return "https://accounts.google.com/o/oauth2/auth?state=test-state"
 
     async def complete_google_callback(
@@ -47,9 +51,14 @@ class _OAuthServiceStub:
 class _SamlServiceStub:
     """SAML service stub for router audit tests."""
 
-    async def create_login_url(self, request_data: dict[str, str], relay_state: str | None) -> str:
+    async def create_login_url(
+        self,
+        request_data: dict[str, str],
+        relay_state: str | None,
+        audience: str | None = None,
+    ) -> str:
         """Return deterministic IdP redirect URL."""
-        del request_data, relay_state
+        del request_data, relay_state, audience
         return "https://idp.example.com/sso"
 
     async def complete_callback(

@@ -177,12 +177,14 @@ def _build_service(
     oauth_client: _OAuthClientStub | None = None,
     redis_client: _RedisStub | None = None,
     session_service: _SessionServiceStub | None = None,
+    allowed_redirect_uris: tuple[str, ...] = (),
 ) -> OAuthService:
     return OAuthService(
         oauth_client=oauth_client or _OAuthClientStub(),  # type: ignore[arg-type]
         redis_client=redis_client or _RedisStub(),  # type: ignore[arg-type]
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]
         session_service=session_service or _SessionServiceStub(),  # type: ignore[arg-type]
+        allowed_redirect_uris=allowed_redirect_uris,
     )
 
 
@@ -206,6 +208,27 @@ async def test_build_google_login_url_maps_protocol_errors() -> None:
     with pytest.raises(OAuthServiceError) as exc_info:
         await service.build_google_login_url(None)
     assert exc_info.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_build_google_login_url_stores_post_auth_redirect_and_requested_audience() -> None:
+    """OAuth login initiation should preserve caller redirect and requested audience in state."""
+    redis_client = _RedisStub()
+    service = _build_service(
+        redis_client=redis_client,
+        allowed_redirect_uris=("https://app.example.com/post-auth",),
+    )
+
+    authorization_url = await service.build_google_login_url(
+        "https://app.example.com/post-auth",
+        audience="orders-api",
+    )
+    state_record = await service._consume_state("state-1")
+
+    assert "redirect_uri=https://service.local/callback" in authorization_url
+    assert state_record.redirect_uri == "https://service.local/callback"
+    assert state_record.return_redirect_uri == "https://app.example.com/post-auth"
+    assert state_record.audience == "orders-api"
 
 
 @pytest.mark.asyncio
@@ -278,8 +301,83 @@ async def test_complete_google_callback_creates_session_after_successful_upsert(
         code="auth-code",
     )
 
-    assert result == TokenPair(access_token="access-token", refresh_token="refresh-token")
+    assert result.access_token == "access-token"
+    assert result.refresh_token == "refresh-token"
+    assert result.redirect_uri is None
     assert session_service.calls[0]["email"] == "oauth@example.com"
+
+
+@pytest.mark.asyncio
+async def test_complete_google_callback_preserves_redirect_context_and_requested_audience() -> None:
+    """OAuth callback should issue the requested audience and surface redirect context."""
+    captured_kwargs: dict[str, object] = {}
+
+    class _AudienceTokenService:
+        async def issue_token_pair(
+            self,
+            *,
+            db_session: object,
+            user_id: str,
+            email: str,
+            role: str,
+            email_verified: bool,
+            email_otp_enabled: bool,
+            scopes: list[str],
+            audience: str | None = None,
+        ) -> TokenPair:
+            captured_kwargs.update(
+                {
+                    "db_session": db_session,
+                    "user_id": user_id,
+                    "email": email,
+                    "role": role,
+                    "email_verified": email_verified,
+                    "email_otp_enabled": email_otp_enabled,
+                    "scopes": scopes,
+                    "audience": audience,
+                }
+            )
+            return TokenPair(access_token="access-token", refresh_token="refresh-token")
+
+    service = OAuthService(
+        oauth_client=_OAuthClientStub(),  # type: ignore[arg-type]
+        redis_client=_RedisStub(),  # type: ignore[arg-type]
+        token_service=_AudienceTokenService(),  # type: ignore[arg-type]
+        session_service=_SessionServiceStub(),  # type: ignore[arg-type]
+        allowed_redirect_uris=("https://app.example.com/post-auth",),
+    )
+
+    async def _consume_state(state: str) -> OAuthStateRecord:
+        del state
+        return OAuthStateRecord(
+            nonce="nonce-1",
+            code_verifier="verifier-1",
+            redirect_uri="https://service.local/callback",
+            return_redirect_uri="https://app.example.com/post-auth",
+            audience="orders-api",
+        )
+
+    async def _upsert(**kwargs: object) -> _UserStub:
+        return _UserStub(
+            id="user-1",
+            email="oauth@example.com",
+            role="user",
+            email_verified=True,
+        )
+
+    service._consume_state = _consume_state  # type: ignore[assignment]
+    service._upsert_identity_then_resolve_user = _upsert  # type: ignore[assignment]
+
+    result = await service.complete_google_callback(
+        db_session=object(),  # type: ignore[arg-type]
+        state="state-1",
+        code="auth-code",
+    )
+
+    assert result.access_token == "access-token"
+    assert result.refresh_token == "refresh-token"
+    assert result.redirect_uri == "https://app.example.com/post-auth"
+    assert captured_kwargs["audience"] == "orders-api"
 
 
 @pytest.mark.asyncio
