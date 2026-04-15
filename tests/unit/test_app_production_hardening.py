@@ -6,6 +6,7 @@ import importlib
 
 import pytest
 from fastapi import HTTPException, Request
+from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 
 from app.config import Settings, get_settings
@@ -255,5 +256,38 @@ async def test_create_app_serves_swagger_ui_with_docs_csp_when_explicitly_enable
         "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net"
         in docs_response.headers["content-security-policy"]
     )
+
+    get_settings.cache_clear()
+
+
+def test_create_app_lifespan_invokes_shutdown_singleton_cleanup(monkeypatch) -> None:
+    """Application lifespan should invoke singleton cleanup on shutdown."""
+    settings = _production_settings()
+    _seed_production_env(monkeypatch)
+    get_settings.cache_clear()
+
+    import app.main as main_module
+
+    main_module = importlib.reload(main_module)
+    shutdown_calls = {"count": 0}
+
+    async def _fake_shutdown() -> None:
+        shutdown_calls["count"] += 1
+
+    monkeypatch.setattr(main_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(main_module, "configure_structlog", lambda current_settings: None)
+    monkeypatch.setattr(main_module, "shutdown_reloadable_singletons", _fake_shutdown)
+    monkeypatch.setattr("app.middleware.rate_limit.get_settings", lambda: settings)
+    monkeypatch.setattr(
+        "app.middleware.rate_limit.get_rate_limit_redis_client",
+        lambda: _NoopRateLimitRedis(),
+    )
+
+    app = main_module.create_app()
+
+    with TestClient(app):
+        pass
+
+    assert shutdown_calls["count"] == 1
 
     get_settings.cache_clear()
