@@ -51,6 +51,34 @@ services:
     networks:
       - backend
 
+  jwt-key-bootstrap:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: auth-service:local
+    env_file:
+      - path: ../.env-sample
+        required: true
+      - path: ../.env
+        required: false
+    user: root
+    command:
+      - python
+      - -m
+      - app.runtime.shared_jwt_keys
+      - --key-dir
+      - /var/run/auth-service/jwt
+      - --init-only
+      - --owner-uid
+      - "10001"
+      - --owner-gid
+      - "10001"
+    restart: "no"
+    volumes:
+      - shared_jwt_keys:/var/run/auth-service/jwt
+    networks:
+      - backend
+
   auth-service:
     build:
       context: ..
@@ -62,6 +90,8 @@ services:
       - path: ../.env
         required: false
     depends_on:
+      jwt-key-bootstrap:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -106,17 +136,14 @@ services:
       WEBHOOK__WORKER_TTL_SECONDS: "${WEBHOOK__WORKER_TTL_SECONDS:-120}"
       WEBHOOK__REDIS_HEALTH_CHECK_INTERVAL_SECONDS: "${WEBHOOK__REDIS_HEALTH_CHECK_INTERVAL_SECONDS:-30}"
       WEBHOOK__SECRET_ENCRYPTION_KEY: ${WEBHOOK__SECRET_ENCRYPTION_KEY:-local-dev-webhook-secret-encryption-key}
-    command: >
-      /bin/sh -c '
-      if [ -z "$$JWT__PRIVATE_KEY_PEM" ] || [ -z "$$JWT__PUBLIC_KEY_PEM" ]; then
-        openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/private.pem &&
-        openssl rsa -pubout -in /tmp/private.pem -out /tmp/public.pem &&
-        export JWT__PRIVATE_KEY_PEM="$$(cat /tmp/private.pem)" &&
-        export JWT__PUBLIC_KEY_PEM="$$(cat /tmp/public.pem)";
-      fi;
-      alembic upgrade head &&
-      uvicorn app.main:app --host 0.0.0.0 --port $${APP__PORT:-8000}
-      '
+    command:
+      - python
+      - -m
+      - app.runtime.shared_jwt_keys
+      - --key-dir
+      - /var/run/auth-service/jwt
+      - --shell-command
+      - alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $${APP__PORT:-8000}
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:$${APP__PORT:-8000}/health/ready"]
       interval: 10s
@@ -125,6 +152,8 @@ services:
       start_period: 20s
     ports:
       - "${APP__PORT:-8000}:${APP__PORT:-8000}"
+    volumes:
+      - shared_jwt_keys:/var/run/auth-service/jwt:ro
     networks:
       - backend
 
@@ -139,6 +168,8 @@ services:
     depends_on:
       auth-service:
         condition: service_healthy
+      jwt-key-bootstrap:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -184,16 +215,16 @@ services:
       WEBHOOK__WORKER_TTL_SECONDS: "${WEBHOOK__WORKER_TTL_SECONDS:-120}"
       WEBHOOK__REDIS_HEALTH_CHECK_INTERVAL_SECONDS: "${WEBHOOK__REDIS_HEALTH_CHECK_INTERVAL_SECONDS:-30}"
       WEBHOOK__SECRET_ENCRYPTION_KEY: ${WEBHOOK__SECRET_ENCRYPTION_KEY:-local-dev-webhook-secret-encryption-key}
-    command: >
-      /bin/sh -c '
-      if [ -z "$$JWT__PRIVATE_KEY_PEM" ] || [ -z "$$JWT__PUBLIC_KEY_PEM" ]; then
-        openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/private.pem &&
-        openssl rsa -pubout -in /tmp/private.pem -out /tmp/public.pem &&
-        export JWT__PRIVATE_KEY_PEM="$$(cat /tmp/private.pem)" &&
-        export JWT__PUBLIC_KEY_PEM="$$(cat /tmp/public.pem)";
-      fi;
-      python worker.py
-      '
+    command:
+      - python
+      - -m
+      - app.runtime.shared_jwt_keys
+      - --key-dir
+      - /var/run/auth-service/jwt
+      - --shell-command
+      - python worker.py
+    volumes:
+      - shared_jwt_keys:/var/run/auth-service/jwt:ro
     networks:
       - backend
 
@@ -208,6 +239,8 @@ services:
     depends_on:
       auth-service:
         condition: service_healthy
+      jwt-key-bootstrap:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
@@ -253,21 +286,22 @@ services:
       WEBHOOK__WORKER_TTL_SECONDS: "${WEBHOOK__WORKER_TTL_SECONDS:-120}"
       WEBHOOK__REDIS_HEALTH_CHECK_INTERVAL_SECONDS: "${WEBHOOK__REDIS_HEALTH_CHECK_INTERVAL_SECONDS:-30}"
       WEBHOOK__SECRET_ENCRYPTION_KEY: ${WEBHOOK__SECRET_ENCRYPTION_KEY:-local-dev-webhook-secret-encryption-key}
-    command: >
-      /bin/sh -c '
-      if [ -z "$$JWT__PRIVATE_KEY_PEM" ] || [ -z "$$JWT__PUBLIC_KEY_PEM" ]; then
-        openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /tmp/private.pem &&
-        openssl rsa -pubout -in /tmp/private.pem -out /tmp/public.pem &&
-        export JWT__PRIVATE_KEY_PEM="$$(cat /tmp/private.pem)" &&
-        export JWT__PUBLIC_KEY_PEM="$$(cat /tmp/public.pem)";
-      fi;
-      python scheduler.py
-      '
+    command:
+      - python
+      - -m
+      - app.runtime.shared_jwt_keys
+      - --key-dir
+      - /var/run/auth-service/jwt
+      - --shell-command
+      - python scheduler.py
+    volumes:
+      - shared_jwt_keys:/var/run/auth-service/jwt:ro
     networks:
       - backend
 
 volumes:
   postgres_data:
+  shared_jwt_keys:
 
 networks:
   backend:
