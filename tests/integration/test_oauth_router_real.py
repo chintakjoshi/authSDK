@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from http.cookies import SimpleCookie
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -80,7 +81,29 @@ def _build_oauth_service() -> OAuthService:
         redis_client=get_redis_client(),
         token_service=get_token_service(),
         session_service=get_session_service(),
+        allowed_redirect_uris=(),
     )
+
+
+def _build_oauth_service_with_redirects(*allowed_redirect_uris: str) -> OAuthService:
+    """Build OAuth service with explicit post-auth redirect allowlist for browser-flow tests."""
+    return OAuthService(
+        oauth_client=_OAuthClientStub(),
+        redis_client=get_redis_client(),
+        token_service=get_token_service(),
+        session_service=get_session_service(),
+        allowed_redirect_uris=allowed_redirect_uris,
+    )
+
+
+def _cookie_value(response, cookie_name: str) -> str:
+    """Extract one cookie value from the response Set-Cookie headers."""
+    for header in response.headers.get_list("set-cookie"):
+        parsed = SimpleCookie()
+        parsed.load(header)
+        if cookie_name in parsed:
+            return parsed[cookie_name].value
+    raise AssertionError(f"Missing Set-Cookie header for {cookie_name}.")
 
 
 @pytest.mark.asyncio
@@ -113,6 +136,52 @@ async def test_oauth_google_login_and_callback_success(app_factory, db_session) 
         )
     ).scalar_one()
     assert user.email_verified is True
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_oauth_google_callback_redirects_browser_flow_with_requested_audience(
+    app_factory,
+) -> None:
+    """OAuth browser flows should set cookies, preserve caller redirect, and honor audience."""
+    app: FastAPI = app_factory()
+    app.dependency_overrides[get_oauth_service] = lambda: _build_oauth_service_with_redirects(
+        "http://app.example.com/post-auth"
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        login_response = await client.get(
+            "/auth/oauth/google/login",
+            params={
+                "redirect_uri": "http://app.example.com/post-auth",
+                "audience": "orders-api",
+            },
+        )
+        state = parse_qs(urlparse(login_response.headers["location"]).query)["state"][0]
+
+        callback_response = await client.get(
+            "/auth/oauth/google/callback",
+            params={"state": state, "code": "oauthcode"},
+        )
+
+    assert callback_response.status_code == 303
+    assert callback_response.headers["location"] == "http://app.example.com/post-auth"
+
+    access_cookie = _cookie_value(callback_response, "auth_access")
+    refresh_cookie = _cookie_value(callback_response, "auth_refresh")
+    csrf_cookie = _cookie_value(callback_response, "auth_csrf")
+
+    assert access_cookie
+    assert refresh_cookie
+    assert csrf_cookie
+    claims = get_jwt_service().verify_token(
+        access_cookie,
+        expected_type="access",
+        expected_audience="orders-api",
+    )
+    assert claims["email_verified"] is True
     app.dependency_overrides.clear()
 
 

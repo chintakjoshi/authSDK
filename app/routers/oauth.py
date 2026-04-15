@@ -8,6 +8,10 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.browser_sessions import (
+    build_cookie_session_redirect_response,
+    get_browser_session_settings,
+)
 from app.dependencies import get_database_session
 from app.schemas.token import TokenPairResponse
 from app.services.audit_service import AuditService, get_audit_service
@@ -22,6 +26,14 @@ def _error_response(status_code: int, detail: str, code: str) -> JSONResponse:
     return JSONResponse(status_code=status_code, content={"detail": detail, "code": code})
 
 
+def _normalized_optional_attr(value: object) -> str | None:
+    """Normalize optional redirect-like attributes without stringifying None."""
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 @router.get("/google/login")
 async def google_login(
     request: Request,
@@ -29,10 +41,14 @@ async def google_login(
     oauth_service: Annotated[OAuthService, Depends(get_oauth_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
     redirect_uri: Annotated[str | None, Query()] = None,
+    audience: Annotated[str | None, Query(min_length=1, max_length=255)] = None,
 ) -> Response:
     """Initiate Google OAuth flow with server-side state storage."""
     try:
-        authorization_url = await oauth_service.build_google_login_url(redirect_uri=redirect_uri)
+        authorization_url = await oauth_service.build_google_login_url(
+            redirect_uri=redirect_uri,
+            audience=audience,
+        )
     except OAuthServiceError as exc:
         await audit_service.record(
             db=db_session,
@@ -59,7 +75,7 @@ async def google_callback(
 ) -> TokenPairResponse | JSONResponse:
     """Complete Google OAuth callback and issue auth tokens."""
     try:
-        token_pair = await oauth_service.complete_google_callback(
+        completion = await oauth_service.complete_google_callback(
             db_session=db_session,
             state=state,
             code=code,
@@ -104,7 +120,14 @@ async def google_callback(
         request=request,
         metadata={"provider": "google", "token_kind": "access_refresh_pair"},
     )
+    redirect_uri = _normalized_optional_attr(getattr(completion, "redirect_uri", None))
+    if redirect_uri is not None and get_browser_session_settings().enabled:
+        return build_cookie_session_redirect_response(
+            redirect_url=redirect_uri,
+            access_token=completion.access_token,
+            refresh_token=completion.refresh_token,
+        )
     return TokenPairResponse(
-        access_token=token_pair.access_token,
-        refresh_token=token_pair.refresh_token,
+        access_token=completion.access_token,
+        refresh_token=completion.refresh_token,
     )

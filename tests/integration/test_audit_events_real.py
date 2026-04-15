@@ -74,8 +74,12 @@ class _OAuthClientStub:
 class _FailingOAuthService:
     """OAuth service stub that fails login start."""
 
-    async def build_google_login_url(self, redirect_uri: str | None) -> str:
-        del redirect_uri
+    async def build_google_login_url(
+        self,
+        redirect_uri: str | None,
+        audience: str | None = None,
+    ) -> str:
+        del redirect_uri, audience
         raise OAuthServiceError("OAuth state mismatch.", "oauth_state_mismatch", 503)
 
     async def complete_google_callback(self, db_session: AsyncSession, state: str, code: str):

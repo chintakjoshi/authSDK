@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from http.cookies import SimpleCookie
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 
+from app.core.jwt import get_jwt_service
 from app.core.saml import SamlAssertion, SamlLoginRequest, SamlProtocolError
 from app.core.sessions import get_redis_client, get_session_service
 from app.models.user import User, UserIdentity
@@ -60,7 +63,29 @@ def _build_saml_service(mode: str = "success") -> SamlService:
         token_service=get_token_service(),
         session_service=get_session_service(),
         redis_client=get_redis_client(),
+        allowed_redirect_uris=(),
     )
+
+
+def _build_saml_service_with_redirects(*allowed_redirect_uris: str) -> SamlService:
+    """Build SAML service with an explicit browser redirect allowlist."""
+    return SamlService(
+        saml_core=_SamlCoreStub(mode="success"),
+        token_service=get_token_service(),
+        session_service=get_session_service(),
+        redis_client=get_redis_client(),
+        allowed_redirect_uris=allowed_redirect_uris,
+    )
+
+
+def _cookie_value(response, cookie_name: str) -> str:
+    """Extract one cookie value from the response Set-Cookie headers."""
+    for header in response.headers.get_list("set-cookie"):
+        parsed = SimpleCookie()
+        parsed.load(header)
+        if cookie_name in parsed:
+            return parsed[cookie_name].value
+    raise AssertionError(f"Missing Set-Cookie header for {cookie_name}.")
 
 
 @pytest.mark.asyncio
@@ -89,6 +114,53 @@ async def test_saml_login_callback_and_metadata_success(app_factory) -> None:
 
     assert metadata_response.status_code == 200
     assert "X509Certificate" in metadata_response.text
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_saml_callback_redirects_browser_flow_and_honors_requested_audience(
+    app_factory,
+) -> None:
+    """SAML browser flows should preserve caller relay context, set cookies, and honor audience."""
+    app: FastAPI = app_factory()
+    app.dependency_overrides[get_saml_service] = lambda: _build_saml_service_with_redirects(
+        "http://app.example.com/post-auth"
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        login_response = await client.get(
+            "/auth/saml/login",
+            params={
+                "relay_state": "http://app.example.com/post-auth",
+                "audience": "orders-api",
+            },
+        )
+        relay_state = parse_qs(urlparse(login_response.headers["location"]).query)["RelayState"][0]
+        assert relay_state != "http://app.example.com/post-auth"
+
+        callback_response = await client.post(
+            "/auth/saml/callback",
+            content=f"SAMLResponse=fake&RelayState={relay_state}",
+            headers={"content-type": "application/x-www-form-urlencoded"},
+        )
+
+    assert callback_response.status_code == 303
+    assert callback_response.headers["location"] == "http://app.example.com/post-auth"
+
+    access_cookie = _cookie_value(callback_response, "auth_access")
+    refresh_cookie = _cookie_value(callback_response, "auth_refresh")
+    csrf_cookie = _cookie_value(callback_response, "auth_csrf")
+
+    assert access_cookie
+    assert refresh_cookie
+    assert csrf_cookie
+    get_jwt_service().verify_token(
+        access_cookie,
+        expected_type="access",
+        expected_audience="orders-api",
+    )
     app.dependency_overrides.clear()
 
 

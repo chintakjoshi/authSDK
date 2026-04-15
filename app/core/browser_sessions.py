@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from fastapi import Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.responses import Response
 
 from app.config import get_settings
@@ -298,4 +298,19 @@ def build_cookie_reauth_response(*, access_token: str, status_code: int = 200) -
         content={"authenticated": True, "session_transport": "cookie"},
     )
     set_access_cookie(response, access_token)
+    return response
+
+
+def build_cookie_session_redirect_response(
+    *,
+    redirect_url: str,
+    access_token: str,
+    refresh_token: str,
+    status_code: int = 303,
+) -> RedirectResponse:
+    """Build a redirect response that also establishes browser-session cookies."""
+    response = RedirectResponse(url=redirect_url, status_code=status_code)
+    set_access_cookie(response, access_token)
+    set_refresh_cookie(response, refresh_token)
+    set_csrf_cookie(response, mint_csrf_token())
     return response

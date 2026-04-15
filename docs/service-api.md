@@ -68,6 +68,19 @@ Application errors follow the same basic structure:
 - `GET /auth/saml/login`
 - `GET /auth/saml/metadata`
 
+Federated browser-flow notes:
+
+- `GET /auth/oauth/google/login` accepts optional `redirect_uri` and `audience`
+  query params
+- `GET /auth/saml/login` accepts optional `relay_state` and `audience` query
+  params
+- when browser sessions are enabled and caller redirect context is supplied,
+  the callback completes by setting auth cookies and returning `303 See Other`
+  to the caller instead of a raw JSON token pair
+- OAuth validates `redirect_uri` against the configured allowlist
+- SAML preserves opaque `relay_state`; when `relay_state` is an allowlisted
+  absolute URL, it is treated as the browser return target
+
 ### User API Keys
 
 - `POST /auth/apikeys`

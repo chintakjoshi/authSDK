@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import inspect
 import json
 from dataclasses import dataclass
@@ -13,7 +14,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import reloadable_singleton
+from app.config import get_settings, reloadable_singleton
 from app.core.callable_compat import add_supported_kwarg, get_callable_parameter_names
 from app.core.oauth import GoogleOAuthClient, OAuthProtocolError, get_google_oauth_client
 from app.core.sessions import SessionService, get_redis_client, get_session_service
@@ -28,6 +29,26 @@ class OAuthStateRecord:
     nonce: str
     code_verifier: str
     redirect_uri: str
+    return_redirect_uri: str | None = None
+    audience: str | None = None
+
+
+@dataclass(frozen=True)
+class OAuthCallbackCompletion:
+    """Completed OAuth login result including optional caller redirect context."""
+
+    token_pair: TokenPair
+    redirect_uri: str | None = None
+
+    @property
+    def access_token(self) -> str:
+        """Expose access token for compatibility with token-pair call sites."""
+        return self.token_pair.access_token
+
+    @property
+    def refresh_token(self) -> str:
+        """Expose refresh token for compatibility with token-pair call sites."""
+        return self.token_pair.refresh_token
 
 
 class OAuthServiceError(Exception):
@@ -57,11 +78,13 @@ return value
         redis_client: Redis,
         token_service: TokenService,
         session_service: SessionService,
+        allowed_redirect_uris: tuple[str, ...] = (),
     ) -> None:
         self._oauth_client = oauth_client
         self._redis = redis_client
         self._token_service = token_service
         self._session_service = session_service
+        self._allowed_redirect_uris = allowed_redirect_uris
         self._state_ttl_seconds = 600
 
     def _issue_token_pair(
@@ -73,6 +96,7 @@ return value
         email_verified: bool,
         email_otp_enabled: bool,
         scopes: list[str],
+        audience: str | None = None,
     ):
         """Issue token pair while tolerating legacy test doubles."""
         issue_method = self._token_service.issue_token_pair
@@ -98,12 +122,28 @@ return value
             name="email_otp_enabled",
             value=email_otp_enabled,
         )
+        add_supported_kwarg(
+            kwargs,
+            supported_parameters=supported_parameters,
+            name="audience",
+            value=audience,
+        )
+        add_supported_kwarg(
+            kwargs,
+            supported_parameters=supported_parameters,
+            name="audiences",
+            value=audience,
+        )
         return issue_method(**kwargs)
 
-    async def build_google_login_url(self, redirect_uri: str | None) -> str:
+    async def build_google_login_url(
+        self,
+        redirect_uri: str | None,
+        audience: str | None = None,
+    ) -> str:
         """Create Google login URL and persist one-time state in Redis."""
         try:
-            resolved_redirect_uri = self._oauth_client.resolve_redirect_uri(redirect_uri)
+            provider_redirect_uri = self._oauth_client.resolve_redirect_uri(None)
             state = self._oauth_client.generate_state()
             nonce = self._oauth_client.generate_nonce()
             code_verifier = self._oauth_client.generate_code_verifier()
@@ -112,7 +152,9 @@ return value
         state_record = OAuthStateRecord(
             nonce=nonce,
             code_verifier=code_verifier,
-            redirect_uri=resolved_redirect_uri,
+            redirect_uri=provider_redirect_uri,
+            return_redirect_uri=self._resolve_post_auth_redirect_uri(redirect_uri),
+            audience=self._normalize_optional_string(audience),
         )
         await self._store_state(state=state, record=state_record)
         try:
@@ -120,7 +162,7 @@ return value
                 state=state,
                 nonce=nonce,
                 code_verifier=code_verifier,
-                redirect_uri=resolved_redirect_uri,
+                redirect_uri=provider_redirect_uri,
             )
         except OAuthProtocolError as exc:
             raise OAuthServiceError(exc.detail, exc.code, exc.status_code) from exc
@@ -130,17 +172,14 @@ return value
         db_session: AsyncSession,
         state: str,
         code: str,
-    ) -> TokenPair:
+    ) -> OAuthCallbackCompletion:
         """Complete OAuth callback and return access/refresh token pair."""
         state_record = await self._consume_state(state=state)
         try:
-            resolved_redirect_uri = self._oauth_client.resolve_redirect_uri(
-                state_record.redirect_uri
-            )
             token_payload = await self._oauth_client.exchange_code_for_tokens(
                 code=code,
                 code_verifier=state_record.code_verifier,
-                redirect_uri=resolved_redirect_uri,
+                redirect_uri=state_record.redirect_uri,
             )
         except OAuthProtocolError as exc:
             raise OAuthServiceError(exc.detail, exc.code, exc.status_code) from exc
@@ -174,6 +213,7 @@ return value
             email_verified=user.email_verified,
             email_otp_enabled=user.email_otp_enabled,
             scopes=[],
+            audience=state_record.audience,
         )
         token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
         await self._session_service.create_login_session(
@@ -187,7 +227,10 @@ return value
             raw_access_token=token_pair.access_token,
             raw_refresh_token=token_pair.refresh_token,
         )
-        return token_pair
+        return OAuthCallbackCompletion(
+            token_pair=token_pair,
+            redirect_uri=state_record.return_redirect_uri,
+        )
 
     async def _upsert_identity_then_resolve_user(
         self,
@@ -378,6 +421,8 @@ return value
                         "nonce": record.nonce,
                         "code_verifier": record.code_verifier,
                         "redirect_uri": record.redirect_uri,
+                        "return_redirect_uri": record.return_redirect_uri,
+                        "audience": record.audience,
                     }
                 ),
             )
@@ -408,13 +453,33 @@ return value
         """Build Redis key for OAuth state payload."""
         return f"oauth_state:{state}"
 
+    def _resolve_post_auth_redirect_uri(self, redirect_uri: str | None) -> str | None:
+        """Validate an optional post-auth redirect target against the allowlist."""
+        candidate = self._normalize_optional_string(redirect_uri)
+        if candidate is None:
+            return None
+        for allowed in self._allowed_redirect_uris:
+            if hmac.compare_digest(candidate, allowed):
+                return candidate
+        raise OAuthServiceError("Invalid redirect URI.", "invalid_credentials", 400)
+
+    @staticmethod
+    def _normalize_optional_string(value: str | None) -> str | None:
+        """Normalize optional string inputs and treat blanks as missing."""
+        if value is None:
+            return None
+        normalized = value.strip()
+        return normalized or None
+
 
 @reloadable_singleton
 def get_oauth_service() -> OAuthService:
     """Build and cache OAuth service dependencies."""
+    settings = get_settings()
     return OAuthService(
         oauth_client=get_google_oauth_client(),
         redis_client=get_redis_client(),
         token_service=get_token_service(),
         session_service=get_session_service(),
+        allowed_redirect_uris=tuple(str(uri) for uri in settings.oauth.redirect_uri_allowlist),
     )
