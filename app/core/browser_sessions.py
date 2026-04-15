@@ -33,6 +33,8 @@ class BrowserSessionRuntimeSettings:
     refresh_cookie_path: str
     csrf_cookie_path: str
     csrf_header_name: str
+    access_cookie_max_age_seconds: int
+    refresh_cookie_max_age_seconds: int
 
 
 def _default_settings(*, enabled: bool) -> BrowserSessionRuntimeSettings:
@@ -51,6 +53,8 @@ def _default_settings(*, enabled: bool) -> BrowserSessionRuntimeSettings:
         refresh_cookie_path="/",
         csrf_cookie_path="/",
         csrf_header_name="X-CSRF-Token",
+        access_cookie_max_age_seconds=900,
+        refresh_cookie_max_age_seconds=604800,
     )
 
 
@@ -76,6 +80,8 @@ def get_browser_session_settings() -> BrowserSessionRuntimeSettings:
         refresh_cookie_path=browser_sessions.refresh_cookie_path,
         csrf_cookie_path=browser_sessions.csrf_cookie_path,
         csrf_header_name=browser_sessions.csrf_header_name,
+        access_cookie_max_age_seconds=settings.jwt.access_token_ttl_seconds,
+        refresh_cookie_max_age_seconds=settings.jwt.refresh_token_ttl_seconds,
     )
 
 
@@ -210,6 +216,7 @@ def set_access_cookie(response: Response, access_token: str) -> None:
     response.set_cookie(
         key=settings.access_cookie_name,
         value=access_token,
+        max_age=settings.access_cookie_max_age_seconds,
         httponly=True,
         secure=settings.secure_only,
         samesite=settings.same_site,
@@ -224,6 +231,7 @@ def set_refresh_cookie(response: Response, refresh_token: str) -> None:
     response.set_cookie(
         key=settings.refresh_cookie_name,
         value=refresh_token,
+        max_age=settings.refresh_cookie_max_age_seconds,
         httponly=True,
         secure=settings.secure_only,
         samesite=settings.same_site,
