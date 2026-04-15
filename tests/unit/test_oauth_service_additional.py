@@ -79,8 +79,10 @@ class _RedisStub:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
         self.fail_on_setex = False
-        self.fail_on_get = False
+        self.fail_on_eval = False
         self.deleted: list[str] = []
+        self.get_calls: list[str] = []
+        self.eval_calls: list[tuple[str, int, tuple[object, ...]]] = []
 
     async def setex(self, key: str, ttl: int, value: str) -> bool:
         del ttl
@@ -90,14 +92,21 @@ class _RedisStub:
         return True
 
     async def get(self, key: str) -> str | None:
-        if self.fail_on_get:
-            raise RedisError("redis unavailable")
+        self.get_calls.append(key)
         return self.values.get(key)
 
     async def delete(self, key: str) -> int:
         self.deleted.append(key)
         self.values.pop(key, None)
         return 1
+
+    async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> str | None:
+        if self.fail_on_eval:
+            raise RedisError("redis unavailable")
+        self.eval_calls.append((script, numkeys, keys_and_args))
+        assert numkeys == 1
+        key = str(keys_and_args[0])
+        return self.values.pop(key, None)
 
 
 class _TokenServiceStub:
@@ -289,6 +298,11 @@ async def test_store_and_consume_state_fail_closed_on_redis_or_bad_payload() -> 
     )
     record = await service._consume_state("state-1")
     assert record.redirect_uri == "https://service.local/callback"
+    assert redis_client.get_calls == []
+    assert redis_client.deleted == []
+    assert len(redis_client.eval_calls) == 1
+    assert redis_client.eval_calls[0][1] == 1
+    assert redis_client.eval_calls[0][2] == ("oauth_state:state-1",)
 
     redis_client.fail_on_setex = True
     with pytest.raises(OAuthServiceError) as exc_info:
@@ -308,7 +322,7 @@ async def test_store_and_consume_state_fail_closed_on_redis_or_bad_payload() -> 
         await service._consume_state("bad")
     assert exc_info.value.status_code == 401
 
-    redis_client.fail_on_get = True
+    redis_client.fail_on_eval = True
     with pytest.raises(OAuthServiceError) as exc_info:
         await service._consume_state("state-3")
     assert exc_info.value.status_code == 503

@@ -6,6 +6,7 @@ import inspect
 from dataclasses import dataclass
 
 import pytest
+from redis.exceptions import RedisError
 
 import app.core.callable_compat as callable_compat
 from app.core.saml import SamlAssertion, SamlLoginRequest, SamlProtocolError
@@ -94,6 +95,37 @@ class _RedisStub:
 
     async def delete(self, key: str) -> None:
         self.values.pop(key, None)
+
+
+class _RedisFallbackStub:
+    """Redis stub exercising the no-GETDEL atomic fallback path."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+        self.fail_on_eval = False
+        self.get_calls: list[str] = []
+        self.deleted: list[str] = []
+        self.eval_calls: list[tuple[str, int, tuple[object, ...]]] = []
+
+    async def setex(self, key: str, ttl_seconds: int, value: str) -> None:
+        del ttl_seconds
+        self.values[key] = value
+
+    async def get(self, key: str) -> str | None:
+        self.get_calls.append(key)
+        return self.values.get(key)
+
+    async def delete(self, key: str) -> None:
+        self.deleted.append(key)
+        self.values.pop(key, None)
+
+    async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> str | None:
+        if self.fail_on_eval:
+            raise RedisError("redis unavailable")
+        self.eval_calls.append((script, numkeys, keys_and_args))
+        assert numkeys == 1
+        key = str(keys_and_args[0])
+        return self.values.pop(key, None)
 
 
 @dataclass
@@ -210,6 +242,45 @@ async def test_complete_callback_maps_parse_failures_and_creates_session() -> No
 
     assert result == TokenPair(access_token="access-token", refresh_token="refresh-token")
     assert session_service.calls[0]["email"] == "saml@example.com"
+
+
+@pytest.mark.asyncio
+async def test_store_and_consume_state_uses_atomic_eval_fallback_without_getdel() -> None:
+    """SAML state fallback should use one atomic Redis operation when GETDEL is unavailable."""
+    redis_client = _RedisFallbackStub()
+    service = SamlService(
+        saml_core=_SamlCoreStub(),  # type: ignore[arg-type]
+        token_service=_TokenServiceStub(),  # type: ignore[arg-type]
+        session_service=_SessionServiceStub(),  # type: ignore[arg-type]
+        redis_client=redis_client,  # type: ignore[arg-type]
+    )
+
+    await service._store_state(  # type: ignore[attr-defined]
+        state="relay-state",
+        record=SamlStateRecord(request_id="request-1"),
+    )
+    record = await service._consume_state("relay-state")
+    assert record.request_id == "request-1"
+    assert redis_client.get_calls == []
+    assert redis_client.deleted == []
+    assert len(redis_client.eval_calls) == 1
+    assert redis_client.eval_calls[0][1] == 1
+    assert redis_client.eval_calls[0][2] == ("saml_state:relay-state",)
+
+    with pytest.raises(SamlServiceError) as exc_info:
+        await service._consume_state("relay-state")
+    assert exc_info.value.status_code == 401
+
+    redis_client.values["saml_state:bad"] = "{not-json"
+    with pytest.raises(SamlServiceError) as exc_info:
+        await service._consume_state("bad")
+    assert exc_info.value.status_code == 401
+
+    redis_client.fail_on_eval = True
+    with pytest.raises(SamlServiceError) as exc_info:
+        await service._consume_state("missing")
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.code == "saml_assertion_invalid"
 
 
 def test_issue_token_pair_caches_signature_inspection(monkeypatch: pytest.MonkeyPatch) -> None:

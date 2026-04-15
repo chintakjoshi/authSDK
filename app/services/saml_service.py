@@ -41,6 +41,14 @@ class SamlStateRecord:
 class SamlService:
     """Coordinates SAML protocol flow with user/session issuance."""
 
+    _ATOMIC_GET_AND_DELETE_SCRIPT = """
+local value = redis.call("GET", KEYS[1])
+if value then
+    redis.call("DEL", KEYS[1])
+end
+return value
+"""
+
     def __init__(
         self,
         saml_core: SamlCore,
@@ -357,9 +365,7 @@ class SamlService:
             if hasattr(self._redis, "getdel"):
                 raw_payload = await self._redis.getdel(key)
             else:
-                raw_payload = await self._redis.get(key)
-                if raw_payload is not None:
-                    await self._redis.delete(key)
+                raw_payload = await self._redis.eval(self._ATOMIC_GET_AND_DELETE_SCRIPT, 1, key)
         except RedisError as exc:
             raise SamlServiceError(
                 "SAML assertion invalid.",
