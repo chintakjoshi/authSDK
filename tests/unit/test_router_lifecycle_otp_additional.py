@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -562,3 +563,35 @@ async def test_verify_login_otp_infers_cookie_transport_without_transport_header
 
     assert response.status_code == 200
     assert response.body == b'{"authenticated":true,"session_transport":"cookie"}'
+
+
+@pytest.mark.asyncio
+async def test_request_action_otp_rejects_conflicting_bearer_and_cookie_auth() -> None:
+    """Mixed bearer-plus-cookie auth should be rejected before OTP action handling."""
+    settings = get_browser_session_settings()
+    response = await otp_router.request_action_otp(
+        payload=RequestActionOTPRequest(action="enable_otp"),
+        request=_request(
+            path="/auth/otp/request/action",
+            headers={
+                "authorization": "Bearer access-token",
+                "cookie": "; ".join(
+                    [
+                        f"{settings.access_cookie_name}=cookie-access-token",
+                        f"{settings.refresh_cookie_name}=cookie-refresh-token",
+                        f"{settings.csrf_cookie_name}=csrf-token",
+                    ]
+                ),
+                settings.csrf_header_name: "csrf-token",
+            },
+        ),
+        db_session=_db(),  # type: ignore[arg-type]
+        otp_service=_OTPStub(),  # type: ignore[arg-type]
+        audit_service=_AuditStub(),  # type: ignore[arg-type]
+    )
+
+    assert response.status_code == 400
+    assert json.loads(response.body) == {
+        "detail": "Conflicting authentication transports.",
+        "code": "ambiguous_authentication_transport",
+    }

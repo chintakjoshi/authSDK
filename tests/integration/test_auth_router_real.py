@@ -245,6 +245,47 @@ async def test_auth_cookie_login_refresh_logout_defaults_without_transport_heade
 
 
 @pytest.mark.asyncio
+async def test_auth_cookie_logout_rejects_conflicting_bearer_and_cookie_auth(
+    app_factory,
+    user_factory,
+) -> None:
+    """Unsafe browser-session routes should reject mixed bearer-plus-cookie credentials."""
+    app: FastAPI = app_factory()
+    await user_factory("conflict-cookie@example.com", "Password123!", email_verified=True)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        csrf_response = await client.get("/auth/csrf")
+        assert csrf_response.status_code == 200
+        csrf_token = csrf_response.json()["csrf_token"]
+
+        login_response = await client.post(
+            "/auth/login",
+            json={"email": "conflict-cookie@example.com", "password": "Password123!"},
+            headers={"X-CSRF-Token": csrf_token},
+        )
+        assert login_response.status_code == 200
+        access_token = client.cookies.get("auth_access")
+        assert access_token
+
+        logout_response = await client.post(
+            "/auth/logout",
+            headers={
+                "authorization": f"Bearer {access_token}",
+                "X-CSRF-Token": csrf_token,
+            },
+        )
+
+    assert logout_response.status_code == 400
+    assert logout_response.json() == {
+        "detail": "Conflicting authentication transports.",
+        "code": "ambiguous_authentication_transport",
+    }
+
+
+@pytest.mark.asyncio
 async def test_auth_login_rejects_unverified_email(
     app_factory,
     user_factory,

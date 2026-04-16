@@ -134,6 +134,23 @@ def extract_bearer_token(request: Request) -> str | None:
     return stripped or None
 
 
+def _has_auth_cookie(request: Request) -> bool:
+    """Return True when the request carries an auth cookie used by browser sessions."""
+    settings = get_browser_session_settings()
+    if not settings.enabled:
+        return False
+    if request.cookies.get(settings.access_cookie_name, "").strip():
+        return True
+    if request.cookies.get(settings.refresh_cookie_name, "").strip():
+        return True
+    return False
+
+
+def has_conflicting_authentication_transports(request: Request) -> bool:
+    """Return True when a request mixes bearer auth with browser-session auth cookies."""
+    return extract_bearer_token(request) is not None and _has_auth_cookie(request)
+
+
 def extract_access_token(request: Request) -> tuple[str | None, str | None]:
     """Resolve access token from bearer header first, then from configured cookie."""
     bearer_token = extract_bearer_token(request)
@@ -173,6 +190,17 @@ def csrf_error_response() -> JSONResponse:
     )
 
 
+def conflicting_authentication_transport_response() -> JSONResponse:
+    """Build the standardized auth-transport conflict response."""
+    return JSONResponse(
+        status_code=400,
+        content={
+            "detail": "Conflicting authentication transports.",
+            "code": "ambiguous_authentication_transport",
+        },
+    )
+
+
 def validate_csrf_token(request: Request) -> bool:
     """Validate a double-submit CSRF token using configured cookie/header names."""
     settings = get_browser_session_settings()
@@ -184,9 +212,11 @@ def validate_csrf_token(request: Request) -> bool:
 
 
 def require_csrf_for_cookie_transport(request: Request) -> JSONResponse | None:
-    """Require a CSRF token when the request explicitly uses cookie transport."""
+    """Require CSRF and reject conflicting auth transports for unsafe cookie-mode requests."""
     if request.method.upper() in SAFE_HTTP_METHODS:
         return None
+    if has_conflicting_authentication_transports(request):
+        return conflicting_authentication_transport_response()
     if not is_cookie_transport_request(request):
         return None
     if validate_csrf_token(request):
@@ -195,9 +225,11 @@ def require_csrf_for_cookie_transport(request: Request) -> JSONResponse | None:
 
 
 def require_csrf_for_cookie_authenticated_request(request: Request) -> JSONResponse | None:
-    """Require a CSRF token when the request is authenticated from an access cookie."""
+    """Require CSRF and reject conflicting auth transports for unsafe cookie-auth requests."""
     if request.method.upper() in SAFE_HTTP_METHODS:
         return None
+    if has_conflicting_authentication_transports(request):
+        return conflicting_authentication_transport_response()
     if not is_cookie_authenticated_request(request):
         return None
     if validate_csrf_token(request):
