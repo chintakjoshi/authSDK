@@ -7,6 +7,7 @@ import inspect
 import json
 import secrets
 from dataclasses import dataclass
+from uuid import UUID
 
 from redis.asyncio.client import Redis
 from redis.exceptions import RedisError
@@ -47,6 +48,8 @@ class SamlCallbackCompletion:
     """Completed SAML login result including optional caller context."""
 
     token_pair: TokenPair
+    user_id: str
+    session_id: UUID
     redirect_uri: str | None = None
     relay_state: str | None = None
 
@@ -168,6 +171,8 @@ return value
         self,
         db_session: AsyncSession,
         request_data: dict[str, str],
+        client_ip: str | None = None,
+        user_agent: str | None = None,
     ) -> SamlCallbackCompletion:
         """Validate SAML assertion, resolve identity, and issue tokens."""
         relay_state = self._extract_relay_state(request_data)
@@ -197,7 +202,7 @@ return value
             audience=state_record.audience,
         )
         token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
-        await self._session_service.create_login_session(
+        session_id = await self._session_service.create_login_session(
             db_session=db_session,
             user_id=user.id,
             email=user.email,
@@ -207,9 +212,13 @@ return value
             scopes=[],
             raw_access_token=token_pair.access_token,
             raw_refresh_token=token_pair.refresh_token,
+            ip_address=client_ip,
+            user_agent=user_agent,
         )
         return SamlCallbackCompletion(
             token_pair=token_pair,
+            user_id=str(user.id),
+            session_id=session_id,
             redirect_uri=state_record.redirect_uri,
             relay_state=state_record.relay_state,
         )

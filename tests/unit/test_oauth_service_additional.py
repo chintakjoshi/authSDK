@@ -299,12 +299,18 @@ async def test_complete_google_callback_creates_session_after_successful_upsert(
         db_session=object(),  # type: ignore[arg-type]
         state="state-1",
         code="auth-code",
+        client_ip="203.0.113.10",
+        user_agent="Mozilla/5.0 Chrome/120",
     )
 
     assert result.access_token == "access-token"
     assert result.refresh_token == "refresh-token"
     assert result.redirect_uri is None
+    assert result.user_id == "user-1"
+    assert result.session_id == "session-id"
     assert session_service.calls[0]["email"] == "oauth@example.com"
+    assert session_service.calls[0]["ip_address"] == "203.0.113.10"
+    assert session_service.calls[0]["user_agent"] == "Mozilla/5.0 Chrome/120"
 
 
 @pytest.mark.asyncio

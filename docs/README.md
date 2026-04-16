@@ -15,6 +15,8 @@ This directory is the maintainer and integrator guide for `authSDK`.
 - configuration and environment variables: `configuration.md`
 - service endpoints and integration contracts: `service-api.md`
 - downstream SDK integration: `integrate-sdk.md`
+- admin dashboard and internal-tools integration: `admin-dashboard-integration.md`
+- self-service sessions and activity UI: `self-service-sessions.md`
 - testing strategy and load tests: `testing.md`
 - deployment and operations: `operations.md`
 - troubleshooting by symptom: `troubleshooting.md`
@@ -42,10 +44,17 @@ SDK consumer path:
 1. `browser-consumer-quickstart.md`
 2. `integrate-sdk.md`
 3. `service-api.md`
-4. `troubleshooting.md`
+4. `self-service-sessions.md` (when building end-user security UI)
+5. `troubleshooting.md`
 
 Non-browser consumer path:
 
 1. `integrate-sdk.md`
 2. `service-api.md`
+3. `troubleshooting.md`
+
+Admin dashboard / internal-tools path:
+
+1. `service-api.md` (auth model and endpoint families)
+2. `admin-dashboard-integration.md`
 3. `troubleshooting.md`

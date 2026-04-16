@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import Settings, get_settings
 from app.dependencies import get_database_session
 from app.routers._admin_access import require_admin_claims as _require_admin_claims
+from app.core.user_agent import parse_device_label
 from app.schemas.admin import (
     AdminAPIKeyCreateRequest,
     AdminAPIKeyCreateResponse,
@@ -24,6 +25,9 @@ from app.schemas.admin import (
     AdminOAuthClientResponse,
     AdminOAuthClientRotateSecretResponse,
     AdminOAuthClientUpdateRequest,
+    AdminSessionItem,
+    AdminSessionRevokeRequest,
+    AdminSessionRevokeResponse,
     AdminSigningKeyRotateResponse,
     AdminUserDeleteResponse,
     AdminUserDetail,
@@ -333,6 +337,7 @@ async def revoke_user_sessions(
     admin_service: Annotated[AdminService, Depends(get_admin_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
+    payload: AdminSessionRevokeRequest | None = None,
 ) -> AdminUserSessionsRevokedResponse | JSONResponse:
     """Revoke all active sessions for a target user."""
     try:
@@ -347,9 +352,10 @@ async def revoke_user_sessions(
             action="revoke_sessions",
             action_token=_extract_action_token(request),
         )
-        revoked_session_ids = await admin_service.revoke_user_sessions(
+        revoked_session_ids, revoke_reason = await admin_service.revoke_user_sessions(
             db_session=db_session,
             user_id=user_id,
+            reason=payload.reason if payload is not None else None,
         )
     except AdminServiceError as exc:
         return _error_response(exc.status_code, exc.detail, exc.code, headers=exc.headers)
@@ -364,7 +370,7 @@ async def revoke_user_sessions(
         target_id=str(user_id),
         target_type="user",
         metadata={
-            "reason": "admin_revoke_sessions",
+            "reason": revoke_reason,
             "revoked_session_count": len(revoked_session_ids),
             "session_ids": [str(item) for item in revoked_session_ids],
         },
@@ -373,7 +379,7 @@ async def revoke_user_sessions(
         event_type="session.revoked",
         data={
             "user_id": str(user_id),
-            "reason": "admin_revoke_sessions",
+            "reason": revoke_reason,
             "session_ids": [str(item) for item in revoked_session_ids],
         },
     )
@@ -381,6 +387,173 @@ async def revoke_user_sessions(
         user_id=user_id,
         revoked_session_ids=revoked_session_ids,
         revoked_session_count=len(revoked_session_ids),
+        revoke_reason=revoke_reason,
+    )
+
+
+@router.get(
+    "/users/{user_id}/sessions",
+    response_model=CursorPageResponse[AdminSessionItem],
+)
+async def list_user_sessions(
+    user_id: UUID,
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    admin_service: Annotated[AdminService, Depends(get_admin_service)],
+    status: Annotated[str, Query(pattern="^(active|revoked|all)$")] = "active",
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> CursorPageResponse[AdminSessionItem] | JSONResponse:
+    """List sessions for one user with status filtering."""
+    try:
+        await _require_admin_claims(
+            request,
+            db_session=db_session,
+            admin_service=admin_service,
+        )
+        page = await admin_service.list_user_sessions_page(
+            db_session=db_session,
+            user_id=user_id,
+            status=status,
+            cursor=cursor,
+            limit=limit,
+        )
+    except AdminServiceError as exc:
+        return _error_response(exc.status_code, exc.detail, exc.code, headers=exc.headers)
+    return CursorPageResponse(
+        data=[
+            AdminSessionItem(
+                session_id=row.session_id,
+                user_id=row.user_id,
+                created_at=row.created_at,
+                last_seen_at=row.last_seen_at,
+                expires_at=row.expires_at,
+                revoked_at=row.revoked_at,
+                revoke_reason=row.revoke_reason,
+                ip_address=row.ip_address,
+                user_agent=row.user_agent,
+                device_label=parse_device_label(row.user_agent),
+            )
+            for row in page.items
+        ],
+        next_cursor=page.next_cursor,
+        has_more=page.has_more,
+    )
+
+
+@router.delete(
+    "/users/{user_id}/sessions/{session_id}",
+    response_model=AdminSessionRevokeResponse,
+)
+async def revoke_user_session(
+    user_id: UUID,
+    session_id: UUID,
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    admin_service: Annotated[AdminService, Depends(get_admin_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
+    payload: AdminSessionRevokeRequest | None = None,
+) -> AdminSessionRevokeResponse | JSONResponse:
+    """Revoke a single session for the target user."""
+    try:
+        claims = await _require_admin_claims(
+            request,
+            db_session=db_session,
+            admin_service=admin_service,
+        )
+        await admin_service.enforce_sensitive_action_gate(
+            db_session=db_session,
+            claims=claims,
+            action="revoke_sessions",
+            action_token=_extract_action_token(request),
+        )
+        revoked_session_id, revoke_reason = await admin_service.revoke_user_session(
+            db_session=db_session,
+            user_id=user_id,
+            session_id=session_id,
+            reason=payload.reason if payload is not None else None,
+        )
+    except AdminServiceError as exc:
+        return _error_response(exc.status_code, exc.detail, exc.code, headers=exc.headers)
+
+    await audit_service.record(
+        db=db_session,
+        event_type="session.revoked",
+        actor_type="admin",
+        success=True,
+        request=request,
+        actor_id=str(claims.get("sub", "")),
+        target_id=str(user_id),
+        target_type="user",
+        metadata={
+            "reason": revoke_reason,
+            "session_id": str(revoked_session_id),
+        },
+    )
+    await webhook_service.emit_event(
+        event_type="session.revoked",
+        data={
+            "user_id": str(user_id),
+            "reason": revoke_reason,
+            "session_ids": [str(revoked_session_id)],
+        },
+    )
+    return AdminSessionRevokeResponse(
+        user_id=user_id,
+        session_id=revoked_session_id,
+        revoke_reason=revoke_reason,
+    )
+
+
+@router.get(
+    "/users/{user_id}/history",
+    response_model=CursorPageResponse[AdminAuditLogItem],
+)
+async def list_user_history(
+    user_id: UUID,
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    admin_service: Annotated[AdminService, Depends(get_admin_service)],
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> CursorPageResponse[AdminAuditLogItem] | JSONResponse:
+    """List login, logout, session, OTP, and password-reset events for one user."""
+    try:
+        await _require_admin_claims(
+            request,
+            db_session=db_session,
+            admin_service=admin_service,
+        )
+        page = await admin_service.list_user_history_page(
+            db_session=db_session,
+            user_id=user_id,
+            cursor=cursor,
+            limit=limit,
+        )
+    except AdminServiceError as exc:
+        return _error_response(exc.status_code, exc.detail, exc.code, headers=exc.headers)
+    return CursorPageResponse(
+        data=[
+            AdminAuditLogItem(
+                id=row.id,
+                event_type=row.event_type,
+                actor_id=row.actor_id,
+                actor_type=row.actor_type.value,
+                target_id=row.target_id,
+                target_type=row.target_type,
+                ip_address=str(row.ip_address) if row.ip_address is not None else None,
+                user_agent=row.user_agent,
+                correlation_id=row.correlation_id,
+                success=row.success,
+                failure_reason=row.failure_reason,
+                metadata=row.event_metadata,
+                created_at=row.created_at,
+            )
+            for row in page.items
+        ],
+        next_cursor=page.next_cursor,
+        has_more=page.has_more,
     )
 
 

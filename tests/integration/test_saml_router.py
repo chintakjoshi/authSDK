@@ -20,6 +20,10 @@ class _TokenPairStub:
 
     access_token: str
     refresh_token: str
+    user_id: str = "user-123"
+    session_id: str = "session-123"
+    redirect_uri: str | None = None
+    relay_state: str | None = None
 
 
 class _SamlServiceStub:
@@ -47,8 +51,11 @@ class _SamlServiceStub:
         self,
         db_session: Any,
         request_data: dict[str, str],
+        client_ip: str | None = None,
+        user_agent: str | None = None,
     ) -> _TokenPairStub:
         """Return callback token pair or raise configured error."""
+        del db_session, request_data, client_ip, user_agent
         if isinstance(self.callback_result, SamlServiceError):
             raise self.callback_result
         assert self.callback_result is not None

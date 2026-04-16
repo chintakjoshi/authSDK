@@ -51,6 +51,22 @@ from app.services.webhook_service import (
     get_webhook_service,
 )
 
+_USER_HISTORY_EVENT_TYPES: list[str] = [
+    "user.login.success",
+    "user.login.failure",
+    "user.login.suspicious",
+    "user.logout",
+    "session.created",
+    "session.revoked",
+    "password.reset.requested",
+    "password.reset.completed",
+    "otp.verified",
+    "otp.failed",
+    "otp.expired",
+    "otp.excessive_failures",
+    "otp.admin_toggled",
+]
+
 
 @dataclass(frozen=True)
 class AdminUserSummary:
@@ -81,6 +97,22 @@ class DeletedUserResult:
 
     user_id: UUID
     revoked_session_ids: list[UUID]
+
+
+@dataclass(frozen=True)
+class AdminSessionSummary:
+    """Admin-facing session row for the session inventory view."""
+
+    id: UUID
+    session_id: UUID
+    user_id: UUID
+    created_at: datetime
+    last_seen_at: datetime | None
+    expires_at: datetime
+    revoked_at: datetime | None
+    revoke_reason: str | None
+    ip_address: str | None
+    user_agent: str | None
 
 
 @dataclass(frozen=True)
@@ -372,18 +404,126 @@ class AdminService:
         db_session: AsyncSession,
         *,
         user_id: UUID,
-    ) -> list[UUID]:
+        reason: str | None = None,
+    ) -> tuple[list[UUID], str]:
         """Revoke all active sessions for a target user."""
         user = await self._get_active_user(db_session=db_session, user_id=user_id, for_update=False)
         if user is None:
             raise AdminServiceError("User not found.", "invalid_user", 404)
+        effective_reason = reason or "admin_revoke_all"
         try:
-            return await self._session_service.revoke_user_sessions(
+            revoked_ids = await self._session_service.revoke_user_sessions(
                 db_session=db_session,
                 user_id=user_id,
+                reason=effective_reason,
             )
         except SessionStateError as exc:
             raise AdminServiceError(exc.detail, exc.code, exc.status_code) from exc
+        return revoked_ids, effective_reason
+
+    async def list_user_sessions_page(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+        status: str = "active",
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> CursorPage[AdminSessionSummary]:
+        """Return a cursor-paginated list of sessions for one user."""
+        if status not in {"active", "revoked", "all"}:
+            raise AdminServiceError(
+                "Invalid status filter.",
+                "invalid_status",
+                400,
+            )
+        user = await self._get_active_user(db_session=db_session, user_id=user_id, for_update=False)
+        if user is None:
+            raise AdminServiceError("User not found.", "invalid_user", 404)
+
+        limit = max(1, min(limit, 200))
+        cursor_position = decode_cursor(cursor) if cursor is not None else None
+        statement = (
+            select(Session)
+            .where(Session.user_id == user_id, Session.deleted_at.is_(None))
+            .order_by(Session.created_at.desc(), Session.session_id.desc())
+        )
+        now = datetime.now(UTC)
+        if status == "active":
+            statement = statement.where(
+                Session.revoked_at.is_(None),
+                Session.expires_at > now,
+            )
+        elif status == "revoked":
+            statement = statement.where(
+                or_(Session.revoked_at.is_not(None), Session.expires_at <= now)
+            )
+        statement = apply_created_at_cursor(
+            statement,
+            model=Session,
+            cursor=cursor_position,
+        ).limit(limit + 1)
+        rows = list((await db_session.execute(statement)).scalars().all())
+        summaries = [
+            AdminSessionSummary(
+                id=row.id,
+                session_id=row.session_id,
+                user_id=row.user_id,
+                created_at=row.created_at,
+                last_seen_at=row.last_seen_at,
+                expires_at=row.expires_at,
+                revoked_at=row.revoked_at,
+                revoke_reason=row.revoke_reason,
+                ip_address=row.ip_address,
+                user_agent=row.user_agent,
+            )
+            for row in rows
+        ]
+        return build_page(summaries, limit=limit)
+
+    async def revoke_user_session(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+        session_id: UUID,
+        reason: str | None = None,
+    ) -> tuple[UUID, str]:
+        """Revoke a single session owned by the target user."""
+        user = await self._get_active_user(db_session=db_session, user_id=user_id, for_update=False)
+        if user is None:
+            raise AdminServiceError("User not found.", "invalid_user", 404)
+        effective_reason = reason or "admin_targeted"
+        try:
+            revoked_id = await self._session_service.revoke_one_session(
+                db_session=db_session,
+                user_id=user_id,
+                session_id=session_id,
+                reason=effective_reason,
+            )
+        except SessionStateError as exc:
+            raise AdminServiceError(exc.detail, exc.code, exc.status_code) from exc
+        return revoked_id, effective_reason
+
+    async def list_user_history_page(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+        cursor: str | None = None,
+        limit: int = 50,
+    ):
+        """List login/logout/session/otp/password-reset events for one user."""
+        user = await self._get_active_user(db_session=db_session, user_id=user_id, for_update=False)
+        if user is None:
+            raise AdminServiceError("User not found.", "invalid_user", 404)
+        return await self._audit_service.list_events_page(
+            db_session=db_session,
+            actor_or_target_id=user_id,
+            event_types=_USER_HISTORY_EVENT_TYPES,
+            cursor=cursor,
+            limit=limit,
+        )
 
     async def set_user_email_otp(
         self,

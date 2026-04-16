@@ -7,6 +7,7 @@ import inspect
 import json
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 from redis.asyncio.client import Redis
 from redis.exceptions import RedisError
@@ -38,6 +39,8 @@ class OAuthCallbackCompletion:
     """Completed OAuth login result including optional caller redirect context."""
 
     token_pair: TokenPair
+    user_id: str
+    session_id: UUID
     redirect_uri: str | None = None
 
     @property
@@ -172,6 +175,8 @@ return value
         db_session: AsyncSession,
         state: str,
         code: str,
+        client_ip: str | None = None,
+        user_agent: str | None = None,
     ) -> OAuthCallbackCompletion:
         """Complete OAuth callback and return access/refresh token pair."""
         state_record = await self._consume_state(state=state)
@@ -216,7 +221,7 @@ return value
             audience=state_record.audience,
         )
         token_pair = await issued_pair if inspect.isawaitable(issued_pair) else issued_pair
-        await self._session_service.create_login_session(
+        session_id = await self._session_service.create_login_session(
             db_session=db_session,
             user_id=user.id,
             email=user.email,
@@ -226,9 +231,13 @@ return value
             scopes=[],
             raw_access_token=token_pair.access_token,
             raw_refresh_token=token_pair.refresh_token,
+            ip_address=client_ip,
+            user_agent=user_agent,
         )
         return OAuthCallbackCompletion(
             token_pair=token_pair,
+            user_id=str(user.id),
+            session_id=session_id,
             redirect_uri=state_record.return_redirect_uri,
         )
 

@@ -89,6 +89,8 @@ class _SessionServiceStub:
         scopes: list[str],
         raw_access_token: str,
         raw_refresh_token: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
     ) -> str:
         """Assert verified state is propagated into session metadata."""
         del (
@@ -100,6 +102,8 @@ class _SessionServiceStub:
             scopes,
             raw_access_token,
             raw_refresh_token,
+            ip_address,
+            user_agent,
         )
         assert email_verified is True
         return "session-id"

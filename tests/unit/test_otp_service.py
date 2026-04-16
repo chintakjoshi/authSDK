@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID, uuid4
 
 import pytest
 from redis.exceptions import RedisError
@@ -64,17 +65,18 @@ class _SessionServiceStub:
 
     def __init__(self) -> None:
         self.validation_error: Exception | None = None
+        self.validated_session_id = uuid4()
 
     async def validate_access_token_session(
         self,
         db_session: Any,
         *,
         access_jti: str,
-    ) -> object:
+    ) -> UUID:
         del db_session, access_jti
         if self.validation_error is not None:
             raise self.validation_error
-        return object()
+        return self.validated_session_id
 
 
 class _BruteForceServiceStub:
@@ -147,6 +149,22 @@ async def test_validate_access_token_rejects_revoked_session_binding() -> None:
 
     assert exc_info.value.code == "session_expired"
     assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_validate_access_token_with_session_returns_claims_and_session_id() -> None:
+    """OTP validation can return both claims and the validated backing session id."""
+    session_service = _SessionServiceStub()
+    service = _build_service(_RedisStub(), session_service=session_service)
+
+    result = await service.validate_access_token_with_session(
+        db_session=object(),
+        token="access-token",
+    )
+
+    assert result.claims["sub"] == "user-1"
+    assert result.claims["jti"] == "jti-456"
+    assert result.session_id == session_service.validated_session_id
 
 
 @pytest.mark.asyncio

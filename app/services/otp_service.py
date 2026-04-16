@@ -152,6 +152,14 @@ class LoginOTPVerificationResult:
 
 
 @dataclass(frozen=True)
+class AccessTokenValidationResult:
+    """Validated access-token claims plus the backing session identifier."""
+
+    claims: dict[str, object]
+    session_id: UUID
+
+
+@dataclass(frozen=True)
 class ActionOTPRequestResult:
     """Successful action OTP issuance result."""
 
@@ -207,6 +215,18 @@ class OTPService:
         token: str,
     ) -> dict[str, object]:
         """Validate an access token for OTP-protected endpoints."""
+        validated = await self.validate_access_token_with_session(
+            db_session=db_session,
+            token=token,
+        )
+        return validated.claims
+
+    async def validate_access_token_with_session(
+        self,
+        db_session: AsyncSession,
+        token: str,
+    ) -> AccessTokenValidationResult:
+        """Validate an access token and return the active backing session id."""
         verification_keys = await self._signing_key_service.get_verification_public_keys(db_session)
         try:
             claims = self._jwt_service.verify_token(
@@ -219,13 +239,13 @@ class OTPService:
             raise OTPServiceError("Invalid token.", "invalid_token", 401) from exc
         await self._ensure_access_token_not_revoked(claims)
         try:
-            await self._session_service.validate_access_token_session(
+            session_id = await self._session_service.validate_access_token_session(
                 db_session=db_session,
                 access_jti=str(claims.get("jti", "")).strip(),
             )
         except SessionStateError as exc:
             raise OTPServiceError(exc.detail, exc.code, exc.status_code) from exc
-        return claims
+        return AccessTokenValidationResult(claims=claims, session_id=session_id)
 
     async def start_login_challenge(
         self,
@@ -348,6 +368,8 @@ class OTPService:
             scopes=[],
             raw_access_token=token_pair.access_token,
             raw_refresh_token=token_pair.refresh_token,
+            ip_address=client_ip,
+            user_agent=user_agent,
         )
         return LoginOTPVerificationResult(
             user_id=str(user.id),

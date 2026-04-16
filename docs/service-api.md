@@ -41,6 +41,13 @@ Application errors follow the same basic structure:
 - `GET /auth/validate`
 - `POST /auth/introspect`
 
+### Self-Service (Bearer-Authenticated)
+
+- `GET /auth/sessions`
+- `DELETE /auth/sessions`
+- `DELETE /auth/sessions/{session_id}`
+- `GET /auth/history`
+
 ### Lifecycle And Recovery
 
 - `GET /auth/verify-email`
@@ -100,12 +107,19 @@ The admin surface lives under `/admin/*`.
 
 Major areas include:
 
-- users
+- users (list, detail, role, delete, erase, OTP toggle)
+- sessions (per-user list, single revoke, bulk revoke)
+- user history (per-user audit feed)
 - API keys
 - OAuth clients
 - webhooks and deliveries
 - audit log
 - signing-key rotation
+
+For engineers building admin dashboards or internal tools on top of these
+endpoints, see `admin-dashboard-integration.md` for per-endpoint guidance,
+step-up flow details, session/history payload shapes, and recommended view
+compositions.
 
 ## Auth Model By Endpoint Type
 

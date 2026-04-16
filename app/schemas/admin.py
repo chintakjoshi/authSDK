@@ -60,6 +60,36 @@ class AdminUserSessionsRevokedResponse(BaseModel):
     user_id: UUID
     revoked_session_ids: list[UUID]
     revoked_session_count: int
+    revoke_reason: str
+
+
+class AdminSessionItem(BaseModel):
+    """Admin-facing session list item."""
+
+    session_id: UUID
+    user_id: UUID
+    created_at: datetime
+    last_seen_at: datetime | None
+    expires_at: datetime
+    revoked_at: datetime | None
+    revoke_reason: str | None
+    ip_address: str | None
+    user_agent: str | None
+    device_label: str
+
+
+class AdminSessionRevokeResponse(BaseModel):
+    """Admin response for single-session revocation."""
+
+    user_id: UUID
+    session_id: UUID
+    revoke_reason: str
+
+
+class AdminSessionRevokeRequest(BaseModel):
+    """Optional request body for admin session revoke endpoints."""
+
+    reason: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class AdminUserEraseResponse(BaseModel):
