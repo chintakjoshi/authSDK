@@ -53,6 +53,21 @@ class _SigningKeyStub:
         )()
 
 
+class _AsyncJWTStub:
+    """Capture async M2M issuance calls and fail on sync usage."""
+
+    def __init__(self) -> None:
+        self.async_calls: list[dict[str, object]] = []
+
+    async def issue_token_async(self, **kwargs: object) -> str:
+        self.async_calls.append(dict(kwargs))
+        return "m2m-token-async"
+
+    def issue_token(self, **kwargs: object) -> str:
+        del kwargs
+        raise AssertionError("M2MService should use issue_token_async when available")
+
+
 def _generate_keypair() -> tuple[str, str]:
     """Generate one PEM-encoded RSA keypair."""
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -215,6 +230,37 @@ async def test_authenticate_client_credentials_rejects_invalid_secret(
 
     assert exc_info.value.code == "invalid_credentials"
     assert exc_info.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_authenticate_client_credentials_prefers_async_issue_helper() -> None:
+    """Client-credentials issuance should avoid sync JWT signing on async request paths."""
+    jwt_service = _AsyncJWTStub()
+    service = M2MService(
+        jwt_service=jwt_service,  # type: ignore[arg-type]
+        signing_key_service=_SigningKeyStub("private-key", "public-key"),  # type: ignore[arg-type]
+        auth_service_audience="auth-service",
+    )
+    client = _build_client("cs_test_secret", ["billing:read", "billing:write"])
+
+    async def _fake_lookup(self: M2MService, db_session, *, client_id: str) -> OAuthClient | None:  # type: ignore[no-untyped-def]
+        del db_session
+        assert client_id == "client-123"
+        return client
+
+    service._get_client_by_client_id = MethodType(_fake_lookup, service)  # type: ignore[assignment]
+
+    result = await service.authenticate_client_credentials(
+        db_session=object(),  # type: ignore[arg-type]
+        client_id="client-123",
+        client_secret="cs_test_secret",
+        scope="billing:read",
+        audience="billing-api",
+    )
+
+    assert result.access_token == "m2m-token-async"
+    assert jwt_service.async_calls[0]["token_type"] == "m2m"
+    assert jwt_service.async_calls[0]["audience"] == ["auth-service", "billing-api"]
 
 
 @pytest.mark.asyncio

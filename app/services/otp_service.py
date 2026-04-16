@@ -21,6 +21,7 @@ from app.core.jwt import (
     JWTService,
     TokenValidationError,
     get_jwt_service,
+    issue_token_async_compat,
     merge_audiences,
     normalize_audiences,
 )
@@ -254,7 +255,8 @@ class OTPService:
         )
 
         active_key = await self._signing_key_service.get_active_signing_key(db_session)
-        challenge_token = self._jwt_service.issue_token(
+        challenge_token = await issue_token_async_compat(
+            self._jwt_service,
             subject=user_id,
             token_type="otp_challenge",
             expires_in_seconds=self._otp_ttl_seconds,
@@ -480,7 +482,8 @@ class OTPService:
 
         await self._delete_keys(key)
         active_key = await self._signing_key_service.get_active_signing_key(db_session)
-        action_token = self._jwt_service.issue_token(
+        action_token = await issue_token_async_compat(
+            self._jwt_service,
             subject=user_id,
             token_type="action_token",
             expires_in_seconds=self._action_token_ttl_seconds,

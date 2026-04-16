@@ -104,8 +104,9 @@ async def test_get_verification_keys_jwks_and_rotate_cover_bootstrap_paths(monke
     active_row = _row(service=service, status=SigningKeyStatus.ACTIVE)
     fetch_calls = {"count": 0}
 
-    async def _fetch_active(db_session):  # type: ignore[no-untyped-def]
+    async def _fetch_active(db_session, *, for_update: bool = False):  # type: ignore[no-untyped-def]
         del db_session
+        assert for_update is True
         fetch_calls["count"] += 1
         return None if fetch_calls["count"] == 1 else active_row
 
@@ -146,3 +147,88 @@ async def test_fetch_active_bootstrap_revival_and_decrypt_edge_cases() -> None:
     assert service._decrypt_private_key("plaintext-private-key") == "plaintext-private-key"
     with pytest.raises(ValueError, match="Unable to decrypt"):
         service._decrypt_private_key("enc1:not-a-real-fernet-token")
+
+
+@pytest.mark.asyncio
+async def test_get_active_signing_key_uses_cache_without_locking_reads(monkeypatch) -> None:
+    """Repeated issuance reads should reuse cached active key material without row locks."""
+    service = _service()
+    active_row = _row(service=service, status=SigningKeyStatus.ACTIVE, kid="active-kid")
+    fetch_for_update_args: list[bool] = []
+
+    async def _fetch_active(db_session, *, for_update: bool = False):  # type: ignore[no-untyped-def]
+        del db_session
+        fetch_for_update_args.append(for_update)
+        return active_row
+
+    monkeypatch.setattr(service, "_fetch_single_active_row", _fetch_active)
+
+    first = await service.get_active_signing_key(_DBSessionStub())  # type: ignore[arg-type]
+    second = await service.get_active_signing_key(_DBSessionStub())  # type: ignore[arg-type]
+
+    assert first.kid == "active-kid"
+    assert second.kid == "active-kid"
+    assert fetch_for_update_args == [False]
+
+
+@pytest.mark.asyncio
+async def test_rotate_signing_key_uses_locked_lookup_and_invalidates_active_cache(
+    monkeypatch,
+) -> None:
+    """Rotation should lock the active row and clear cached active key material."""
+    service = _service()
+    current_active = _row(service=service, status=SigningKeyStatus.ACTIVE, kid="current-kid")
+    visible_active_row = current_active
+    fetch_for_update_args: list[bool] = []
+
+    async def _fetch_active(db_session, *, for_update: bool = False):  # type: ignore[no-untyped-def]
+        del db_session
+        fetch_for_update_args.append(for_update)
+        return visible_active_row
+
+    async def _retire_expired_keys(db_session, rotation_overlap_seconds: int):  # type: ignore[no-untyped-def]
+        del db_session, rotation_overlap_seconds
+        return []
+
+    monkeypatch.setattr(service, "_fetch_single_active_row", _fetch_active)
+    monkeypatch.setattr(service, "retire_expired_keys", _retire_expired_keys)
+
+    warm = await service.get_active_signing_key(_DBSessionStub())  # type: ignore[arg-type]
+    assert warm.kid == "current-kid"
+
+    rotation_session = _DBSessionStub()
+    result = await service.rotate_signing_key(  # type: ignore[arg-type]
+        rotation_session,
+        rotation_overlap_seconds=60,
+    )
+
+    assert result.retiring_kid == "current-kid"
+    assert rotation_session.added
+    visible_active_row = rotation_session.added[0]
+
+    refreshed = await service.get_active_signing_key(_DBSessionStub())  # type: ignore[arg-type]
+    assert refreshed.kid == result.new_kid
+    assert fetch_for_update_args == [False, True, False]
+
+
+@pytest.mark.asyncio
+async def test_get_verification_public_keys_uses_cache_for_repeated_reads(monkeypatch) -> None:
+    """Verification-key reads should reuse a short-lived in-memory cache."""
+    service = _service()
+    active_row = _row(service=service, status=SigningKeyStatus.ACTIVE, kid="verify-kid")
+    fetch_count = 0
+
+    async def _fetch_non_retired(db_session):  # type: ignore[no-untyped-def]
+        nonlocal fetch_count
+        del db_session
+        fetch_count += 1
+        return [active_row]
+
+    monkeypatch.setattr(service, "_fetch_non_retired_rows", _fetch_non_retired)
+
+    first = await service.get_verification_public_keys(_DBSessionStub())  # type: ignore[arg-type]
+    second = await service.get_verification_public_keys(_DBSessionStub())  # type: ignore[arg-type]
+
+    assert first == {"verify-kid": active_row.public_key}
+    assert second == first
+    assert fetch_count == 1

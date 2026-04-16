@@ -57,6 +57,28 @@ def test_issue_and_verify_access_token(jwt_service: JWTService) -> None:
     assert payload["aud"] == ["auth-service", "orders-api"]
 
 
+@pytest.mark.asyncio
+async def test_issue_token_async_matches_sync_verification(jwt_service: JWTService) -> None:
+    """Async token issuance should produce a valid token without blocking callers on sync APIs."""
+    token = await jwt_service.issue_token_async(
+        subject="user-async",
+        token_type="access",
+        expires_in_seconds=60,
+        additional_claims={"role": "admin"},
+        audience=["auth-service", "orders-api"],
+    )
+
+    payload = jwt_service.verify_token(
+        token,
+        expected_type="access",
+        expected_audience="orders-api",
+    )
+
+    assert payload["sub"] == "user-async"
+    assert payload["role"] == "admin"
+    assert payload["aud"] == ["auth-service", "orders-api"]
+
+
 def test_verify_token_rejects_wrong_audience(jwt_service: JWTService) -> None:
     """Token verification fails when the expected audience is missing."""
     token = jwt_service.issue_token(

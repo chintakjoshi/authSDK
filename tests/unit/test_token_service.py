@@ -47,6 +47,27 @@ class _JWTStub:
         return f"{token_type}:{subject}:{signing_kid}"
 
 
+class _AsyncJWTStub(_JWTStub):
+    """Capture async token issuance calls and fail if the sync path is used."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.async_calls: list[dict[str, object]] = []
+
+    async def issue_token_async(
+        self,
+        **kwargs: object,
+    ) -> str:
+        self.async_calls.append(dict(kwargs))
+        token_type = str(kwargs["token_type"])
+        subject = str(kwargs["subject"])
+        signing_kid = str(kwargs["signing_kid"])
+        return f"{token_type}:{subject}:{signing_kid}:async"
+
+    def issue_token(self, *args: object, **kwargs: object) -> str:
+        raise AssertionError("TokenService should use issue_token_async when available")
+
+
 class _SigningKeyServiceStub:
     """Return one active signing key."""
 
@@ -124,3 +145,36 @@ async def test_issue_access_token_omits_optional_claims_when_absent() -> None:
         "auth_time": pytest.approx(int(datetime.now(UTC).timestamp()), abs=3),
     }
     assert jwt_service.calls[0]["audience"] == ["auth-service"]
+
+
+@pytest.mark.asyncio
+async def test_token_service_prefers_async_issue_helper_when_available() -> None:
+    """Async request paths should use the JWT async helper instead of sync signing."""
+    jwt_service = _AsyncJWTStub()
+    service = TokenService(
+        jwt_service=jwt_service,  # type: ignore[arg-type]
+        signing_key_service=_SigningKeyServiceStub(),  # type: ignore[arg-type]
+        access_token_ttl_seconds=300,
+        refresh_token_ttl_seconds=900,
+        auth_service_audience="auth-service",
+    )
+
+    token_pair = await service.issue_token_pair(
+        db_session=object(),  # type: ignore[arg-type]
+        user_id="user-async",
+    )
+    access_token = await service.issue_access_token(
+        db_session=object(),  # type: ignore[arg-type]
+        user_id="user-async",
+    )
+
+    assert token_pair == TokenPair(
+        access_token="access:user-async:kid-1:async",
+        refresh_token="refresh:user-async:kid-1:async",
+    )
+    assert access_token == AccessToken(access_token="access:user-async:kid-1:async")
+    assert [call["token_type"] for call in jwt_service.async_calls] == [
+        "access",
+        "refresh",
+        "access",
+    ]

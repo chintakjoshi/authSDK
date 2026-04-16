@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hashlib
 import hmac
+import inspect
 import json
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
@@ -82,6 +84,28 @@ class JWTService:
             signing_private_key_pem or self._private_key_pem,
         )
         return token.decode("utf-8")
+
+    async def issue_token_async(
+        self,
+        subject: str,
+        token_type: TokenType,
+        expires_in_seconds: int,
+        additional_claims: dict[str, Any] | None = None,
+        audience: Audience | None = None,
+        signing_private_key_pem: str | None = None,
+        signing_kid: str | None = None,
+    ) -> str:
+        """Issue one signed JWT on a worker thread for async request paths."""
+        return await asyncio.to_thread(
+            self.issue_token,
+            subject=subject,
+            token_type=token_type,
+            expires_in_seconds=expires_in_seconds,
+            additional_claims=additional_claims,
+            audience=audience,
+            signing_private_key_pem=signing_private_key_pem,
+            signing_kid=signing_kid,
+        )
 
     def verify_token(
         self,
@@ -297,3 +321,44 @@ def audience_matches(token_audience: object, expected_audiences: Audience | None
         return True
     available = set(normalize_audiences(token_audience))
     return required.issubset(available)
+
+
+async def issue_token_async_compat(
+    jwt_service: object,
+    *,
+    subject: str,
+    token_type: TokenType,
+    expires_in_seconds: int,
+    additional_claims: dict[str, Any] | None = None,
+    audience: Audience | None = None,
+    signing_private_key_pem: str | None = None,
+    signing_kid: str | None = None,
+) -> str:
+    """Prefer async JWT issuance when available, falling back to sync test doubles."""
+    issue_token_async = getattr(jwt_service, "issue_token_async", None)
+    if callable(issue_token_async):
+        result = issue_token_async(
+            subject=subject,
+            token_type=token_type,
+            expires_in_seconds=expires_in_seconds,
+            additional_claims=additional_claims,
+            audience=audience,
+            signing_private_key_pem=signing_private_key_pem,
+            signing_kid=signing_kid,
+        )
+        if inspect.isawaitable(result):
+            return str(await result)
+        return str(result)
+
+    issue_token = jwt_service.issue_token  # type: ignore[attr-defined]
+    return str(
+        issue_token(
+            subject=subject,
+            token_type=token_type,
+            expires_in_seconds=expires_in_seconds,
+            additional_claims=additional_claims,
+            audience=audience,
+            signing_private_key_pem=signing_private_key_pem,
+            signing_kid=signing_kid,
+        )
+    )
