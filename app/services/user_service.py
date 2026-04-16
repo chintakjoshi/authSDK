@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID
@@ -53,9 +55,11 @@ class UserService:
         """Authenticate user credentials for password login."""
         user = await self.get_user_by_email(db_session=db_session, email=email)
         if user is None or user.password_hash is None:
-            self._password_context.dummy_verify()
+            await self.dummy_verify_async()
             return None
-        if not self.verify_password(password=password, password_hash=user.password_hash):
+        if not await self.verify_password_async(
+            password=password, password_hash=user.password_hash
+        ):
             return None
         return user
 
@@ -177,13 +181,25 @@ class UserService:
         """Generate a bcrypt hash for the provided password."""
         return str(self._password_context.hash(password))
 
+    async def hash_password_async(self, password: str) -> str:
+        """Generate a bcrypt hash on a worker thread for async request paths."""
+        return await asyncio.to_thread(self.hash_password, password)
+
     def verify_password(self, password: str, password_hash: str) -> bool:
         """Verify a plaintext password against the stored bcrypt hash."""
         return bool(self._password_context.verify(password, password_hash))
 
+    async def verify_password_async(self, password: str, password_hash: str) -> bool:
+        """Verify a bcrypt password on a worker thread for async request paths."""
+        return await asyncio.to_thread(self.verify_password, password, password_hash)
+
     def dummy_verify(self) -> None:
         """Perform constant-time-ish password work for enumeration-safe failures."""
         self._password_context.dummy_verify()
+
+    async def dummy_verify_async(self) -> None:
+        """Run dummy bcrypt work on a worker thread for async request paths."""
+        await asyncio.to_thread(self.dummy_verify)
 
     async def _get_user_for_update(self, db_session: AsyncSession, user_id: UUID) -> User | None:
         """Fetch user row for mutation with row lock."""
@@ -218,3 +234,44 @@ class UserService:
 def get_user_service() -> UserService:
     """Create and cache the shared user-service dependency."""
     return UserService()
+
+
+async def hash_password_async_compat(user_service: object, password: str) -> str:
+    """Prefer the async hash helper when available, falling back to sync test doubles."""
+    hash_password_async = getattr(user_service, "hash_password_async", None)
+    if callable(hash_password_async):
+        result = hash_password_async(password)
+        if inspect.isawaitable(result):
+            return str(await result)
+        return str(result)
+    hash_password = getattr(user_service, "hash_password")
+    return str(hash_password(password))
+
+
+async def verify_password_async_compat(
+    user_service: object,
+    *,
+    password: str,
+    password_hash: str,
+) -> bool:
+    """Prefer the async verify helper when available, falling back to sync test doubles."""
+    verify_password_async = getattr(user_service, "verify_password_async", None)
+    if callable(verify_password_async):
+        result = verify_password_async(password=password, password_hash=password_hash)
+        if inspect.isawaitable(result):
+            return bool(await result)
+        return bool(result)
+    verify_password = getattr(user_service, "verify_password")
+    return bool(verify_password(password=password, password_hash=password_hash))
+
+
+async def dummy_verify_async_compat(user_service: object) -> None:
+    """Prefer the async dummy verify helper when available, falling back to sync test doubles."""
+    dummy_verify_async = getattr(user_service, "dummy_verify_async", None)
+    if callable(dummy_verify_async):
+        result = dummy_verify_async()
+        if inspect.isawaitable(result):
+            await result
+        return
+    dummy_verify = getattr(user_service, "dummy_verify")
+    dummy_verify()

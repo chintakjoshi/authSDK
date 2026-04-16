@@ -17,6 +17,18 @@ class _JWTStub:
         return "issued-jwt"
 
 
+class _AsyncJWTStub(_JWTStub):
+    def __init__(self) -> None:
+        self.async_calls: list[dict[str, object]] = []
+
+    async def issue_token_async(self, **kwargs: object) -> str:
+        self.async_calls.append(dict(kwargs))
+        return f"issued-{kwargs['token_type']}"
+
+    def issue_token(self, **kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("OTPService should use issue_token_async when available")
+
+
 class _SigningKeyStub:
     async def get_verification_public_keys(self, db_session):  # type: ignore[no-untyped-def]
         del db_session
@@ -142,9 +154,13 @@ class _UserStub:
     email_otp_enabled: bool = True
 
 
-def _service(email_sender: _EmailSenderStub | None = None) -> OTPService:
+def _service(
+    *,
+    email_sender: _EmailSenderStub | None = None,
+    jwt_service: _JWTStub | None = None,
+) -> OTPService:
     return OTPService(
-        jwt_service=_JWTStub(),  # type: ignore[arg-type]
+        jwt_service=jwt_service or _JWTStub(),  # type: ignore[arg-type]
         signing_key_service=_SigningKeyStub(),  # type: ignore[arg-type]
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]
         session_service=_SessionServiceStub(),  # type: ignore[arg-type]
@@ -320,3 +336,58 @@ async def test_request_action_code_and_verify_action_code_success_paths() -> Non
         action="enable_otp",
     )
     assert verified.action_token == "issued-jwt"
+
+
+@pytest.mark.asyncio
+async def test_otp_issue_paths_prefer_async_jwt_helper_when_available() -> None:
+    """OTP challenge and action-token issuance should use the async JWT helper when present."""
+    sender = _EmailSenderStub()
+    jwt_service = _AsyncJWTStub()
+    service = _service(email_sender=sender, jwt_service=jwt_service)
+    user = _UserStub(id=uuid4(), email="otp@example.com", email_verified=True)
+
+    async def _no_block(user_id: str) -> None:
+        del user_id
+        return None
+
+    async def _store_hash(key: str, payload: dict[str, str], *, ttl_seconds: int) -> None:
+        del key, payload, ttl_seconds
+        return None
+
+    service._ensure_issuance_not_blocked = _no_block  # type: ignore[assignment]
+    service._store_hash = _store_hash  # type: ignore[assignment]
+
+    challenge = await service.start_login_challenge(
+        db_session=_DBSessionStub(),  # type: ignore[arg-type]
+        user=user,  # type: ignore[arg-type]
+    )
+
+    async def _matching_action(key: str) -> dict[str, str]:
+        del key
+        return {"code_hash": hash_otp("123456"), "action": "enable_otp"}
+
+    async def _attempts(key: str, field: str) -> int:
+        del key, field
+        return 1
+
+    async def _delete(*keys: str) -> None:
+        del keys
+        return None
+
+    service._get_hash = _matching_action  # type: ignore[assignment]
+    service._increment_hash_counter = _attempts  # type: ignore[assignment]
+    service._delete_keys = _delete  # type: ignore[assignment]
+
+    verified = await service.verify_action_code(
+        db_session=_DBSessionStub(),  # type: ignore[arg-type]
+        user_id=str(user.id),
+        code="123456",
+        action="enable_otp",
+    )
+
+    assert challenge.challenge_token == "issued-otp_challenge"
+    assert verified.action_token == "issued-action_token"
+    assert [call["token_type"] for call in jwt_service.async_calls] == [
+        "otp_challenge",
+        "action_token",
+    ]

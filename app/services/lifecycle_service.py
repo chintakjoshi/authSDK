@@ -22,7 +22,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings, reloadable_singleton
-from app.core.jwt import JWTService, TokenValidationError, get_jwt_service, normalize_audiences
+from app.core.jwt import (
+    JWTService,
+    TokenValidationError,
+    get_jwt_service,
+    issue_token_async_compat,
+    normalize_audiences,
+)
 from app.core.sessions import (
     SessionService,
     SessionStateError,
@@ -37,7 +43,12 @@ from app.services.brute_force_service import (
     get_brute_force_service,
 )
 from app.services.token_service import TokenService, get_token_service
-from app.services.user_service import UserService, get_user_service
+from app.services.user_service import (
+    UserService,
+    get_user_service,
+    hash_password_async_compat,
+    verify_password_async_compat,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -206,7 +217,7 @@ class LifecycleService:
 
         user = User(
             email=normalized_email,
-            password_hash=self._user_service.hash_password(password),
+            password_hash=await hash_password_async_compat(self._user_service, password),
             is_active=True,
             role="user",
             email_verified=False,
@@ -227,7 +238,7 @@ class LifecycleService:
         except IntegrityError:
             await db_session.rollback()
             if await self._signup_email_exists(db_session=db_session, email=normalized_email):
-                self._perform_dummy_password_workload(password)
+                await self._perform_dummy_password_workload(password)
                 return SignupPasswordResult(accepted_email=normalized_email)
             raise
         except Exception:
@@ -348,7 +359,7 @@ class LifecycleService:
         """Request a verification-email resend using only the email address."""
         normalized_email = self._normalize_email(email)
         if not normalized_email:
-            self._perform_dummy_password_workload("missing-user")
+            await self._perform_dummy_password_workload("missing-user")
             return None
 
         await self._enforce_resend_rate_limit(
@@ -359,7 +370,7 @@ class LifecycleService:
             email=normalized_email,
         )
         if user is None:
-            self._perform_dummy_password_workload(normalized_email)
+            await self._perform_dummy_password_workload(normalized_email)
             return None
         if user.email_verified:
             return None
@@ -391,7 +402,7 @@ class LifecycleService:
             )
 
         if user is None:
-            self._perform_dummy_password_workload(normalized_email or "missing-user")
+            await self._perform_dummy_password_workload(normalized_email or "missing-user")
             return None
 
         reset_token = secrets.token_urlsafe(32)
@@ -442,7 +453,7 @@ class LifecycleService:
         if self._session_service is None:
             raise RuntimeError("LifecycleService requires session_service for password reset.")
 
-        user.password_hash = self._user_service.hash_password(new_password)
+        user.password_hash = await hash_password_async_compat(self._user_service, new_password)
         user.password_reset_token_hash = None
         user.password_reset_token_expires = None
         try:
@@ -503,8 +514,8 @@ class LifecycleService:
                 headers=exc.headers,
             ) from exc
 
-        if not self._user_service.verify_password(
-            password=password, password_hash=user.password_hash
+        if not await verify_password_async_compat(
+            self._user_service, password=password, password_hash=user.password_hash
         ):
             try:
                 decision = await self._brute_force_service.record_failed_password_attempt(
@@ -563,7 +574,8 @@ class LifecycleService:
     ) -> tuple[str, datetime]:
         """Issue signed email verification token with configured TTL."""
         active_key = await self._signing_key_service.get_active_signing_key(db_session)
-        token = self._jwt_service.issue_token(
+        token = await issue_token_async_compat(
+            self._jwt_service,
             subject=user_id,
             token_type="email_verify",
             expires_in_seconds=self._email_verify_ttl_seconds,
@@ -761,9 +773,13 @@ class LifecycleService:
         """Hash password reset token for database storage."""
         return sha256(token.encode("utf-8")).hexdigest()
 
-    def _perform_dummy_password_workload(self, candidate: str) -> None:
+    async def _perform_dummy_password_workload(self, candidate: str) -> None:
         """Execute constant-time-ish bcrypt work when the email is absent."""
-        self._user_service.verify_password(candidate, self._dummy_password_hash)
+        await verify_password_async_compat(
+            self._user_service,
+            password=candidate,
+            password_hash=self._dummy_password_hash,
+        )
 
     @staticmethod
     def _normalize_email(email: str) -> str:

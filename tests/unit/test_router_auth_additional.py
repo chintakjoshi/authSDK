@@ -89,6 +89,19 @@ class _UserServiceStub:
         return self.verify_password_result
 
 
+class _AsyncPasswordUserServiceStub(_UserServiceStub):
+    def __init__(self) -> None:
+        super().__init__()
+        self.verify_password_async_calls: list[dict[str, object]] = []
+
+    async def verify_password_async(self, **kwargs: object) -> bool:
+        self.verify_password_async_calls.append(dict(kwargs))
+        return self.verify_password_result
+
+    def verify_password(self, **kwargs: object) -> bool:
+        raise AssertionError("login should use verify_password_async when available")
+
+
 class _BruteForceStub:
     def __init__(self) -> None:
         self.ensure_error: BruteForceProtectionError | None = None
@@ -470,6 +483,44 @@ async def test_login_queues_success_audit_events_in_background_tasks(monkeypatch
         "user.login.success",
         "session.created",
         "token.issued",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_login_prefers_async_password_helper_when_available(monkeypatch) -> None:
+    """Login should use the async password helper when the service exposes one."""
+    user_service = _AsyncPasswordUserServiceStub()
+    user_service.user = SimpleNamespace(
+        id=uuid4(),
+        email="user@example.com",
+        password_hash="hashed",
+        email_verified=True,
+        email_otp_enabled=False,
+        role="user",
+    )
+    user_service.verify_password_result = True
+    monkeypatch.setattr(auth_router, "_password_login_requires_verified_email", lambda: False)
+
+    response = await auth_router.login(
+        payload=LoginRequest(email="user@example.com", password="Password123!"),
+        request=_request(path="/auth/login"),
+        background_tasks=BackgroundTasks(),
+        db_session=_db(),  # type: ignore[arg-type]
+        user_service=user_service,  # type: ignore[arg-type]
+        token_service=_TokenServiceStub(),  # type: ignore[arg-type]
+        session_service=_SessionStub(),  # type: ignore[arg-type]
+        otp_service=SimpleNamespace(),  # type: ignore[arg-type]
+        brute_force_service=_BruteForceStub(),  # type: ignore[arg-type]
+        audit_service=_AuditStub(),  # type: ignore[arg-type]
+        webhook_service=_WebhookStub(),  # type: ignore[arg-type]
+    )
+
+    assert response.access_token == "access-token"
+    assert user_service.verify_password_async_calls == [
+        {
+            "password": "Password123!",
+            "password_hash": "hashed",
+        }
     ]
 
 

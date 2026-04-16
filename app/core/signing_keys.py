@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -16,6 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings, reloadable_singleton
 from app.core.jwt import JWTService
 from app.models.signing_key import SigningKey, SigningKeyStatus
+
+_SIGNING_KEY_CACHE_TTL_SECONDS = 30.0
 
 
 @dataclass(frozen=True)
@@ -49,25 +53,54 @@ class SigningKeyService:
         fallback_private_key_pem: str,
         fallback_public_key_pem: str,
         encryption_key: str | None = None,
+        cache_ttl_seconds: float = _SIGNING_KEY_CACHE_TTL_SECONDS,
     ) -> None:
         self._fallback_private_key_pem = fallback_private_key_pem
         self._fallback_public_key_pem = fallback_public_key_pem
         self._fernet = Fernet(self._build_fernet_key(encryption_key, fallback_private_key_pem))
+        self._cache_ttl_seconds = max(cache_ttl_seconds, 0.0)
+        self._cache_lock = asyncio.Lock()
+        self._cached_active_signing_key: SigningKeyMaterial | None = None
+        self._active_cache_expires_at = 0.0
+        self._cached_verification_public_keys: dict[str, str] | None = None
+        self._verification_cache_expires_at = 0.0
 
     async def get_active_signing_key(self, db_session: AsyncSession) -> SigningKeyMaterial:
         """Return the currently active signing key, bootstrapping from env fallback if needed."""
-        row = await self._fetch_single_active_row(db_session)
-        if row is None:
-            row = await self._bootstrap_fallback_active_key(db_session)
-        return self._material_from_row(row)
+        cached = self._get_cached_active_signing_key()
+        if cached is not None:
+            return cached
+
+        async with self._cache_lock:
+            cached = self._get_cached_active_signing_key()
+            if cached is not None:
+                return cached
+
+            row = await self._fetch_single_active_row(db_session, for_update=False)
+            if row is None:
+                row = await self._bootstrap_fallback_active_key(db_session)
+            material = self._material_from_row(row)
+            self._cache_active_signing_key(material)
+            return material
 
     async def get_verification_public_keys(self, db_session: AsyncSession) -> dict[str, str]:
         """Return public keys for active and retiring key verification."""
-        rows = await self._fetch_non_retired_rows(db_session)
-        if not rows:
-            await self._bootstrap_fallback_active_key(db_session)
+        cached = self._get_cached_verification_public_keys()
+        if cached is not None:
+            return cached
+
+        async with self._cache_lock:
+            cached = self._get_cached_verification_public_keys()
+            if cached is not None:
+                return cached
+
             rows = await self._fetch_non_retired_rows(db_session)
-        return {row.kid: row.public_key for row in rows}
+            if not rows:
+                await self._bootstrap_fallback_active_key(db_session)
+                rows = await self._fetch_non_retired_rows(db_session)
+            public_keys = {row.kid: row.public_key for row in rows}
+            self._cache_verification_public_keys(public_keys)
+            return dict(public_keys)
 
     async def get_jwks_payload(self, db_session: AsyncSession) -> dict[str, list[dict[str, str]]]:
         """Return JWKS payload for all active and retiring keys."""
@@ -85,7 +118,7 @@ class SigningKeyService:
     ) -> SigningKeyRotationResult:
         """Rotate active key and retire overlap-expired retiring keys."""
         now = datetime.now(UTC)
-        current_active = await self._fetch_single_active_row(db_session)
+        current_active = await self._fetch_single_active_row(db_session, for_update=True)
         if current_active is None:
             current_active = await self._bootstrap_fallback_active_key(db_session)
 
@@ -112,6 +145,7 @@ class SigningKeyService:
             db_session=db_session,
             rotation_overlap_seconds=rotation_overlap_seconds,
         )
+        self._invalidate_caches()
         return SigningKeyRotationResult(new_kid=new_kid, retiring_kid=current_active.kid)
 
     async def retire_expired_keys(
@@ -136,9 +170,15 @@ class SigningKeyService:
             retired_kids.append(row.kid)
         if rows:
             await db_session.flush()
+            self._invalidate_verification_cache()
         return retired_kids
 
-    async def _fetch_single_active_row(self, db_session: AsyncSession) -> SigningKey | None:
+    async def _fetch_single_active_row(
+        self,
+        db_session: AsyncSession,
+        *,
+        for_update: bool = False,
+    ) -> SigningKey | None:
         """Fetch one active non-deleted key row, enforcing single-active invariant."""
         statement = (
             select(SigningKey)
@@ -147,8 +187,9 @@ class SigningKeyService:
                 SigningKey.deleted_at.is_(None),
             )
             .order_by(SigningKey.activated_at.desc())
-            .with_for_update()
         )
+        if for_update:
+            statement = statement.with_for_update()
         rows = list((await db_session.execute(statement)).scalars().all())
         if len(rows) > 1:
             raise ValueError("Multiple active signing keys detected.")
@@ -179,6 +220,7 @@ class SigningKeyService:
                 existing.status = SigningKeyStatus.ACTIVE
                 existing.retired_at = None
                 await db_session.flush()
+                self._invalidate_caches()
             return existing
 
         row = SigningKey(
@@ -191,6 +233,7 @@ class SigningKeyService:
         )
         db_session.add(row)
         await db_session.flush()
+        self._invalidate_caches()
         return row
 
     def _material_from_row(self, row: SigningKey) -> SigningKeyMaterial:
@@ -255,6 +298,59 @@ class SigningKeyService:
             .decode("utf-8")
         )
         return private_key_pem, public_key_pem
+
+    def _get_cached_active_signing_key(self) -> SigningKeyMaterial | None:
+        """Return cached active signing key material when it is still fresh."""
+        if self._cache_ttl_seconds <= 0:
+            return None
+        if self._cached_active_signing_key is None:
+            return None
+        if time.monotonic() >= self._active_cache_expires_at:
+            self._invalidate_active_cache()
+            return None
+        return self._cached_active_signing_key
+
+    def _cache_active_signing_key(self, material: SigningKeyMaterial) -> None:
+        """Cache decrypted active signing key material for short-lived reuse."""
+        if self._cache_ttl_seconds <= 0:
+            self._invalidate_active_cache()
+            return
+        self._cached_active_signing_key = material
+        self._active_cache_expires_at = time.monotonic() + self._cache_ttl_seconds
+
+    def _invalidate_active_cache(self) -> None:
+        """Clear cached active signing key material."""
+        self._cached_active_signing_key = None
+        self._active_cache_expires_at = 0.0
+
+    def _get_cached_verification_public_keys(self) -> dict[str, str] | None:
+        """Return cached verification keys when the short-lived cache is still fresh."""
+        if self._cache_ttl_seconds <= 0:
+            return None
+        if self._cached_verification_public_keys is None:
+            return None
+        if time.monotonic() >= self._verification_cache_expires_at:
+            self._invalidate_verification_cache()
+            return None
+        return dict(self._cached_verification_public_keys)
+
+    def _cache_verification_public_keys(self, public_keys: dict[str, str]) -> None:
+        """Cache verification public keys for short-lived reuse."""
+        if self._cache_ttl_seconds <= 0:
+            self._invalidate_verification_cache()
+            return
+        self._cached_verification_public_keys = dict(public_keys)
+        self._verification_cache_expires_at = time.monotonic() + self._cache_ttl_seconds
+
+    def _invalidate_verification_cache(self) -> None:
+        """Clear cached verification-key material."""
+        self._cached_verification_public_keys = None
+        self._verification_cache_expires_at = 0.0
+
+    def _invalidate_caches(self) -> None:
+        """Clear both issuance and verification key caches."""
+        self._invalidate_active_cache()
+        self._invalidate_verification_cache()
 
 
 @reloadable_singleton

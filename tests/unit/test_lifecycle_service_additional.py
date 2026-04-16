@@ -47,6 +47,20 @@ class _JWTServiceStub:
         return "verification-token"
 
 
+class _AsyncJWTServiceStub(_JWTServiceStub):
+    def __init__(self) -> None:
+        super().__init__()
+        self.issue_token_async_calls: list[dict[str, object]] = []
+
+    async def issue_token_async(self, **kwargs: object) -> str:
+        self.issue_token_async_calls.append(dict(kwargs))
+        return "verification-token-async"
+
+    def issue_token(self, **kwargs):  # type: ignore[no-untyped-def]
+        del kwargs
+        raise AssertionError("LifecycleService should use issue_token_async when available")
+
+
 class _SigningKeyServiceStub:
     async def get_verification_public_keys(self, db_session):  # type: ignore[no-untyped-def]
         del db_session
@@ -359,3 +373,20 @@ async def test_verify_email_jwt_maps_expired_and_invalid_tokens() -> None:
             token="verify-token",
         )
     assert exc_info.value.code == "invalid_verify_token"
+
+
+@pytest.mark.asyncio
+async def test_issue_email_verify_token_prefers_async_jwt_helper_when_available() -> None:
+    """Email verification issuance should use the async JWT helper on async request paths."""
+    jwt_service = _AsyncJWTServiceStub()
+    service = _service(jwt_service=jwt_service)
+
+    token, expires_at = await service._issue_email_verify_token(
+        db_session=_DBSessionStub(),  # type: ignore[arg-type]
+        user_id="user-1",
+    )
+
+    assert token == "verification-token-async"
+    assert expires_at > datetime.now(UTC)
+    assert jwt_service.issue_token_async_calls[0]["token_type"] == "email_verify"
+    assert jwt_service.issue_token_async_calls[0]["signing_kid"] == "kid-1"

@@ -54,7 +54,12 @@ from app.services.brute_force_service import (
 from app.services.m2m_service import M2MService, M2MServiceError, get_m2m_service
 from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
 from app.services.token_service import TokenService, get_token_service
-from app.services.user_service import UserService, get_user_service
+from app.services.user_service import (
+    UserService,
+    dummy_verify_async_compat,
+    get_user_service,
+    verify_password_async_compat,
+)
 from app.services.webhook_service import WebhookService, get_webhook_service
 
 router = APIRouter(tags=["auth"])
@@ -187,7 +192,7 @@ async def login(
     user_agent = normalize_user_agent(request.headers.get("user-agent"))
 
     if user is None or user.password_hash is None:
-        user_service.dummy_verify()
+        await dummy_verify_async_compat(user_service)
         audit_service.enqueue_record(
             background_tasks,
             event_type="user.login.failure",
@@ -223,8 +228,8 @@ async def login(
             headers=exc.headers,
         )
 
-    if not user_service.verify_password(
-        password=payload.password, password_hash=user.password_hash
+    if not await verify_password_async_compat(
+        user_service, password=payload.password, password_hash=user.password_hash
     ):
         try:
             failure_decision = await brute_force_service.record_failed_password_attempt(

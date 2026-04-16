@@ -69,6 +69,19 @@ class _UserServiceStub:
         return self.verify_password_result
 
 
+class _AsyncVerifyUserServiceStub(_UserServiceStub):
+    def __init__(self) -> None:
+        super().__init__()
+        self.verify_password_async_calls: list[tuple[str, str]] = []
+
+    async def verify_password_async(self, password: str, password_hash: str) -> bool:
+        self.verify_password_async_calls.append((password, password_hash))
+        return self.verify_password_result
+
+    def verify_password(self, password: str, password_hash: str) -> bool:
+        raise AssertionError("reauthentication should use verify_password_async when available")
+
+
 class _RedisStub:
     def __init__(self) -> None:
         self.values: dict[str, str] = {}
@@ -311,3 +324,30 @@ async def test_reauthenticate_rejects_invalid_states_and_succeeds() -> None:
         password="Password123!",
     )
     assert token == "fresh-access-token"
+
+
+@pytest.mark.asyncio
+async def test_reauthenticate_prefers_async_password_helper_when_available() -> None:
+    """Reauthentication should use the async password helper when the service exposes one."""
+    user = _UserRecord(id=uuid4(), email="reauth@example.com", password_hash="hashed::password")
+    user_service = _AsyncVerifyUserServiceStub()
+    user_service.verify_password_result = True
+    service = _service(user_service=user_service)
+
+    async def _claims(**kwargs: object) -> dict[str, object]:
+        return {"sub": str(user.id), "jti": "access-jti", "email_otp_enabled": False, "scopes": []}
+
+    async def _found_user(**kwargs: object) -> _UserRecord:
+        return user
+
+    service.validate_access_token = _claims  # type: ignore[assignment]
+    service._get_user_by_id = _found_user  # type: ignore[assignment]
+
+    token = await service.reauthenticate(
+        db_session=_DBSessionStub(),  # type: ignore[arg-type]
+        access_token="access",
+        password="Password123!",
+    )
+
+    assert token == "fresh-access-token"
+    assert user_service.verify_password_async_calls == [("Password123!", "hashed::password")]

@@ -182,6 +182,28 @@ def test_hash_password_and_verify_round_trip() -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_password_helpers_round_trip() -> None:
+    """Async password helpers preserve the same verification behavior off the event loop."""
+    service = UserService()
+    password = "my-secure-password"
+
+    password_hash = await service.hash_password_async(password)
+
+    assert password_hash != password
+    assert (
+        await service.verify_password_async(password=password, password_hash=password_hash) is True
+    )
+    assert (
+        await service.verify_password_async(
+            password="not-the-password",
+            password_hash=password_hash,
+        )
+        is False
+    )
+    await service.dummy_verify_async()
+
+
+@pytest.mark.asyncio
 async def test_update_role_requires_admin_actor() -> None:
     """Role updates are forbidden for non-admin actors."""
     service = UserService()

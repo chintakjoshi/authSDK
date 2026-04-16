@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings, reloadable_singleton
-from app.core.jwt import JWTService, get_jwt_service, merge_audiences
+from app.core.jwt import JWTService, get_jwt_service, issue_token_async_compat, merge_audiences
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
 from app.models.oauth_client import OAuthClient
 from app.services.pagination import CursorPage, apply_created_at_cursor, build_page, decode_cursor
@@ -119,7 +119,8 @@ class M2MService:
         resolved_scopes = requested_scopes or list(client.scopes)
         scope_claim = " ".join(resolved_scopes)
         active_key = await self._signing_key_service.get_active_signing_key(db_session)
-        access_token = self._jwt_service.issue_token(
+        access_token = await issue_token_async_compat(
+            self._jwt_service,
             subject=client.client_id,
             token_type="m2m",
             expires_in_seconds=client.token_ttl_seconds,

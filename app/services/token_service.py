@@ -8,7 +8,13 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings, reloadable_singleton
-from app.core.jwt import Audience, JWTService, get_jwt_service, merge_audiences
+from app.core.jwt import (
+    Audience,
+    JWTService,
+    get_jwt_service,
+    issue_token_async_compat,
+    merge_audiences,
+)
 from app.core.signing_keys import SigningKeyService, get_signing_key_service
 
 
@@ -70,7 +76,8 @@ class TokenService:
             access_claims["email"] = email
         if scopes is not None:
             access_claims["scopes"] = scopes
-        access_token = self._jwt_service.issue_token(
+        access_token = await issue_token_async_compat(
+            self._jwt_service,
             subject=user_id,
             token_type="access",
             expires_in_seconds=self._access_token_ttl_seconds,
@@ -79,7 +86,8 @@ class TokenService:
             signing_private_key_pem=active_key.private_key_pem,
             signing_kid=active_key.kid,
         )
-        refresh_token = self._jwt_service.issue_token(
+        refresh_token = await issue_token_async_compat(
+            self._jwt_service,
             subject=user_id,
             token_type="refresh",
             expires_in_seconds=self._refresh_token_ttl_seconds,
@@ -115,7 +123,8 @@ class TokenService:
             access_claims["email"] = email
         if scopes is not None:
             access_claims["scopes"] = scopes
-        access_token = self._jwt_service.issue_token(
+        access_token = await issue_token_async_compat(
+            self._jwt_service,
             subject=user_id,
             token_type="access",
             expires_in_seconds=self._access_token_ttl_seconds,
