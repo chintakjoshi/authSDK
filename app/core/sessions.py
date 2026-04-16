@@ -15,7 +15,7 @@ from uuid import UUID
 from redis import asyncio as redis_async
 from redis.asyncio.client import Redis
 from redis.exceptions import RedisError
-from sqlalchemy import select
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings, reloadable_singleton
@@ -23,8 +23,34 @@ from app.core.callable_compat import add_supported_kwarg, get_callable_parameter
 from app.core.jwt import decode_unverified_jwt_claims, normalize_audiences
 from app.models.session import Session
 from app.models.user import User
+from app.services.pagination import (
+    CursorPage,
+    apply_created_at_cursor,
+    build_page,
+    decode_cursor,
+)
 
 _REFRESH_TOKEN_HASH_CONTEXT = b"auth-service:refresh-token-hash:v1"
+
+_LAST_SEEN_THROTTLE_SECONDS = 60
+_IP_ADDRESS_MAX_LENGTH = 45
+_USER_AGENT_MAX_LENGTH = 512
+
+
+@dataclass(frozen=True)
+class UserSessionSummary:
+    """User-scoped session row for self-service listing."""
+
+    id: UUID
+    session_id: UUID
+    created_at: datetime
+    last_seen_at: datetime | None
+    expires_at: datetime
+    revoked_at: datetime | None
+    revoke_reason: str | None
+    ip_address: str | None
+    user_agent: str | None
+    is_current: bool
 
 
 @dataclass(frozen=True)
@@ -137,6 +163,8 @@ class SessionService:
         scopes: list[str],
         raw_access_token: str,
         raw_refresh_token: str,
+        ip_address: str | None = None,
+        user_agent: str | None = None,
     ) -> UUID:
         """Create a session row and cache payload in Redis."""
         now = datetime.now(UTC)
@@ -150,6 +178,9 @@ class SessionService:
             auth_time=auth_time,
             expires_at=datetime.now(UTC) + timedelta(seconds=self._refresh_token_ttl_seconds),
             revoked_at=None,
+            ip_address=_truncate(ip_address, _IP_ADDRESS_MAX_LENGTH),
+            user_agent=_truncate(user_agent, _USER_AGENT_MAX_LENGTH),
+            last_seen_at=now,
         )
         payload = SessionPayload(
             user_id=str(user_id),
@@ -230,6 +261,7 @@ class SessionService:
             )
             session_row.hashed_refresh_token = self._hash_token(token_pair.refresh_token)
             session_row.expires_at = now + timedelta(seconds=self._refresh_token_ttl_seconds)
+            session_row.last_seen_at = now
             await db_session.flush()
             await self._set_session_payload(session_id=session_row.session_id, payload=payload)
             await self._set_access_token_binding(
@@ -301,6 +333,7 @@ class SessionService:
         user_id: UUID,
         *,
         commit: bool = True,
+        reason: str | None = None,
     ) -> list[UUID]:
         """Revoke all non-deleted, non-revoked sessions for one user."""
         try:
@@ -312,6 +345,8 @@ class SessionService:
             session_ids: list[UUID] = []
             for session_row in session_rows:
                 session_row.revoked_at = revoked_at
+                if reason is not None:
+                    session_row.revoke_reason = reason
                 session_ids.append(session_row.session_id)
 
             await db_session.flush()
@@ -322,6 +357,130 @@ class SessionService:
 
         if commit:
             await db_session.commit()
+        return session_ids
+
+    async def revoke_one_session(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+        session_id: UUID,
+        reason: str,
+    ) -> UUID:
+        """Revoke a single session owned by the given user."""
+        try:
+            session_row = await self._fetch_session_by_session_id(
+                db_session=db_session,
+                session_id=session_id,
+                for_update=True,
+            )
+            if session_row is None or session_row.user_id != user_id:
+                raise SessionStateError("Session not found.", "invalid_session", 404)
+            if session_row.revoked_at is not None:
+                raise SessionStateError("Session already revoked.", "session_revoked", 409)
+
+            session_row.revoked_at = datetime.now(UTC)
+            session_row.revoke_reason = reason
+            await db_session.flush()
+            await self._delete_session_payloads(session_row.session_id)
+        except Exception:
+            await db_session.rollback()
+            raise
+        await db_session.commit()
+        return session_row.session_id
+
+    async def resolve_session_id_for_access_jti(self, access_jti: str) -> UUID | None:
+        """Return a bound session id or None when the access-token binding is absent."""
+        try:
+            return await self._get_session_id_for_access_jti(access_jti)
+        except SessionStateError as exc:
+            if exc.code == "session_expired" and exc.status_code == 401:
+                return None
+            raise
+
+    async def list_sessions_for_user(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+        status: str = "active",
+        cursor: str | None = None,
+        limit: int = 50,
+        current_session_id: UUID | None = None,
+    ) -> CursorPage[UserSessionSummary]:
+        """Return a cursor-paginated list of sessions for one user."""
+        if status not in {"active", "revoked", "all"}:
+            raise SessionStateError("Invalid status filter.", "invalid_status", 400)
+        limit = max(1, min(limit, 200))
+        cursor_position = decode_cursor(cursor) if cursor is not None else None
+        statement = (
+            select(Session)
+            .where(Session.user_id == user_id, Session.deleted_at.is_(None))
+            .order_by(Session.created_at.desc(), Session.session_id.desc())
+        )
+        now = datetime.now(UTC)
+        if status == "active":
+            statement = statement.where(
+                Session.revoked_at.is_(None),
+                Session.expires_at > now,
+            )
+        elif status == "revoked":
+            statement = statement.where(
+                or_(Session.revoked_at.is_not(None), Session.expires_at <= now)
+            )
+        statement = apply_created_at_cursor(
+            statement,
+            model=Session,
+            cursor=cursor_position,
+        ).limit(limit + 1)
+        rows = list((await db_session.execute(statement)).scalars().all())
+        summaries = [
+            UserSessionSummary(
+                id=row.id,
+                session_id=row.session_id,
+                created_at=row.created_at,
+                last_seen_at=row.last_seen_at,
+                expires_at=row.expires_at,
+                revoked_at=row.revoked_at,
+                revoke_reason=row.revoke_reason,
+                ip_address=row.ip_address,
+                user_agent=row.user_agent,
+                is_current=(
+                    current_session_id is not None and row.session_id == current_session_id
+                ),
+            )
+            for row in rows
+        ]
+        return build_page(summaries, limit=limit)
+
+    async def revoke_user_sessions_except(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+        except_session_id: UUID | None,
+        reason: str,
+    ) -> list[UUID]:
+        """Revoke all sessions for a user except the provided session id."""
+        try:
+            session_rows = await self._fetch_active_sessions_for_user(
+                db_session=db_session,
+                user_id=user_id,
+            )
+            revoked_at = datetime.now(UTC)
+            session_ids: list[UUID] = []
+            for session_row in session_rows:
+                if except_session_id is not None and session_row.session_id == except_session_id:
+                    continue
+                session_row.revoked_at = revoked_at
+                session_row.revoke_reason = reason
+                session_ids.append(session_row.session_id)
+            await db_session.flush()
+            await self._delete_session_payloads(*session_ids)
+        except Exception:
+            await db_session.rollback()
+            raise
+        await db_session.commit()
         return session_ids
 
     async def validate_access_token_session(
@@ -346,7 +505,36 @@ class SessionService:
             raise SessionStateError("Session expired.", "session_expired", 401)
 
         await self._get_session_payload(session_id=session_id)
+        await self._touch_last_seen(db_session=db_session, session_row=session_row, now=now)
         return session_row.session_id
+
+    async def _touch_last_seen(
+        self,
+        db_session: AsyncSession,
+        session_row: Session,
+        now: datetime,
+    ) -> None:
+        """Update last_seen_at if stale beyond the throttle window.
+
+        Best-effort: any failure is swallowed so the caller's auth flow is not
+        impacted. Missing one update is acceptable since the field is advisory.
+        """
+        previous = session_row.last_seen_at
+        if previous is not None and (now - previous).total_seconds() < _LAST_SEEN_THROTTLE_SECONDS:
+            return
+        try:
+            await db_session.execute(
+                update(Session)
+                .where(Session.session_id == session_row.session_id)
+                .values(last_seen_at=now)
+                .execution_options(synchronize_session=False)
+            )
+            await db_session.commit()
+        except Exception:
+            try:
+                await db_session.rollback()
+            except Exception:
+                pass
 
     async def revoke_session(
         self,
@@ -647,6 +835,16 @@ class SessionService:
         """Compute remaining refresh-session TTL in seconds."""
         now = datetime.now(UTC)
         return max(int((expires_at - now).total_seconds()), 1)
+
+
+def _truncate(value: str | None, max_length: int) -> str | None:
+    """Trim a display-only string to a column's max length."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return stripped[:max_length]
 
 
 async def _close_async_redis_client(client: Redis) -> None:

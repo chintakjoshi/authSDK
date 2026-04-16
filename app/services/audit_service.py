@@ -12,7 +12,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 
 import structlog
 from fastapi import BackgroundTasks, Request
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import reloadable_singleton
@@ -199,7 +199,10 @@ class AuditService:
         db_session: AsyncSession,
         *,
         actor_id: UUID | None = None,
+        target_id: UUID | None = None,
+        actor_or_target_id: UUID | None = None,
         event_type_prefix: str | None = None,
+        event_types: list[str] | None = None,
         success: bool | None = None,
         date_from=None,
         date_to=None,
@@ -212,8 +215,19 @@ class AuditService:
         statement = select(AuditEvent).order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
         if actor_id is not None:
             statement = statement.where(AuditEvent.actor_id == actor_id)
+        if target_id is not None:
+            statement = statement.where(AuditEvent.target_id == target_id)
+        if actor_or_target_id is not None:
+            statement = statement.where(
+                or_(
+                    AuditEvent.actor_id == actor_or_target_id,
+                    AuditEvent.target_id == actor_or_target_id,
+                )
+            )
         if event_type_prefix is not None:
             statement = statement.where(AuditEvent.event_type.like(f"{event_type_prefix}%"))
+        if event_types:
+            statement = statement.where(AuditEvent.event_type.in_(event_types))
         if success is not None:
             statement = statement.where(AuditEvent.success.is_(success))
         if date_from is not None:

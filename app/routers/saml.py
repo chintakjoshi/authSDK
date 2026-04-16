@@ -17,6 +17,7 @@ from app.core.saml import build_saml_request_data
 from app.dependencies import get_database_session
 from app.schemas.token import TokenPairResponse
 from app.services.audit_service import AuditService, get_audit_service
+from app.services.brute_force_service import extract_client_ip, normalize_user_agent
 from app.services.saml_service import SamlService, SamlServiceError, get_saml_service
 from app.services.webhook_service import WebhookService, get_webhook_service
 
@@ -104,10 +105,14 @@ async def saml_callback(
     get_data = _query_to_dict(request)
     post_data = await _post_form_to_dict(request) if request.method.upper() == "POST" else {}
     request_data = build_saml_request_data(request=request, get_data=get_data, post_data=post_data)
+    client_ip = extract_client_ip(request)
+    user_agent = normalize_user_agent(request.headers.get("user-agent"))
     try:
         completion = await saml_service.complete_callback(
             db_session=db_session,
             request_data=request_data,
+            client_ip=client_ip,
+            user_agent=user_agent,
         )
     except SamlServiceError as exc:
         await audit_service.record(
@@ -127,6 +132,7 @@ async def saml_callback(
         actor_type="user",
         success=True,
         request=request,
+        actor_id=completion.user_id,
         metadata={"provider": "saml", "phase": "callback"},
     )
     await audit_service.record(
@@ -135,11 +141,18 @@ async def saml_callback(
         actor_type="user",
         success=True,
         request=request,
+        actor_id=completion.user_id,
+        target_id=str(completion.session_id),
+        target_type="session",
         metadata={"provider": "saml"},
     )
     await webhook_service.emit_event(
         event_type="session.created",
-        data={"provider": "saml"},
+        data={
+            "session_id": str(completion.session_id),
+            "user_id": completion.user_id,
+            "provider": "saml",
+        },
     )
     await audit_service.record(
         db=db_session,
@@ -147,6 +160,7 @@ async def saml_callback(
         actor_type="user",
         success=True,
         request=request,
+        actor_id=completion.user_id,
         metadata={"provider": "saml", "token_kind": "access_refresh_pair"},
     )
     redirect_uri = _normalized_optional_attr(getattr(completion, "redirect_uri", None))

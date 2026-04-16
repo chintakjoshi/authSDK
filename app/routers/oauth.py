@@ -15,6 +15,7 @@ from app.core.browser_sessions import (
 from app.dependencies import get_database_session
 from app.schemas.token import TokenPairResponse
 from app.services.audit_service import AuditService, get_audit_service
+from app.services.brute_force_service import extract_client_ip, normalize_user_agent
 from app.services.oauth_service import OAuthService, OAuthServiceError, get_oauth_service
 from app.services.webhook_service import WebhookService, get_webhook_service
 
@@ -74,11 +75,15 @@ async def google_callback(
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
 ) -> TokenPairResponse | JSONResponse:
     """Complete Google OAuth callback and issue auth tokens."""
+    client_ip = extract_client_ip(request)
+    user_agent = normalize_user_agent(request.headers.get("user-agent"))
     try:
         completion = await oauth_service.complete_google_callback(
             db_session=db_session,
             state=state,
             code=code,
+            client_ip=client_ip,
+            user_agent=user_agent,
         )
     except OAuthServiceError as exc:
         await audit_service.record(
@@ -98,6 +103,7 @@ async def google_callback(
         actor_type="user",
         success=True,
         request=request,
+        actor_id=completion.user_id,
         metadata={"provider": "google", "phase": "callback"},
     )
     await audit_service.record(
@@ -106,11 +112,18 @@ async def google_callback(
         actor_type="user",
         success=True,
         request=request,
+        actor_id=completion.user_id,
+        target_id=str(completion.session_id),
+        target_type="session",
         metadata={"provider": "google"},
     )
     await webhook_service.emit_event(
         event_type="session.created",
-        data={"provider": "google"},
+        data={
+            "session_id": str(completion.session_id),
+            "user_id": completion.user_id,
+            "provider": "google",
+        },
     )
     await audit_service.record(
         db=db_session,
@@ -118,6 +131,7 @@ async def google_callback(
         actor_type="user",
         success=True,
         request=request,
+        actor_id=completion.user_id,
         metadata={"provider": "google", "token_kind": "access_refresh_pair"},
     )
     redirect_uri = _normalized_optional_attr(getattr(completion, "redirect_uri", None))

@@ -82,8 +82,15 @@ class _FailingOAuthService:
         del redirect_uri, audience
         raise OAuthServiceError("OAuth state mismatch.", "oauth_state_mismatch", 503)
 
-    async def complete_google_callback(self, db_session: AsyncSession, state: str, code: str):
-        del db_session, state, code
+    async def complete_google_callback(
+        self,
+        db_session: AsyncSession,
+        state: str,
+        code: str,
+        client_ip: str | None = None,
+        user_agent: str | None = None,
+    ):
+        del db_session, state, code, client_ip, user_agent
         raise AssertionError("callback should not be called")
 
 
@@ -282,6 +289,16 @@ async def test_oauth_routes_persist_expected_audit_events(app_factory, db_sessio
     assert ("user.login.failure", False) in pairs
     assert ("session.created", True) in pairs
     assert ("token.issued", True) in pairs
+    login_success = next(
+        event for event in events if event.event_type == "user.login.success" and event.success
+    )
+    session_created = next(
+        event for event in events if event.event_type == "session.created" and event.success
+    )
+    assert login_success.actor_id is not None
+    assert session_created.actor_id is not None
+    assert session_created.target_id is not None
+    assert session_created.target_type == "session"
 
 
 @pytest.mark.asyncio
@@ -333,6 +350,16 @@ async def test_saml_routes_persist_expected_audit_events(app_factory, db_session
     assert ("user.login.failure", False) in pairs
     assert ("session.created", True) in pairs
     assert ("token.issued", True) in pairs
+    login_success = next(
+        event for event in events if event.event_type == "user.login.success" and event.success
+    )
+    session_created = next(
+        event for event in events if event.event_type == "session.created" and event.success
+    )
+    assert login_success.actor_id is not None
+    assert session_created.actor_id is not None
+    assert session_created.target_id is not None
+    assert session_created.target_type == "session"
 
 
 @pytest.mark.asyncio

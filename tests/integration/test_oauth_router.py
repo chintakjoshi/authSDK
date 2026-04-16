@@ -20,6 +20,9 @@ class _TokenPairStub:
 
     access_token: str
     refresh_token: str
+    user_id: str = "user-123"
+    session_id: str = "session-123"
+    redirect_uri: str | None = None
 
 
 class _OAuthServiceStub:
@@ -47,8 +50,11 @@ class _OAuthServiceStub:
         db_session: Any,
         state: str,
         code: str,
+        client_ip: str | None = None,
+        user_agent: str | None = None,
     ) -> _TokenPairStub:
         """Return token pair or raise configured error."""
+        del db_session, state, code, client_ip, user_agent
         if isinstance(self.callback_result, OAuthServiceError):
             raise self.callback_result
         assert self.callback_result is not None

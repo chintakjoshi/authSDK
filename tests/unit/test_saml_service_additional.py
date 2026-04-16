@@ -279,13 +279,19 @@ async def test_complete_callback_maps_parse_failures_and_creates_session() -> No
     result = await service.complete_callback(
         db_session=object(),  # type: ignore[arg-type]
         request_data={"post_data": {"SAMLResponse": "ok", "RelayState": "relay-state"}},
+        client_ip="203.0.113.11",
+        user_agent="Mozilla/5.0 Firefox/121",
     )
 
     assert result.access_token == "access-token"
     assert result.refresh_token == "refresh-token"
     assert result.redirect_uri is None
     assert result.relay_state is None
+    assert result.user_id == "user-1"
+    assert result.session_id == "session-id"
     assert session_service.calls[0]["email"] == "saml@example.com"
+    assert session_service.calls[0]["ip_address"] == "203.0.113.11"
+    assert session_service.calls[0]["user_agent"] == "Mozilla/5.0 Firefox/121"
 
 
 @pytest.mark.asyncio

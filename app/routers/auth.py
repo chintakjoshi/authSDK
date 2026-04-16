@@ -421,6 +421,8 @@ async def login(
             scopes=[],
             raw_access_token=token_pair.access_token,
             raw_refresh_token=token_pair.refresh_token,
+            ip_address=client_ip,
+            user_agent=user_agent,
         )
     except SessionStateError as exc:
         await audit_service.record(
