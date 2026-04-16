@@ -244,7 +244,7 @@ async def hash_password_async_compat(user_service: object, password: str) -> str
         if inspect.isawaitable(result):
             return str(await result)
         return str(result)
-    hash_password = getattr(user_service, "hash_password")
+    hash_password = user_service.hash_password
     return str(hash_password(password))
 
 
@@ -261,7 +261,7 @@ async def verify_password_async_compat(
         if inspect.isawaitable(result):
             return bool(await result)
         return bool(result)
-    verify_password = getattr(user_service, "verify_password")
+    verify_password = user_service.verify_password
     return bool(verify_password(password=password, password_hash=password_hash))
 
 
@@ -273,5 +273,5 @@ async def dummy_verify_async_compat(user_service: object) -> None:
         if inspect.isawaitable(result):
             await result
         return
-    dummy_verify = getattr(user_service, "dummy_verify")
+    dummy_verify = user_service.dummy_verify
     dummy_verify()
