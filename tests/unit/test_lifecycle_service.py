@@ -51,6 +51,16 @@ class _RedisStub:
             raise RedisError("redis unavailable")
         return self.values.get(key)
 
+    async def incr(self, key: str) -> int:
+        """Increment one rate-limit counter."""
+        self.values[key] = str(int(self.values.get(key, "0")) + 1)
+        return int(self.values[key])
+
+    async def expire(self, key: str, ttl: int) -> bool:
+        """Accept counter TTL initialization."""
+        del key, ttl
+        return True
+
 
 class _UserServiceStub:
     """User-service stub covering password reset test flows."""

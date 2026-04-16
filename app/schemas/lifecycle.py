@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 
-EmailAddress = Annotated[EmailStr, Field(max_length=320)]
+from app.schemas.validation import AuthPassword, EmailAddress, StrongPassword
 
 
 class SignupRequest(BaseModel):
     """Password signup payload."""
 
     email: EmailAddress
-    password: str = Field(min_length=8, max_length=256)
+    password: StrongPassword
 
 
 class SignupResponse(BaseModel):
@@ -63,7 +63,7 @@ class ResetPasswordRequest(BaseModel):
     """Password reset completion payload."""
 
     token: str = Field(min_length=16, max_length=512)
-    new_password: str = Field(min_length=8, max_length=256)
+    new_password: StrongPassword
 
 
 class ResetPasswordResponse(BaseModel):
@@ -75,7 +75,7 @@ class ResetPasswordResponse(BaseModel):
 class ReauthRequest(BaseModel):
     """Password re-authentication payload."""
 
-    password: str = Field(min_length=8, max_length=256)
+    password: AuthPassword
 
 
 class ReauthResponse(BaseModel):
