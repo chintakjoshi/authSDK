@@ -250,6 +250,8 @@ return value
                         email=email,
                         email_verified=email_verified,
                     )
+                elif not email_verified:
+                    raise self._blocked_login_error()
                 identity = UserIdentity(
                     user_id=user.id,
                     provider="saml",
