@@ -70,9 +70,20 @@ class _UserServiceStub:
 
 
 class _RedisStub:
+    def __init__(self) -> None:
+        self.values: dict[str, str] = {}
+
     async def get(self, key: str) -> None:
         del key
         return None
+
+    async def incr(self, key: str) -> int:
+        self.values[key] = str(int(self.values.get(key, "0")) + 1)
+        return int(self.values[key])
+
+    async def expire(self, key: str, ttl: int) -> bool:
+        del key, ttl
+        return True
 
 
 class _EmailSenderStub:
@@ -197,6 +208,16 @@ async def test_request_password_reset_and_validate_token_paths() -> None:
     assert user_id == str(user.id)
     assert user.password_reset_token_hash is not None
     assert sender.reset_links
+    first_token_hash = user.password_reset_token_hash
+
+    with pytest.raises(LifecycleServiceError) as exc_info:
+        await service.request_password_reset(
+            db_session=db_session,  # type: ignore[arg-type]
+            email=user.email,
+        )
+    assert exc_info.value.code == "rate_limited"
+    assert len(sender.reset_links) == 1
+    assert user.password_reset_token_hash == first_token_hash
 
     async def _lookup(**kwargs: object) -> _UserRecord | None:
         return user

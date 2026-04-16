@@ -188,6 +188,7 @@ class LifecycleService:
         self._password_reset_ttl_seconds = password_reset_ttl_seconds
         self._resend_limit_ttl_seconds = 3600
         self._resend_limit_count = 3
+        self._password_reset_request_cooldown_seconds = 60
         self._dummy_password_hash = self._user_service.hash_password("auth-service-dummy-password")
         self._auth_service_audience = auth_service_audience
         self._public_base_url = public_base_url.rstrip("/")
@@ -377,7 +378,11 @@ class LifecycleService:
         email: str,
     ) -> str | None:
         """Issue a single active password reset token when the email exists."""
-        normalized_email = email.strip().lower()
+        normalized_email = self._normalize_email(email)
+        if normalized_email:
+            await self._enforce_password_reset_request_cooldown(
+                f"email:{self._hash_public_resend_identifier(normalized_email)}"
+            )
         user = None
         if normalized_email:
             user = await self._user_service.get_user_by_email(
@@ -591,23 +596,45 @@ class LifecycleService:
     async def _enforce_resend_rate_limit(self, subject: str) -> None:
         """Allow at most 3 resend requests per subject each hour."""
         key = f"email_verify_resend:{subject}"
-        try:
-            count = await self._redis.incr(key)
-            if count == 1:
-                await self._redis.expire(key, self._resend_limit_ttl_seconds)
-        except RedisError as exc:
-            raise LifecycleServiceError(
-                "Session backend unavailable.",
-                "session_expired",
-                503,
-            ) from exc
-
+        count = await self._increment_rate_limit_counter(
+            key=key,
+            ttl_seconds=self._resend_limit_ttl_seconds,
+        )
         if count > self._resend_limit_count:
             raise LifecycleServiceError(
                 "Rate limit exceeded.",
                 "rate_limited",
                 429,
             )
+
+    async def _enforce_password_reset_request_cooldown(self, subject: str) -> None:
+        """Allow at most one forgot-password request per subject each minute."""
+        key = f"password_reset_request:{subject}"
+        count = await self._increment_rate_limit_counter(
+            key=key,
+            ttl_seconds=self._password_reset_request_cooldown_seconds,
+        )
+        if count > 1:
+            raise LifecycleServiceError(
+                "Rate limit exceeded.",
+                "rate_limited",
+                429,
+                headers={"Retry-After": str(self._password_reset_request_cooldown_seconds)},
+            )
+
+    async def _increment_rate_limit_counter(self, *, key: str, ttl_seconds: int) -> int:
+        """Increment a Redis counter and initialize its TTL on first use."""
+        try:
+            count = await self._redis.incr(key)
+            if count == 1:
+                await self._redis.expire(key, ttl_seconds)
+        except RedisError as exc:
+            raise LifecycleServiceError(
+                "Session backend unavailable.",
+                "session_expired",
+                503,
+            ) from exc
+        return count
 
     async def _resend_verification_email_for_user(
         self,

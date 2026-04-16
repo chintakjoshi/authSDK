@@ -278,6 +278,10 @@ async def test_password_reset_rejects_expired_and_already_used_tokens(
         assert expired.status_code == 400
         assert expired.json()["code"] == "invalid_reset_token"
 
+        await get_redis_client().delete(
+            "password_reset_request:email:"
+            + LifecycleService._hash_public_resend_identifier("expired-reset@example.com")
+        )
         forgot_again = await client.post(
             "/auth/password/forgot",
             json={"email": "expired-reset@example.com"},
@@ -346,3 +350,92 @@ async def test_password_forgot_rejects_invalid_email_payload(app_factory) -> Non
     assert forgot.status_code == 422
     assert forgot.json()["code"] == "invalid_credentials"
     assert forgot.json()["detail"].startswith("Invalid request payload")
+
+
+@pytest.mark.asyncio
+async def test_password_forgot_rate_limit_prevents_reset_link_invalidation(
+    app_factory,
+    user_factory,
+    db_session,
+) -> None:
+    """Repeated forgot-password requests within one minute should not rotate the active reset link."""
+    app: FastAPI = app_factory()
+    sender = _CapturingLifecycleEmailSender()
+    app.dependency_overrides[get_lifecycle_service] = lambda: _build_lifecycle_service(sender)
+    await user_factory("cooldown@example.com", "Password123!", email_verified=True)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        first = await client.post(
+            "/auth/password/forgot",
+            json={"email": "cooldown@example.com"},
+        )
+        assert first.status_code == 200
+        assert len(sender.reset_emails) == 1
+        first_token = _extract_token(sender.reset_emails[0].reset_link)
+
+        second = await client.post(
+            "/auth/password/forgot",
+            json={"email": "cooldown@example.com"},
+        )
+        assert second.status_code == 429
+        assert second.json()["code"] == "rate_limited"
+        assert len(sender.reset_emails) == 1
+
+        validate = await client.get("/auth/password/reset", params={"token": first_token})
+        assert validate.status_code == 200
+        assert validate.json() == {"valid": True}
+
+    user = (
+        await db_session.execute(
+            select(User).where(User.email == "cooldown@example.com", User.deleted_at.is_(None))
+        )
+    ).scalar_one()
+    assert user.password_reset_token_hash == LifecycleService._hash_password_reset_token(
+        first_token
+    )
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_signup_and_reset_reject_weak_password_payloads(app_factory, user_factory) -> None:
+    """Signup and password reset should reject weak new passwords at request-validation time."""
+    app: FastAPI = app_factory()
+    sender = _CapturingLifecycleEmailSender()
+    app.dependency_overrides[get_lifecycle_service] = lambda: _build_lifecycle_service(sender)
+    await user_factory("weak-reset@example.com", "Password123!", email_verified=True)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        signup = await client.post(
+            "/auth/signup",
+            json={"email": "weak-signup@example.com", "password": "password123!"},
+        )
+        assert signup.status_code == 422
+        assert signup.json()["code"] == "invalid_credentials"
+        assert "uppercase" in signup.json()["detail"].lower()
+
+        forgot = await client.post(
+            "/auth/password/forgot",
+            json={"email": "weak-reset@example.com"},
+        )
+        assert forgot.status_code == 200
+        token = _extract_token(sender.reset_emails[0].reset_link)
+
+        weak_reset = await client.post(
+            "/auth/password/reset",
+            json={"token": token, "new_password": "Password123"},
+        )
+        assert weak_reset.status_code == 422
+        assert weak_reset.json()["code"] == "invalid_credentials"
+        assert "special" in weak_reset.json()["detail"].lower()
+
+        still_valid = await client.get("/auth/password/reset", params={"token": token})
+        assert still_valid.status_code == 200
+        assert still_valid.json() == {"valid": True}
+
+    app.dependency_overrides.clear()
