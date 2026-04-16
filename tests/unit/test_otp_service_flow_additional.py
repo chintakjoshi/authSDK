@@ -165,6 +165,7 @@ async def test_start_login_challenge_and_resend_login_code_success_paths() -> No
     sender = _EmailSenderStub()
     service = _service(email_sender=sender)
     user = _UserStub(id=uuid4(), email="otp@example.com")
+    stored_hashes: list[str] = []
 
     async def _no_block(user_id: str) -> None:
         return None
@@ -172,6 +173,7 @@ async def test_start_login_challenge_and_resend_login_code_success_paths() -> No
     async def _store_hash(key: str, payload: dict[str, str], *, ttl_seconds: int) -> None:
         assert key.startswith("otp:login:")
         assert payload["attempt_count"] == "0"
+        stored_hashes.append(payload["code_hash"])
         assert ttl_seconds == 600
 
     service._ensure_issuance_not_blocked = _no_block  # type: ignore[assignment]
@@ -183,6 +185,7 @@ async def test_start_login_challenge_and_resend_login_code_success_paths() -> No
     assert challenge.user_id == str(user.id)
     assert challenge.challenge_token == "issued-jwt"
     assert sender.login_messages
+    assert stored_hashes[0] == hash_otp(sender.login_messages[0][1])
 
     async def _challenge_claims(db_session, token: str) -> dict[str, object]:  # type: ignore[no-untyped-def]
         del db_session, token
@@ -206,6 +209,7 @@ async def test_start_login_challenge_and_resend_login_code_success_paths() -> No
         challenge_token="challenge-token",
     )
     assert resent_user_id == str(user.id)
+    assert stored_hashes[1] == hash_otp(sender.login_messages[1][1])
 
 
 @pytest.mark.asyncio
