@@ -625,3 +625,33 @@ async def test_identity_upsert_rejects_deleted_or_inactive_saml_accounts() -> No
         )
     assert exc_info.value.code == "invalid_credentials"
     assert db_session.added == []
+
+
+@pytest.mark.asyncio
+async def test_identity_upsert_rejects_unverified_saml_link_to_existing_user() -> None:
+    """New SAML identities cannot attach to an existing user without verified email."""
+    service = _service()
+    existing_user = _UserStub(
+        id="user-1",
+        email="victim@example.com",
+        role="user",
+        email_verified=True,
+    )
+    db_session = _DBSessionStub(execute_results=[None])
+
+    async def _existing_user_by_email(**kwargs: object) -> _UserStub:
+        return existing_user
+
+    service._get_user_by_email = _existing_user_by_email  # type: ignore[assignment]
+
+    with pytest.raises(SamlServiceError) as exc_info:
+        await service._upsert_identity_then_resolve_user(
+            db_session=db_session,  # type: ignore[arg-type]
+            provider_user_id="saml-user-1",
+            email="victim@example.com",
+            email_verified=False,
+        )
+
+    assert exc_info.value.code == "invalid_credentials"
+    assert db_session.added == []
+    assert db_session.flush_count == 0
