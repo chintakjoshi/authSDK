@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import ipaddress
 from datetime import datetime
 from typing import Generic, Literal, TypeVar
 from uuid import UUID
 
-from pydantic import AnyHttpUrl, BaseModel, Field
+from pydantic import AnyHttpUrl, BaseModel, Field, field_validator, model_validator
 
 T = TypeVar("T")
 
@@ -76,6 +77,8 @@ class AdminSessionItem(BaseModel):
     ip_address: str | None
     user_agent: str | None
     device_label: str
+    is_suspicious: bool
+    suspicious_reasons: list[str]
 
 
 class AdminSessionRevokeResponse(BaseModel):
@@ -90,6 +93,89 @@ class AdminSessionRevokeRequest(BaseModel):
     """Optional request body for admin session revoke endpoints."""
 
     reason: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def _strip_reason(cls, value: str | None) -> str | None:
+        """Trim optional free-form reason input."""
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+
+class AdminSessionFilterRevokeRequest(BaseModel):
+    """Filterable admin bulk-session revoke payload with safe defaults."""
+
+    is_suspicious: bool | None = None
+    created_before: datetime | None = None
+    created_after: datetime | None = None
+    last_seen_before: datetime | None = None
+    last_seen_after: datetime | None = None
+    ip_address: str | None = Field(default=None, min_length=1, max_length=45)
+    user_agent_contains: str | None = Field(default=None, min_length=1, max_length=128)
+    dry_run: bool = False
+    reason: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @field_validator("ip_address", "user_agent_contains", "reason", mode="before")
+    @classmethod
+    def _strip_optional_strings(cls, value: str | None) -> str | None:
+        """Trim optional string filters before length validation runs."""
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("ip_address")
+    @classmethod
+    def _normalize_ip_address(cls, value: str | None) -> str | None:
+        """Require canonical IP-address filters."""
+        if value is None:
+            return None
+        try:
+            return str(ipaddress.ip_address(value))
+        except ValueError as exc:
+            raise ValueError("IP address must be valid.") from exc
+
+    @model_validator(mode="after")
+    def _validate_filter_contract(self) -> AdminSessionFilterRevokeRequest:
+        """Require at least one selector and coherent time ranges."""
+        has_selector = any(
+            (
+                self.is_suspicious is not None,
+                self.created_before is not None,
+                self.created_after is not None,
+                self.last_seen_before is not None,
+                self.last_seen_after is not None,
+                self.ip_address is not None,
+                self.user_agent_contains is not None,
+            )
+        )
+        if not has_selector:
+            raise ValueError("At least one session filter is required.")
+        if (
+            self.created_before is not None
+            and self.created_after is not None
+            and self.created_before < self.created_after
+        ):
+            raise ValueError("created_before must be on or after created_after.")
+        if (
+            self.last_seen_before is not None
+            and self.last_seen_after is not None
+            and self.last_seen_before < self.last_seen_after
+        ):
+            raise ValueError("last_seen_before must be on or after last_seen_after.")
+        return self
+
+
+class AdminSessionFilteredRevokeResponse(BaseModel):
+    """Admin response for filter-based bulk session revocation."""
+
+    user_id: UUID
+    matched_session_ids: list[UUID]
+    matched_session_count: int
+    revoked_session_ids: list[UUID]
+    revoked_session_count: int
+    dry_run: bool
+    revoke_reason: str
 
 
 class AdminUserEraseResponse(BaseModel):
@@ -268,6 +354,12 @@ class AdminAuditLogItem(BaseModel):
     failure_reason: str | None
     metadata: dict | None
     created_at: datetime
+
+
+class AdminSessionDetail(AdminSessionItem):
+    """Admin-facing session detail payload with an embedded attributable timeline."""
+
+    timeline: list[AdminAuditLogItem]
 
 
 class AdminSigningKeyRotateResponse(BaseModel):

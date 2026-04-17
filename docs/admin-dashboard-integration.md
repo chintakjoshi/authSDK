@@ -101,6 +101,8 @@ friendly device label using `device_label` (server-derived).
 | Method | Path | Purpose | Step-Up |
 |--------|------|---------|---------|
 | GET | `/users/{user_id}/sessions` | List sessions for a user | No |
+| GET | `/users/{user_id}/sessions/{session_id}` | Session detail with attributable timeline | No |
+| POST | `/users/{user_id}/sessions/revoke-by-filter` | Preview or revoke sessions matching explicit selectors | Yes |
 | DELETE | `/users/{user_id}/sessions/{session_id}` | Revoke one session | Yes |
 | DELETE | `/users/{user_id}/sessions` | Revoke all sessions for a user | Yes |
 
@@ -123,7 +125,9 @@ Session list item shape:
   "revoke_reason": null,
   "ip_address": "203.0.113.10",
   "user_agent": "Mozilla/5.0 ...",
-  "device_label": "Chrome on Windows"
+  "device_label": "Chrome on Windows",
+  "is_suspicious": true,
+  "suspicious_reasons": ["new_ip", "prior_failures"]
 }
 ```
 
@@ -138,13 +142,68 @@ Notes for dashboard authors:
 - `ip_address` is the client IP observed at login, truncated to 45 chars.
   The service does not resolve it to a country or ISP; if the dashboard needs
   GeoIP, resolve it in the dashboard backend.
-- Revoke reasons default to `admin_targeted` (single-session revoke) and
-  `admin_revoke_all` (bulk revoke). Callers can override these via the
-  optional `reason` body on the DELETE endpoints. Self-service revocations
-  default to `self_targeted` and `self_revoke_others`. Treat the field as
+- `is_suspicious` is the persisted login-time risk signal for that session.
+  Today it is derived from account heuristics such as a new IP, a new user
+  agent, or multiple recent failures before success.
+- `suspicious_reasons` is a stable list of short slugs explaining why the
+  session was marked suspicious. Current values are `new_ip`,
+  `new_user_agent`, and `prior_failures`.
+- Revoke reasons default to `admin_targeted` (single-session revoke),
+  `admin_revoke_all` (bulk revoke), and `admin_filtered_revoke`
+  (filter-based revoke). Callers can override these via the optional
+  request body on the revoke endpoints. Self-service revocations default
+  to `self_targeted` and `self_revoke_others`. Treat the field as
   free-form, since integrators may supply arbitrary short slugs.
 
-Both revoke endpoints accept an optional request body specifying a custom
+`POST /users/{user_id}/sessions/revoke-by-filter` accepts a JSON body with at
+least one explicit selector. Supported selectors:
+
+- `is_suspicious`
+- `created_before` / `created_after`
+- `last_seen_before` / `last_seen_after`
+- `ip_address`
+- `user_agent_contains`
+
+Optional execution controls:
+
+- `dry_run` - when `true`, preview the matched session ids without revoking
+  them
+- `reason` - free-form 1-64 char revoke reason; defaults to
+  `admin_filtered_revoke`
+
+Filter-revoke request example:
+
+```json
+{
+  "is_suspicious": true,
+  "dry_run": true
+}
+```
+
+Filter-revoke response shape:
+
+```json
+{
+  "user_id": "uuid",
+  "matched_session_ids": ["uuid"],
+  "matched_session_count": 1,
+  "revoked_session_ids": [],
+  "revoked_session_count": 0,
+  "dry_run": true,
+  "revoke_reason": "admin_filtered_revoke"
+}
+```
+
+Filter-revoke notes:
+
+- The route fails closed when the request omits every selector. Use
+  `DELETE /users/{user_id}/sessions` when you truly intend to revoke every
+  active session for the user.
+- On non-dry-run execution, the service emits the normal `session.revoked`
+  audit event and webhook payload, plus the filter criteria used to produce
+  the sweep.
+
+Both DELETE revoke endpoints accept an optional request body specifying a custom
 revoke reason. When omitted, the server falls back to `admin_targeted` for
 single-session revokes and `admin_revoke_all` for bulk revokes. The reason
 is echoed in the response, persisted on the session row, and included in
@@ -158,9 +217,66 @@ Request body (optional):
 }
 ```
 
-Constraints: `reason` is free-form, 1–64 characters. Prefer short
+Constraints: `reason` is free-form, 1-64 characters. Prefer short
 machine-readable slugs so dashboards can group by reason; include free-form
 human context in the audit metadata layer of your own tooling if needed.
+
+`GET /users/{user_id}/sessions/{session_id}` returns the same core session
+fields as the list view plus a compact `timeline` array of directly
+attributable audit events. The route also accepts `timeline_limit` (1-100,
+default 20).
+
+Session detail response shape:
+
+```json
+{
+  "session_id": "uuid",
+  "user_id": "uuid",
+  "created_at": "2026-04-16T09:00:00Z",
+  "last_seen_at": "2026-04-16T10:15:00Z",
+  "expires_at": "2026-04-23T09:00:00Z",
+  "revoked_at": "2026-04-16T11:00:00Z",
+  "revoke_reason": "compromised_device",
+  "ip_address": "203.0.113.10",
+  "user_agent": "Mozilla/5.0 ...",
+  "device_label": "Chrome on Windows",
+  "is_suspicious": true,
+  "suspicious_reasons": ["new_ip"],
+  "timeline": [
+    {
+      "event_type": "user.login.success",
+      "success": true,
+      "metadata": {"provider": "password"},
+      "created_at": "2026-04-16T09:00:00Z"
+    },
+    {
+      "event_type": "session.created",
+      "success": true,
+      "metadata": {"provider": "password"},
+      "created_at": "2026-04-16T09:00:00Z"
+    },
+    {
+      "event_type": "session.revoked",
+      "success": true,
+      "metadata": {
+        "reason": "compromised_device",
+        "session_id": "uuid"
+      },
+      "created_at": "2026-04-16T11:00:00Z"
+    }
+  ]
+}
+```
+
+Timeline notes:
+
+- The timeline is intentionally compact. It includes events directly targeted
+  at the session, revocation events that name the session in audit metadata,
+  and login-era events stitched through the session-creation correlation id.
+- Not every auth event in the system is attributable to one specific session.
+  For example, logout currently does not emit a session-targeted audit row, so
+  dashboards should treat the timeline as "reliably attributable events",
+  not a perfect replay of every request the user made.
 
 Revoke-one response:
 
@@ -318,3 +434,4 @@ The OpenAPI document at `/openapi.json` is the canonical source for request
 and response shapes. Breaking changes to admin endpoints are called out in
 `operations.md` release notes. Dashboards should regenerate their client
 types from OpenAPI on each service release.
+

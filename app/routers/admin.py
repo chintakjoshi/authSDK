@@ -11,9 +11,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
+from app.core.user_agent import parse_device_label
 from app.dependencies import get_database_session
 from app.routers._admin_access import require_admin_claims as _require_admin_claims
-from app.core.user_agent import parse_device_label
 from app.schemas.admin import (
     AdminAPIKeyCreateRequest,
     AdminAPIKeyCreateResponse,
@@ -25,6 +25,9 @@ from app.schemas.admin import (
     AdminOAuthClientResponse,
     AdminOAuthClientRotateSecretResponse,
     AdminOAuthClientUpdateRequest,
+    AdminSessionDetail,
+    AdminSessionFilteredRevokeResponse,
+    AdminSessionFilterRevokeRequest,
     AdminSessionItem,
     AdminSessionRevokeRequest,
     AdminSessionRevokeResponse,
@@ -106,6 +109,45 @@ def _user_detail_item(item) -> AdminUserDetail:
         updated_at=item.updated_at,
         active_session_count=item.active_session_count,
     )
+
+
+def _audit_log_item(row) -> AdminAuditLogItem:
+    """Convert one audit row into the admin API schema."""
+    return AdminAuditLogItem(
+        id=row.id,
+        event_type=row.event_type,
+        actor_id=row.actor_id,
+        actor_type=row.actor_type.value,
+        target_id=row.target_id,
+        target_type=row.target_type,
+        ip_address=str(row.ip_address) if row.ip_address is not None else None,
+        user_agent=row.user_agent,
+        correlation_id=row.correlation_id,
+        success=row.success,
+        failure_reason=row.failure_reason,
+        metadata=row.event_metadata,
+        created_at=row.created_at,
+    )
+
+
+def _session_filter_metadata(payload: AdminSessionFilterRevokeRequest) -> dict[str, object]:
+    """Serialize only the explicit filtered-revoke selectors for audit/webhook metadata."""
+    metadata: dict[str, object] = {}
+    if payload.is_suspicious is not None:
+        metadata["is_suspicious"] = payload.is_suspicious
+    if payload.created_before is not None:
+        metadata["created_before"] = payload.created_before.isoformat()
+    if payload.created_after is not None:
+        metadata["created_after"] = payload.created_after.isoformat()
+    if payload.last_seen_before is not None:
+        metadata["last_seen_before"] = payload.last_seen_before.isoformat()
+    if payload.last_seen_after is not None:
+        metadata["last_seen_after"] = payload.last_seen_after.isoformat()
+    if payload.ip_address is not None:
+        metadata["ip_address"] = payload.ip_address
+    if payload.user_agent_contains is not None:
+        metadata["user_agent_contains"] = payload.user_agent_contains
+    return metadata
 
 
 @router.get("/users", response_model=CursorPageResponse[AdminUserListItem])
@@ -433,11 +475,95 @@ async def list_user_sessions(
                 ip_address=row.ip_address,
                 user_agent=row.user_agent,
                 device_label=parse_device_label(row.user_agent),
+                is_suspicious=row.is_suspicious,
+                suspicious_reasons=row.suspicious_reasons,
             )
             for row in page.items
         ],
         next_cursor=page.next_cursor,
         has_more=page.has_more,
+    )
+
+
+@router.post(
+    "/users/{user_id}/sessions/revoke-by-filter",
+    response_model=AdminSessionFilteredRevokeResponse,
+)
+async def revoke_user_sessions_by_filter(
+    user_id: UUID,
+    payload: AdminSessionFilterRevokeRequest,
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    admin_service: Annotated[AdminService, Depends(get_admin_service)],
+    audit_service: Annotated[AuditService, Depends(get_audit_service)],
+    webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
+) -> AdminSessionFilteredRevokeResponse | JSONResponse:
+    """Preview or revoke active user sessions matching explicit admin filters."""
+    try:
+        claims = await _require_admin_claims(
+            request,
+            db_session=db_session,
+            admin_service=admin_service,
+        )
+        await admin_service.enforce_sensitive_action_gate(
+            db_session=db_session,
+            claims=claims,
+            action="revoke_sessions",
+            action_token=_extract_action_token(request),
+        )
+        result = await admin_service.revoke_user_sessions_by_filter(
+            db_session=db_session,
+            user_id=user_id,
+            is_suspicious=payload.is_suspicious,
+            created_before=payload.created_before,
+            created_after=payload.created_after,
+            last_seen_before=payload.last_seen_before,
+            last_seen_after=payload.last_seen_after,
+            ip_address=payload.ip_address,
+            user_agent_contains=payload.user_agent_contains,
+            dry_run=payload.dry_run,
+            reason=payload.reason,
+        )
+    except AdminServiceError as exc:
+        return _error_response(exc.status_code, exc.detail, exc.code, headers=exc.headers)
+
+    if not result.dry_run:
+        filter_metadata = _session_filter_metadata(payload)
+        await audit_service.record(
+            db=db_session,
+            event_type="session.revoked",
+            actor_type="admin",
+            success=True,
+            request=request,
+            actor_id=str(claims.get("sub", "")),
+            target_id=str(user_id),
+            target_type="user",
+            metadata={
+                "reason": result.revoke_reason,
+                "filter": filter_metadata,
+                "matched_session_count": len(result.matched_session_ids),
+                "revoked_session_count": len(result.revoked_session_ids),
+                "session_ids": [str(item) for item in result.revoked_session_ids],
+            },
+        )
+        await webhook_service.emit_event(
+            event_type="session.revoked",
+            data={
+                "user_id": str(user_id),
+                "reason": result.revoke_reason,
+                "filter": filter_metadata,
+                "session_ids": [str(item) for item in result.revoked_session_ids],
+            },
+        )
+
+    return AdminSessionFilteredRevokeResponse(
+        user_id=result.user_id,
+        matched_session_ids=result.matched_session_ids,
+        matched_session_count=len(result.matched_session_ids),
+        revoked_session_ids=result.revoked_session_ids,
+        revoked_session_count=len(result.revoked_session_ids),
+        dry_run=result.dry_run,
+        revoke_reason=result.revoke_reason,
     )
 
 
@@ -507,6 +633,50 @@ async def revoke_user_session(
 
 
 @router.get(
+    "/users/{user_id}/sessions/{session_id}",
+    response_model=AdminSessionDetail,
+)
+async def get_user_session_detail(
+    user_id: UUID,
+    session_id: UUID,
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    admin_service: Annotated[AdminService, Depends(get_admin_service)],
+    timeline_limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> AdminSessionDetail | JSONResponse:
+    """Return one session plus the latest attributable audit timeline."""
+    try:
+        await _require_admin_claims(
+            request,
+            db_session=db_session,
+            admin_service=admin_service,
+        )
+        detail = await admin_service.get_user_session_detail(
+            db_session=db_session,
+            user_id=user_id,
+            session_id=session_id,
+            timeline_limit=timeline_limit,
+        )
+    except AdminServiceError as exc:
+        return _error_response(exc.status_code, exc.detail, exc.code, headers=exc.headers)
+    return AdminSessionDetail(
+        session_id=detail.session_id,
+        user_id=detail.user_id,
+        created_at=detail.created_at,
+        last_seen_at=detail.last_seen_at,
+        expires_at=detail.expires_at,
+        revoked_at=detail.revoked_at,
+        revoke_reason=detail.revoke_reason,
+        ip_address=detail.ip_address,
+        user_agent=detail.user_agent,
+        device_label=parse_device_label(detail.user_agent),
+        is_suspicious=detail.is_suspicious,
+        suspicious_reasons=detail.suspicious_reasons,
+        timeline=[_audit_log_item(row) for row in detail.timeline],
+    )
+
+
+@router.get(
     "/users/{user_id}/history",
     response_model=CursorPageResponse[AdminAuditLogItem],
 )
@@ -534,24 +704,7 @@ async def list_user_history(
     except AdminServiceError as exc:
         return _error_response(exc.status_code, exc.detail, exc.code, headers=exc.headers)
     return CursorPageResponse(
-        data=[
-            AdminAuditLogItem(
-                id=row.id,
-                event_type=row.event_type,
-                actor_id=row.actor_id,
-                actor_type=row.actor_type.value,
-                target_id=row.target_id,
-                target_type=row.target_type,
-                ip_address=str(row.ip_address) if row.ip_address is not None else None,
-                user_agent=row.user_agent,
-                correlation_id=row.correlation_id,
-                success=row.success,
-                failure_reason=row.failure_reason,
-                metadata=row.event_metadata,
-                created_at=row.created_at,
-            )
-            for row in page.items
-        ],
+        data=[_audit_log_item(row) for row in page.items],
         next_cursor=page.next_cursor,
         has_more=page.has_more,
     )

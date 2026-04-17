@@ -5,7 +5,7 @@ from __future__ import annotations
 import hmac
 import inspect
 import json
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -50,6 +50,8 @@ class UserSessionSummary:
     revoke_reason: str | None
     ip_address: str | None
     user_agent: str | None
+    is_suspicious: bool
+    suspicious_reasons: list[str]
     is_current: bool
 
 
@@ -165,6 +167,8 @@ class SessionService:
         raw_refresh_token: str,
         ip_address: str | None = None,
         user_agent: str | None = None,
+        is_suspicious: bool = False,
+        suspicious_reasons: list[str] | None = None,
     ) -> UUID:
         """Create a session row and cache payload in Redis."""
         now = datetime.now(UTC)
@@ -172,6 +176,7 @@ class SessionService:
         auth_time = self._extract_auth_time(access_claims, fallback=now)
         access_jti = self._extract_access_jti(access_claims)
         audiences = normalize_audiences(access_claims.get("aud"))
+        normalized_suspicious_reasons = _normalize_string_list(suspicious_reasons)
         session_row = Session(
             user_id=user_id,
             hashed_refresh_token=self._hash_token(raw_refresh_token),
@@ -181,6 +186,8 @@ class SessionService:
             ip_address=_truncate(ip_address, _IP_ADDRESS_MAX_LENGTH),
             user_agent=_truncate(user_agent, _USER_AGENT_MAX_LENGTH),
             last_seen_at=now,
+            is_suspicious=bool(is_suspicious),
+            suspicious_reasons=normalized_suspicious_reasons,
         )
         payload = SessionPayload(
             user_id=str(user_id),
@@ -445,6 +452,8 @@ class SessionService:
                 revoke_reason=row.revoke_reason,
                 ip_address=row.ip_address,
                 user_agent=row.user_agent,
+                is_suspicious=bool(getattr(row, "is_suspicious", False)),
+                suspicious_reasons=_normalize_string_list(getattr(row, "suspicious_reasons", None)),
                 is_current=(
                     current_session_id is not None and row.session_id == current_session_id
                 ),
@@ -481,6 +490,79 @@ class SessionService:
             await db_session.rollback()
             raise
         await db_session.commit()
+        return session_ids
+
+    async def match_user_sessions_for_revoke_filter(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+        is_suspicious: bool | None = None,
+        created_before: datetime | None = None,
+        created_after: datetime | None = None,
+        last_seen_before: datetime | None = None,
+        last_seen_after: datetime | None = None,
+        ip_address: str | None = None,
+        user_agent_contains: str | None = None,
+    ) -> list[UUID]:
+        """Return active session ids matching the provided revoke filters."""
+        session_rows = await self._fetch_active_sessions_for_user_by_filter(
+            db_session=db_session,
+            user_id=user_id,
+            is_suspicious=is_suspicious,
+            created_before=created_before,
+            created_after=created_after,
+            last_seen_before=last_seen_before,
+            last_seen_after=last_seen_after,
+            ip_address=ip_address,
+            user_agent_contains=user_agent_contains,
+            for_update=False,
+        )
+        return [row.session_id for row in session_rows]
+
+    async def revoke_user_sessions_by_filter(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+        is_suspicious: bool | None = None,
+        created_before: datetime | None = None,
+        created_after: datetime | None = None,
+        last_seen_before: datetime | None = None,
+        last_seen_after: datetime | None = None,
+        ip_address: str | None = None,
+        user_agent_contains: str | None = None,
+        reason: str,
+        commit: bool = True,
+    ) -> list[UUID]:
+        """Revoke active user sessions matching the provided revoke filters."""
+        try:
+            session_rows = await self._fetch_active_sessions_for_user_by_filter(
+                db_session=db_session,
+                user_id=user_id,
+                is_suspicious=is_suspicious,
+                created_before=created_before,
+                created_after=created_after,
+                last_seen_before=last_seen_before,
+                last_seen_after=last_seen_after,
+                ip_address=ip_address,
+                user_agent_contains=user_agent_contains,
+                for_update=True,
+            )
+            revoked_at = datetime.now(UTC)
+            session_ids: list[UUID] = []
+            for session_row in session_rows:
+                session_row.revoked_at = revoked_at
+                session_row.revoke_reason = reason
+                session_ids.append(session_row.session_id)
+            await db_session.flush()
+            await self._delete_session_payloads(*session_ids)
+        except Exception:
+            await db_session.rollback()
+            raise
+
+        if commit:
+            await db_session.commit()
         return session_ids
 
     async def validate_access_token_session(
@@ -578,6 +660,62 @@ class SessionService:
             )
             .with_for_update()
         )
+        result = await db_session.execute(statement)
+        return list(result.scalars().all())
+
+    async def _fetch_active_sessions_for_user_by_filter(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+        is_suspicious: bool | None,
+        created_before: datetime | None,
+        created_after: datetime | None,
+        last_seen_before: datetime | None,
+        last_seen_after: datetime | None,
+        ip_address: str | None,
+        user_agent_contains: str | None,
+        for_update: bool,
+    ) -> list[Session]:
+        """Fetch active sessions for one user constrained by explicit admin filters."""
+        statement = (
+            select(Session)
+            .where(
+                Session.user_id == user_id,
+                Session.deleted_at.is_(None),
+                Session.revoked_at.is_(None),
+                Session.expires_at > datetime.now(UTC),
+            )
+            .order_by(Session.created_at.desc(), Session.session_id.desc())
+        )
+        if is_suspicious is not None:
+            statement = statement.where(Session.is_suspicious.is_(is_suspicious))
+        if created_before is not None:
+            statement = statement.where(Session.created_at <= created_before)
+        if created_after is not None:
+            statement = statement.where(Session.created_at >= created_after)
+        if last_seen_before is not None:
+            statement = statement.where(
+                Session.last_seen_at.is_not(None),
+                Session.last_seen_at <= last_seen_before,
+            )
+        if last_seen_after is not None:
+            statement = statement.where(
+                Session.last_seen_at.is_not(None),
+                Session.last_seen_at >= last_seen_after,
+            )
+        if ip_address is not None:
+            statement = statement.where(Session.ip_address == ip_address)
+        if user_agent_contains is not None:
+            statement = statement.where(
+                Session.user_agent.is_not(None),
+                Session.user_agent.ilike(
+                    f"%{_escape_like_pattern(user_agent_contains)}%",
+                    escape="\\",
+                ),
+            )
+        if for_update:
+            statement = statement.with_for_update()
         result = await db_session.execute(statement)
         return list(result.scalars().all())
 
@@ -845,6 +983,26 @@ def _truncate(value: str | None, max_length: int) -> str | None:
     if not stripped:
         return None
     return stripped[:max_length]
+
+
+def _normalize_string_list(values: list[str] | tuple[str, ...] | object | None) -> list[str]:
+    """Return a deduplicated, trimmed list of non-empty strings."""
+    if values is None or isinstance(values, str | bytes) or not isinstance(values, Iterable):
+        return []
+
+    normalized: list[str] = []
+    for item in values:
+        if not isinstance(item, str):
+            continue
+        candidate = item.strip()
+        if candidate and candidate not in normalized:
+            normalized.append(candidate)
+    return normalized
+
+
+def _escape_like_pattern(value: str) -> str:
+    """Escape SQL LIKE wildcards so substring filters behave literally."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 async def _close_async_redis_client(client: Redis) -> None:

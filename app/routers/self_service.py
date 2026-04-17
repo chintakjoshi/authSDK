@@ -44,6 +44,7 @@ _USER_HISTORY_EVENT_TYPES: list[str] = [
     "otp.admin_toggled",
 ]
 
+
 def _error_response(status_code: int, detail: str, code: str) -> JSONResponse:
     """Build standardized API error response payload."""
     return JSONResponse(status_code=status_code, content={"detail": detail, "code": code})
@@ -116,6 +117,8 @@ async def list_my_sessions(
                 ip_address=row.ip_address,
                 user_agent=row.user_agent,
                 device_label=parse_device_label(row.user_agent),
+                is_suspicious=row.is_suspicious,
+                suspicious_reasons=row.suspicious_reasons,
                 is_current=row.is_current,
             )
             for row in page.items

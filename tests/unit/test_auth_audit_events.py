@@ -94,6 +94,8 @@ class _SessionServiceStub:
         raw_refresh_token: str,
         ip_address: str | None = None,
         user_agent: str | None = None,
+        is_suspicious: bool = False,
+        suspicious_reasons: list[str] | None = None,
     ) -> Any:
         """No-op login session create."""
         del (
@@ -108,6 +110,8 @@ class _SessionServiceStub:
             raw_refresh_token,
             ip_address,
             user_agent,
+            is_suspicious,
+            suspicious_reasons,
         )
         return uuid4()
 

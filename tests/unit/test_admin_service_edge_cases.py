@@ -278,6 +278,46 @@ async def test_admin_helpers_cover_invalid_claims_pagination_and_detail_paths() 
 
 
 @pytest.mark.asyncio
+async def test_list_user_sessions_page_preserves_suspicious_session_fields() -> None:
+    """Admin session inventory should preserve suspicious-session flags and reasons."""
+    service = _service()
+    user_id = uuid4()
+    now = datetime.now(UTC)
+    session_row = SimpleNamespace(
+        id=uuid4(),
+        session_id=uuid4(),
+        user_id=user_id,
+        created_at=now,
+        last_seen_at=now,
+        expires_at=now + timedelta(hours=1),
+        revoked_at=None,
+        revoke_reason=None,
+        ip_address="203.0.113.10",
+        user_agent="Mozilla/5.0 Chrome/120 Windows",
+        is_suspicious=True,
+        suspicious_reasons=["new_ip", "prior_failures"],
+    )
+    db_session = _DBSessionStub(
+        [SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [session_row]))]
+    )
+
+    async def _get_active_user(**kwargs: object) -> object:
+        del kwargs
+        return SimpleNamespace(id=user_id)
+
+    service._get_active_user = _get_active_user  # type: ignore[assignment]
+    page = await service.list_user_sessions_page(
+        db_session=db_session,  # type: ignore[arg-type]
+        user_id=user_id,
+        status="active",
+        limit=10,
+    )
+
+    assert page.items[0].is_suspicious is True
+    assert page.items[0].suspicious_reasons == ["new_ip", "prior_failures"]
+
+
+@pytest.mark.asyncio
 async def test_admin_mutation_and_proxy_helpers_cover_error_mapping() -> None:
     """Admin service covers role updates, delete/session/OTP, webhook proxies, and helper branches."""
     user_service = _UserServiceStub()

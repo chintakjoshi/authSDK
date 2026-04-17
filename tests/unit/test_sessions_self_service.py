@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from hashlib import sha256
 from types import MethodType
 from uuid import uuid4
 

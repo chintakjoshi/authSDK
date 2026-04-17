@@ -6,7 +6,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -37,5 +38,7 @@ class Session(Base, TimestampTenantMixin):
     user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoke_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_suspicious: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    suspicious_reasons: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
 
     user: Mapped[User] = relationship(back_populates="sessions")

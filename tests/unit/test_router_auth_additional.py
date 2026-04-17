@@ -106,6 +106,7 @@ class _BruteForceStub:
     def __init__(self) -> None:
         self.ensure_error: BruteForceProtectionError | None = None
         self.success_error: BruteForceProtectionError | None = None
+        self.success_result = SimpleNamespace(suspicious=False, metadata={})
 
     async def ensure_not_locked(self, user_id: str) -> None:
         del user_id
@@ -125,7 +126,7 @@ class _BruteForceStub:
         del user_id, ip_address, user_agent
         if self.success_error is not None:
             raise self.success_error
-        return SimpleNamespace(suspicious=False, metadata={})
+        return self.success_result
 
 
 class _TokenServiceStub:
@@ -138,8 +139,10 @@ class _SessionStub:
     def __init__(self) -> None:
         self.rotate_error: SessionStateError | None = None
         self.revoke_error: SessionStateError | None = None
+        self.create_calls: list[dict[str, object]] = []
 
     async def create_login_session(self, **kwargs: object) -> object:
+        self.create_calls.append(dict(kwargs))
         return uuid4()
 
     async def rotate_refresh_session(self, **kwargs: object) -> TokenPair:
@@ -483,6 +486,50 @@ async def test_login_queues_success_audit_events_in_background_tasks(monkeypatch
         "user.login.success",
         "session.created",
         "token.issued",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_login_passes_suspicious_flags_to_session_creation(monkeypatch) -> None:
+    """Suspicious login decisions should be persisted on the created session."""
+    user_service = _UserServiceStub()
+    user_service.user = SimpleNamespace(
+        id=uuid4(),
+        email="user@example.com",
+        password_hash="hashed",
+        email_verified=True,
+        email_otp_enabled=False,
+        role="user",
+    )
+    user_service.verify_password_result = True
+    brute_force_service = _BruteForceStub()
+    brute_force_service.success_result = SimpleNamespace(
+        suspicious=True,
+        metadata={"new_ip": True, "new_user_agent": False, "prior_failures": 4},
+    )
+    session_service = _SessionStub()
+
+    monkeypatch.setattr(auth_router, "_password_login_requires_verified_email", lambda: False)
+
+    response = await auth_router.login(
+        payload=LoginRequest(email="user@example.com", password="Password123!"),
+        request=_request(path="/auth/login"),
+        background_tasks=BackgroundTasks(),
+        db_session=_db(),  # type: ignore[arg-type]
+        user_service=user_service,  # type: ignore[arg-type]
+        token_service=_TokenServiceStub(),  # type: ignore[arg-type]
+        session_service=session_service,  # type: ignore[arg-type]
+        otp_service=SimpleNamespace(),  # type: ignore[arg-type]
+        brute_force_service=brute_force_service,  # type: ignore[arg-type]
+        audit_service=_AuditStub(),  # type: ignore[arg-type]
+        webhook_service=_WebhookStub(),  # type: ignore[arg-type]
+    )
+
+    assert response.access_token == "access-token"
+    assert session_service.create_calls[0]["is_suspicious"] is True
+    assert session_service.create_calls[0]["suspicious_reasons"] == [
+        "new_ip",
+        "prior_failures",
     ]
 
 

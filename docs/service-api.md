@@ -108,7 +108,7 @@ The admin surface lives under `/admin/*`.
 Major areas include:
 
 - users (list, detail, role, delete, erase, OTP toggle)
-- sessions (per-user list, single revoke, bulk revoke)
+- sessions (per-user list, detail, single revoke, filtered revoke, bulk revoke)
 - user history (per-user audit feed)
 - API keys
 - OAuth clients

@@ -39,6 +39,7 @@ from app.services.brute_force_service import (
     BruteForceProtectionError,
     BruteForceProtectionService,
     get_brute_force_service,
+    suspicious_login_reasons,
 )
 from app.services.token_service import TokenPair, TokenService, get_token_service
 
@@ -370,6 +371,8 @@ class OTPService:
             raw_refresh_token=token_pair.refresh_token,
             ip_address=client_ip,
             user_agent=user_agent,
+            is_suspicious=suspicious_login is not None,
+            suspicious_reasons=suspicious_login_reasons(suspicious_login),
         )
         return LoginOTPVerificationResult(
             user_id=str(user.id),
