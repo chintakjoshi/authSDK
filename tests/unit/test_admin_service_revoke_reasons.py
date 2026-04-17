@@ -29,6 +29,8 @@ class _CapturingSessionServiceStub:
     def __init__(self) -> None:
         self.bulk_calls: list[dict] = []
         self.single_calls: list[dict] = []
+        self.filtered_match_calls: list[dict] = []
+        self.filtered_revoke_calls: list[dict] = []
 
     async def revoke_user_sessions(self, **kwargs):  # type: ignore[no-untyped-def]
         self.bulk_calls.append(kwargs)
@@ -37,6 +39,14 @@ class _CapturingSessionServiceStub:
     async def revoke_one_session(self, **kwargs):  # type: ignore[no-untyped-def]
         self.single_calls.append(kwargs)
         return kwargs["session_id"]
+
+    async def match_user_sessions_for_revoke_filter(self, **kwargs):  # type: ignore[no-untyped-def]
+        self.filtered_match_calls.append(kwargs)
+        return [uuid4()]
+
+    async def revoke_user_sessions_by_filter(self, **kwargs):  # type: ignore[no-untyped-def]
+        self.filtered_revoke_calls.append(kwargs)
+        return [uuid4()]
 
 
 class _UnusedDependency:
@@ -135,3 +145,45 @@ async def test_revoke_user_session_propagates_caller_reason() -> None:
     assert revoked_id == target_session_id
     assert reason == "stolen_laptop"
     assert session_service.single_calls[0]["reason"] == "stolen_laptop"
+
+
+@pytest.mark.asyncio
+async def test_revoke_user_sessions_by_filter_dry_run_uses_default_reason() -> None:
+    """Admin filtered dry runs preview matches and fall back to admin_filtered_revoke."""
+    session_service = _CapturingSessionServiceStub()
+    service = _admin_service(session_service)
+
+    result = await service.revoke_user_sessions_by_filter(
+        db_session=object(),  # type: ignore[arg-type]
+        user_id=uuid4(),
+        is_suspicious=True,
+        dry_run=True,
+    )
+
+    assert result.dry_run is True
+    assert result.revoke_reason == "admin_filtered_revoke"
+    assert len(result.matched_session_ids) == 1
+    assert result.revoked_session_ids == []
+    assert session_service.filtered_match_calls[0]["is_suspicious"] is True
+    assert session_service.filtered_revoke_calls == []
+
+
+@pytest.mark.asyncio
+async def test_revoke_user_sessions_by_filter_executes_and_propagates_reason() -> None:
+    """Admin filtered revoke executes through the session service with caller reason."""
+    session_service = _CapturingSessionServiceStub()
+    service = _admin_service(session_service)
+
+    result = await service.revoke_user_sessions_by_filter(
+        db_session=object(),  # type: ignore[arg-type]
+        user_id=uuid4(),
+        user_agent_contains="Chrome",
+        dry_run=False,
+        reason="risk_sweep",
+    )
+
+    assert result.dry_run is False
+    assert result.revoke_reason == "risk_sweep"
+    assert len(result.revoked_session_ids) == 1
+    assert session_service.filtered_revoke_calls[0]["user_agent_contains"] == "Chrome"
+    assert session_service.filtered_revoke_calls[0]["reason"] == "risk_sweep"

@@ -48,6 +48,8 @@ Response shape (one item):
   "ip_address": "203.0.113.10",
   "user_agent": "Mozilla/5.0 ...",
   "device_label": "Chrome on Windows",
+  "is_suspicious": true,
+  "suspicious_reasons": ["new_ip"],
   "is_current": true
 }
 ```
@@ -62,6 +64,11 @@ UI guidance:
   not a precise heartbeat.
 - `ip_address` is the raw IP seen at login/refresh. If you need city or
   country, resolve it in your own backend — the service does not.
+
+- `is_suspicious` lets the UI flag sessions that were created during a
+  suspicious login event.
+- `suspicious_reasons` explains why the server flagged the session. Current
+  values are `new_ip`, `new_user_agent`, and `prior_failures`.
 
 ## Revoke One Session
 

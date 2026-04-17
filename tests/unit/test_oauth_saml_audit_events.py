@@ -169,9 +169,13 @@ async def test_oauth_callback_success_records_actor_and_session_identifiers() ->
         )
 
     assert response.status_code == 200
-    login_event = next(event for event in audit_stub.events if event["event_type"] == "user.login.success")
+    login_event = next(
+        event for event in audit_stub.events if event["event_type"] == "user.login.success"
+    )
     assert login_event["actor_id"] == "user-123"
-    session_event = next(event for event in audit_stub.events if event["event_type"] == "session.created")
+    session_event = next(
+        event for event in audit_stub.events if event["event_type"] == "session.created"
+    )
     assert session_event["actor_id"] == "user-123"
     assert session_event["target_id"] == "session-123"
     assert session_event["target_type"] == "session"
@@ -201,9 +205,13 @@ async def test_saml_callback_success_records_actor_and_session_identifiers() -> 
         )
 
     assert response.status_code == 200
-    login_event = next(event for event in audit_stub.events if event["event_type"] == "user.login.success")
+    login_event = next(
+        event for event in audit_stub.events if event["event_type"] == "user.login.success"
+    )
     assert login_event["actor_id"] == "user-123"
-    session_event = next(event for event in audit_stub.events if event["event_type"] == "session.created")
+    session_event = next(
+        event for event in audit_stub.events if event["event_type"] == "session.created"
+    )
     assert session_event["actor_id"] == "user-123"
     assert session_event["target_id"] == "session-123"
     assert session_event["target_type"] == "session"

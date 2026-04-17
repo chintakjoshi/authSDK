@@ -67,6 +67,15 @@ _USER_HISTORY_EVENT_TYPES: list[str] = [
     "otp.admin_toggled",
 ]
 
+_SESSION_TIMELINE_EVENT_TYPES: list[str] = [
+    "otp.verified",
+    "user.login.success",
+    "user.login.suspicious",
+    "session.created",
+    "session.revoked",
+    "token.issued",
+]
+
 
 @dataclass(frozen=True)
 class AdminUserSummary:
@@ -113,6 +122,26 @@ class AdminSessionSummary:
     revoke_reason: str | None
     ip_address: str | None
     user_agent: str | None
+    is_suspicious: bool
+    suspicious_reasons: list[str]
+
+
+@dataclass(frozen=True)
+class AdminSessionDetailSummary(AdminSessionSummary):
+    """Admin-facing session detail payload with attributable timeline events."""
+
+    timeline: list[AuditEvent]
+
+
+@dataclass(frozen=True)
+class AdminFilteredSessionRevokeResult:
+    """Admin-facing result for filter-based session revoke operations."""
+
+    user_id: UUID
+    matched_session_ids: list[UUID]
+    revoked_session_ids: list[UUID]
+    revoke_reason: str
+    dry_run: bool
 
 
 @dataclass(frozen=True)
@@ -476,10 +505,55 @@ class AdminService:
                 revoke_reason=row.revoke_reason,
                 ip_address=row.ip_address,
                 user_agent=row.user_agent,
+                is_suspicious=bool(getattr(row, "is_suspicious", False)),
+                suspicious_reasons=list(getattr(row, "suspicious_reasons", []) or []),
             )
             for row in rows
         ]
         return build_page(summaries, limit=limit)
+
+    async def get_user_session_detail(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+        session_id: UUID,
+        timeline_limit: int = 20,
+    ) -> AdminSessionDetailSummary:
+        """Return one session plus the latest attributable audit events for it."""
+        user = await self._get_active_user(db_session=db_session, user_id=user_id, for_update=False)
+        if user is None:
+            raise AdminServiceError("User not found.", "invalid_user", 404)
+
+        session_row = await self._get_session_row_for_user(
+            db_session=db_session,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if session_row is None:
+            raise AdminServiceError("Session not found.", "invalid_session", 404)
+
+        timeline = await self._list_session_timeline(
+            db_session=db_session,
+            user_id=user_id,
+            session_id=session_id,
+            timeline_limit=timeline_limit,
+        )
+        return AdminSessionDetailSummary(
+            id=session_row.id,
+            session_id=session_row.session_id,
+            user_id=session_row.user_id,
+            created_at=session_row.created_at,
+            last_seen_at=session_row.last_seen_at,
+            expires_at=session_row.expires_at,
+            revoked_at=session_row.revoked_at,
+            revoke_reason=session_row.revoke_reason,
+            ip_address=session_row.ip_address,
+            user_agent=session_row.user_agent,
+            is_suspicious=bool(getattr(session_row, "is_suspicious", False)),
+            suspicious_reasons=list(getattr(session_row, "suspicious_reasons", []) or []),
+            timeline=timeline,
+        )
 
     async def revoke_user_session(
         self,
@@ -505,6 +579,83 @@ class AdminService:
             raise AdminServiceError(exc.detail, exc.code, exc.status_code) from exc
         return revoked_id, effective_reason
 
+    async def revoke_user_sessions_by_filter(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+        is_suspicious: bool | None = None,
+        created_before: datetime | None = None,
+        created_after: datetime | None = None,
+        last_seen_before: datetime | None = None,
+        last_seen_after: datetime | None = None,
+        ip_address: str | None = None,
+        user_agent_contains: str | None = None,
+        dry_run: bool = False,
+        reason: str | None = None,
+    ) -> AdminFilteredSessionRevokeResult:
+        """Preview or revoke active sessions matching explicit admin filters."""
+        user = await self._get_active_user(db_session=db_session, user_id=user_id, for_update=False)
+        if user is None:
+            raise AdminServiceError("User not found.", "invalid_user", 404)
+        if not self._has_session_revoke_filter(
+            is_suspicious=is_suspicious,
+            created_before=created_before,
+            created_after=created_after,
+            last_seen_before=last_seen_before,
+            last_seen_after=last_seen_after,
+            ip_address=ip_address,
+            user_agent_contains=user_agent_contains,
+        ):
+            raise AdminServiceError(
+                "At least one session filter is required.", "invalid_filter", 400
+            )
+
+        effective_reason = reason or "admin_filtered_revoke"
+        try:
+            if dry_run:
+                matched_ids = await self._session_service.match_user_sessions_for_revoke_filter(
+                    db_session=db_session,
+                    user_id=user_id,
+                    is_suspicious=is_suspicious,
+                    created_before=created_before,
+                    created_after=created_after,
+                    last_seen_before=last_seen_before,
+                    last_seen_after=last_seen_after,
+                    ip_address=ip_address,
+                    user_agent_contains=user_agent_contains,
+                )
+                return AdminFilteredSessionRevokeResult(
+                    user_id=user_id,
+                    matched_session_ids=matched_ids,
+                    revoked_session_ids=[],
+                    revoke_reason=effective_reason,
+                    dry_run=True,
+                )
+
+            revoked_ids = await self._session_service.revoke_user_sessions_by_filter(
+                db_session=db_session,
+                user_id=user_id,
+                is_suspicious=is_suspicious,
+                created_before=created_before,
+                created_after=created_after,
+                last_seen_before=last_seen_before,
+                last_seen_after=last_seen_after,
+                ip_address=ip_address,
+                user_agent_contains=user_agent_contains,
+                reason=effective_reason,
+            )
+        except SessionStateError as exc:
+            raise AdminServiceError(exc.detail, exc.code, exc.status_code) from exc
+
+        return AdminFilteredSessionRevokeResult(
+            user_id=user_id,
+            matched_session_ids=revoked_ids,
+            revoked_session_ids=revoked_ids,
+            revoke_reason=effective_reason,
+            dry_run=False,
+        )
+
     async def list_user_history_page(
         self,
         db_session: AsyncSession,
@@ -524,6 +675,84 @@ class AdminService:
             cursor=cursor,
             limit=limit,
         )
+
+    async def _get_session_row_for_user(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+        session_id: UUID,
+    ) -> Session | None:
+        """Return one non-deleted session row owned by the provided user."""
+        result = await db_session.execute(
+            select(Session).where(
+                Session.user_id == user_id,
+                Session.session_id == session_id,
+                Session.deleted_at.is_(None),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def _list_session_timeline(
+        self,
+        db_session: AsyncSession,
+        *,
+        user_id: UUID,
+        session_id: UUID,
+        timeline_limit: int,
+    ) -> list[AuditEvent]:
+        """Return the latest attributable audit events for one session."""
+        limit = max(1, min(timeline_limit, 100))
+        session_id_text = str(session_id)
+        created_event = await self._get_session_created_event(
+            db_session=db_session,
+            session_id=session_id,
+        )
+
+        matching_conditions = [
+            and_(AuditEvent.target_type == "session", AuditEvent.target_id == session_id),
+            AuditEvent.event_metadata.contains({"session_id": session_id_text}),
+            AuditEvent.event_metadata.contains({"session_ids": [session_id_text]}),
+        ]
+        if created_event is not None and created_event.correlation_id is not None:
+            matching_conditions.append(
+                and_(
+                    AuditEvent.correlation_id == created_event.correlation_id,
+                    AuditEvent.actor_id == user_id,
+                )
+            )
+
+        statement = (
+            select(AuditEvent)
+            .where(
+                AuditEvent.event_type.in_(_SESSION_TIMELINE_EVENT_TYPES),
+                or_(*matching_conditions),
+            )
+            .order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc())
+            .limit(limit)
+        )
+        rows = list((await db_session.execute(statement)).scalars().all())
+        rows.reverse()
+        return rows
+
+    async def _get_session_created_event(
+        self,
+        db_session: AsyncSession,
+        *,
+        session_id: UUID,
+    ) -> AuditEvent | None:
+        """Return the canonical session-created event used to stitch login events."""
+        result = await db_session.execute(
+            select(AuditEvent)
+            .where(
+                AuditEvent.event_type == "session.created",
+                AuditEvent.target_type == "session",
+                AuditEvent.target_id == session_id,
+            )
+            .order_by(AuditEvent.created_at.asc(), AuditEvent.id.asc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     async def set_user_email_otp(
         self,
@@ -782,6 +1011,30 @@ class AdminService:
             if normalized:
                 statement = statement.where(func.lower(User.email).like(f"%{normalized}%"))
         return statement
+
+    @staticmethod
+    def _has_session_revoke_filter(
+        *,
+        is_suspicious: bool | None,
+        created_before: datetime | None,
+        created_after: datetime | None,
+        last_seen_before: datetime | None,
+        last_seen_after: datetime | None,
+        ip_address: str | None,
+        user_agent_contains: str | None,
+    ) -> bool:
+        """Return whether at least one explicit filtered-revoke selector is present."""
+        return any(
+            (
+                is_suspicious is not None,
+                created_before is not None,
+                created_after is not None,
+                last_seen_before is not None,
+                last_seen_after is not None,
+                ip_address is not None,
+                user_agent_contains is not None,
+            )
+        )
 
     async def _build_user_summary(self, user: User) -> AdminUserSummary:
         """Build one admin user summary with lock metadata."""

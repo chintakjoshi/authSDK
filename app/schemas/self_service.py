@@ -20,6 +20,8 @@ class SelfSessionItem(BaseModel):
     ip_address: str | None
     user_agent: str | None
     device_label: str
+    is_suspicious: bool
+    suspicious_reasons: list[str]
     is_current: bool
 
 

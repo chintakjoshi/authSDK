@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from fastapi import Request
@@ -279,6 +280,42 @@ def normalize_user_agent(user_agent: str | None) -> str | None:
         return None
     normalized = user_agent.strip()
     return normalized or None
+
+
+def suspicious_login_reasons(metadata: Mapping[str, object] | None) -> list[str]:
+    """Normalize suspicious-login metadata into stable, UI-friendly reason slugs."""
+    if not metadata:
+        return []
+
+    reasons: list[str] = []
+
+    def _add(reason: object) -> None:
+        if not isinstance(reason, str):
+            return
+        normalized = reason.strip()
+        if normalized and normalized not in reasons:
+            reasons.append(normalized)
+
+    _add(metadata.get("reason"))
+    legacy_reasons = metadata.get("reasons")
+    if isinstance(legacy_reasons, Iterable) and not isinstance(legacy_reasons, str | bytes):
+        for item in legacy_reasons:
+            _add(item)
+
+    if bool(metadata.get("new_ip")):
+        _add("new_ip")
+    if bool(metadata.get("new_user_agent")):
+        _add("new_user_agent")
+
+    raw_prior_failures = metadata.get("prior_failures")
+    try:
+        prior_failures = int(raw_prior_failures) if raw_prior_failures is not None else 0
+    except (TypeError, ValueError):
+        prior_failures = 0
+    if prior_failures >= 3:
+        _add("prior_failures")
+
+    return reasons
 
 
 @reloadable_singleton

@@ -50,6 +50,7 @@ from app.services.brute_force_service import (
     extract_client_ip,
     get_brute_force_service,
     normalize_user_agent,
+    suspicious_login_reasons,
 )
 from app.services.m2m_service import M2MService, M2MServiceError, get_m2m_service
 from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
@@ -423,6 +424,8 @@ async def login(
             raw_refresh_token=token_pair.refresh_token,
             ip_address=client_ip,
             user_agent=user_agent,
+            is_suspicious=suspicious_login.suspicious,
+            suspicious_reasons=suspicious_login_reasons(suspicious_login.metadata),
         )
     except SessionStateError as exc:
         await audit_service.record(

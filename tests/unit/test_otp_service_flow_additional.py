@@ -45,11 +45,15 @@ class _TokenServiceStub:
 
 
 class _SessionServiceStub:
+    def __init__(self) -> None:
+        self.create_calls: list[dict[str, object]] = []
+
     async def validate_access_token_session(self, *, db_session, access_jti):  # type: ignore[no-untyped-def]
         del db_session, access_jti
         return uuid4()
 
     async def create_login_session(self, **kwargs: object) -> object:
+        self.create_calls.append(dict(kwargs))
         return uuid4()
 
 
@@ -158,12 +162,13 @@ def _service(
     *,
     email_sender: _EmailSenderStub | None = None,
     jwt_service: _JWTStub | None = None,
+    session_service: _SessionServiceStub | None = None,
 ) -> OTPService:
     return OTPService(
         jwt_service=jwt_service or _JWTStub(),  # type: ignore[arg-type]
         signing_key_service=_SigningKeyStub(),  # type: ignore[arg-type]
         token_service=_TokenServiceStub(),  # type: ignore[arg-type]
-        session_service=_SessionServiceStub(),  # type: ignore[arg-type]
+        session_service=session_service or _SessionServiceStub(),  # type: ignore[arg-type]
         brute_force_service=_BruteForceStub(),  # type: ignore[arg-type]
         redis_client=_RedisStub(),  # type: ignore[arg-type]
         email_sender=email_sender or _EmailSenderStub(),  # type: ignore[arg-type]
@@ -336,6 +341,65 @@ async def test_request_action_code_and_verify_action_code_success_paths() -> Non
         action="enable_otp",
     )
     assert verified.action_token == "issued-jwt"
+
+
+@pytest.mark.asyncio
+async def test_verify_login_code_passes_suspicious_flags_to_session_creation() -> None:
+    """OTP-backed login persists suspicious-session flags onto the created session."""
+    session_service = _SessionServiceStub()
+    service = _service(session_service=session_service)
+    user = _UserStub(id=uuid4(), email="otp@example.com", email_verified=True)
+
+    async def _challenge_claims(db_session, token: str) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        del db_session, token
+        return {"sub": str(user.id)}
+
+    async def _otp_payload(key: str) -> dict[str, str]:
+        del key
+        return {"code_hash": hash_otp("123456")}
+
+    async def _attempts(key: str, field: str) -> int:
+        del key, field
+        return 1
+
+    async def _delete(*keys: str) -> None:
+        del keys
+        return None
+
+    async def _get_user(**kwargs: object) -> _UserStub:
+        del kwargs
+        return user
+
+    async def _record_successful_login(**kwargs: object) -> dict[str, object]:
+        del kwargs
+        return {"new_ip": True, "new_user_agent": True, "prior_failures": 4}
+
+    service._validate_challenge_token = _challenge_claims  # type: ignore[assignment]
+    service._get_hash = _otp_payload  # type: ignore[assignment]
+    service._increment_hash_counter = _attempts  # type: ignore[assignment]
+    service._delete_keys = _delete  # type: ignore[assignment]
+    service._get_user_by_id = _get_user  # type: ignore[assignment]
+    service._record_successful_login = _record_successful_login  # type: ignore[assignment]
+
+    verified = await service.verify_login_code(
+        db_session=_DBSessionStub(),  # type: ignore[arg-type]
+        challenge_token="challenge-token",
+        code="123456",
+        client_ip="203.0.113.10",
+        user_agent="pytest-agent",
+    )
+
+    assert verified.suspicious_login == {
+        "new_ip": True,
+        "new_user_agent": True,
+        "prior_failures": 4,
+    }
+    assert session_service.create_calls[0]["is_suspicious"] is True
+    assert session_service.create_calls[0]["suspicious_reasons"] == [
+        "new_ip",
+        "new_user_agent",
+        "prior_failures",
+    ]
 
 
 @pytest.mark.asyncio

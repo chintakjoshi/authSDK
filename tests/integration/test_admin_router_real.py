@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from authlib.jose import jwt
@@ -19,6 +19,7 @@ from app.core.sessions import get_redis_client, get_session_service
 from app.core.signing_keys import get_signing_key_service
 from app.db.session import get_session_factory
 from app.models.api_key import APIKey
+from app.models.session import Session
 from app.models.user import User
 from app.models.webhook_delivery import WebhookDelivery, WebhookDeliveryStatus
 from app.services.admin_service import AdminService, get_admin_service
@@ -339,6 +340,258 @@ async def test_admin_users_list_supports_cursor_pagination(app_factory, db_sessi
         }
         assert listed_ids == {str(first_user.id), str(second_user.id)}
         assert str(first_payload["data"][0]["id"]) != str(second_payload["data"][0]["id"])
+
+
+@pytest.mark.asyncio
+async def test_admin_session_detail_route_returns_session_metadata_and_timeline(
+    app_factory,
+    db_session,
+) -> None:
+    """Admin session detail exposes session metadata plus attributable timeline events."""
+    app: FastAPI = app_factory()
+    await _create_user(
+        db_session,
+        email="sessions-admin@example.com",
+        password="Password123!",
+        role="admin",
+        email_verified=True,
+    )
+    target = await _create_user(
+        db_session,
+        email="session-owner@example.com",
+        password="Password123!",
+        role="user",
+        email_verified=True,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        await _login_with_optional_otp(
+            client,
+            email="session-owner@example.com",
+            password="Password123!",
+        )
+        admin_access_token = await _login_with_optional_otp(
+            client,
+            email="sessions-admin@example.com",
+            password="Password123!",
+        )
+        headers = {"authorization": f"Bearer {admin_access_token}"}
+
+        async with get_session_factory()() as lookup_session:
+            session_row = (
+                (
+                    await lookup_session.execute(
+                        select(Session)
+                        .where(Session.user_id == target.id, Session.deleted_at.is_(None))
+                        .order_by(Session.created_at.desc(), Session.session_id.desc())
+                    )
+                )
+                .scalars()
+                .first()
+            )
+
+        assert session_row is not None
+
+        revoke = await client.request(
+            "DELETE",
+            f"/admin/users/{target.id}/sessions/{session_row.session_id}",
+            headers=headers,
+            json={"reason": "compromised_device"},
+        )
+        assert revoke.status_code == 200
+
+        detail = await client.get(
+            f"/admin/users/{target.id}/sessions/{session_row.session_id}",
+            headers=headers,
+        )
+
+    assert detail.status_code == 200
+    payload = detail.json()
+    assert payload["session_id"] == str(session_row.session_id)
+    assert payload["user_id"] == str(target.id)
+    assert payload["device_label"]
+    event_types = [item["event_type"] for item in payload["timeline"]]
+    assert "user.login.success" in event_types
+    assert "session.created" in event_types
+    assert "session.revoked" in event_types
+    revoked_event = next(
+        item for item in payload["timeline"] if item["event_type"] == "session.revoked"
+    )
+    assert revoked_event["metadata"]["reason"] == "compromised_device"
+    assert revoked_event["metadata"]["session_id"] == str(session_row.session_id)
+
+
+@pytest.mark.asyncio
+async def test_admin_session_detail_route_returns_invalid_session_for_unknown_session(
+    app_factory,
+    db_session,
+) -> None:
+    """Admin session detail returns invalid_session when the session is absent for the user."""
+    app: FastAPI = app_factory()
+    await _create_user(
+        db_session,
+        email="missing-session-admin@example.com",
+        password="Password123!",
+        role="admin",
+        email_verified=True,
+    )
+    target = await _create_user(
+        db_session,
+        email="missing-session-user@example.com",
+        password="Password123!",
+        role="user",
+        email_verified=True,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        admin_access_token = await _login_with_optional_otp(
+            client,
+            email="missing-session-admin@example.com",
+            password="Password123!",
+        )
+        response = await client.get(
+            f"/admin/users/{target.id}/sessions/{uuid4()}",
+            headers={"authorization": f"Bearer {admin_access_token}"},
+        )
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "invalid_session"
+
+
+@pytest.mark.asyncio
+async def test_admin_filtered_session_revoke_supports_dry_run_and_targeted_execution(
+    app_factory,
+    db_session,
+) -> None:
+    """Admin filtered revoke previews and then revokes only the matching sessions."""
+    app: FastAPI = app_factory()
+    await _create_user(
+        db_session,
+        email="filter-admin@example.com",
+        password="Password123!",
+        role="admin",
+        email_verified=True,
+    )
+    target = await _create_user(
+        db_session,
+        email="filter-user@example.com",
+        password="Password123!",
+        role="user",
+        email_verified=True,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        await _login_with_optional_otp(
+            client,
+            email="filter-user@example.com",
+            password="Password123!",
+        )
+        await _login_with_optional_otp(
+            client,
+            email="filter-user@example.com",
+            password="Password123!",
+        )
+        admin_access_token = await _login_with_optional_otp(
+            client,
+            email="filter-admin@example.com",
+            password="Password123!",
+        )
+        headers = {"authorization": f"Bearer {admin_access_token}"}
+
+        before = await client.get(
+            f"/admin/users/{target.id}/sessions?status=active",
+            headers=headers,
+        )
+        assert before.status_code == 200
+        before_items = before.json()["data"]
+        assert len(before_items) == 2
+        suspicious_session = next(item for item in before_items if item["is_suspicious"] is True)
+        normal_session = next(item for item in before_items if item["is_suspicious"] is False)
+
+        dry_run = await client.post(
+            f"/admin/users/{target.id}/sessions/revoke-by-filter",
+            headers=headers,
+            json={"is_suspicious": True, "dry_run": True},
+        )
+        assert dry_run.status_code == 200
+        dry_run_payload = dry_run.json()
+        assert dry_run_payload["dry_run"] is True
+        assert dry_run_payload["matched_session_count"] == 1
+        assert dry_run_payload["matched_session_ids"] == [suspicious_session["session_id"]]
+        assert dry_run_payload["revoked_session_count"] == 0
+        assert dry_run_payload["revoke_reason"] == "admin_filtered_revoke"
+
+        execute = await client.post(
+            f"/admin/users/{target.id}/sessions/revoke-by-filter",
+            headers=headers,
+            json={"is_suspicious": True, "reason": "risk_sweep"},
+        )
+        assert execute.status_code == 200
+        execute_payload = execute.json()
+        assert execute_payload["dry_run"] is False
+        assert execute_payload["matched_session_count"] == 1
+        assert execute_payload["revoked_session_count"] == 1
+        assert execute_payload["revoked_session_ids"] == [suspicious_session["session_id"]]
+        assert execute_payload["revoke_reason"] == "risk_sweep"
+
+        after = await client.get(
+            f"/admin/users/{target.id}/sessions?status=all",
+            headers=headers,
+        )
+        assert after.status_code == 200
+        after_items = {item["session_id"]: item for item in after.json()["data"]}
+        assert after_items[suspicious_session["session_id"]]["revoke_reason"] == "risk_sweep"
+        assert after_items[suspicious_session["session_id"]]["revoked_at"] is not None
+        assert after_items[normal_session["session_id"]]["revoked_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_admin_filtered_session_revoke_requires_at_least_one_filter(
+    app_factory,
+    db_session,
+) -> None:
+    """Admin filtered revoke fails closed when the request omits all selectors."""
+    app: FastAPI = app_factory()
+    await _create_user(
+        db_session,
+        email="filter-guard-admin@example.com",
+        password="Password123!",
+        role="admin",
+        email_verified=True,
+    )
+    target = await _create_user(
+        db_session,
+        email="filter-guard-user@example.com",
+        password="Password123!",
+        role="user",
+        email_verified=True,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        admin_access_token = await _login_with_optional_otp(
+            client,
+            email="filter-guard-admin@example.com",
+            password="Password123!",
+        )
+        response = await client.post(
+            f"/admin/users/{target.id}/sessions/revoke-by-filter",
+            headers={"authorization": f"Bearer {admin_access_token}"},
+            json={"dry_run": True},
+        )
+
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio

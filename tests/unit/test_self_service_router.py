@@ -96,6 +96,8 @@ class _SessionServiceStub:
                 revoke_reason=None,
                 ip_address="203.0.113.1",
                 user_agent="Mozilla/5.0 Chrome/120 Windows",
+                is_suspicious=True,
+                suspicious_reasons=["new_ip", "prior_failures"],
                 is_current=(current_session_id == _CURRENT_SESSION_ID),
             ),
             UserSessionSummary(
@@ -108,6 +110,8 @@ class _SessionServiceStub:
                 revoke_reason=None,
                 ip_address=None,
                 user_agent=None,
+                is_suspicious=False,
+                suspicious_reasons=[],
                 is_current=False,
             ),
         ]
@@ -122,9 +126,7 @@ class _SessionServiceStub:
         reason,
     ) -> UUID:
         del db_session
-        self.revoke_calls.append(
-            {"user_id": user_id, "session_id": session_id, "reason": reason}
-        )
+        self.revoke_calls.append({"user_id": user_id, "session_id": session_id, "reason": reason})
         return session_id
 
     async def revoke_user_sessions_except(
@@ -266,8 +268,12 @@ async def test_list_my_sessions_marks_current_session_and_renders_device_label()
     current = next(item for item in items if item["session_id"] == str(_CURRENT_SESSION_ID))
     assert current["is_current"] is True
     assert current["device_label"] == "Chrome on Windows"
+    assert current["is_suspicious"] is True
+    assert current["suspicious_reasons"] == ["new_ip", "prior_failures"]
     other = next(item for item in items if item["session_id"] == str(_OTHER_SESSION_ID))
     assert other["is_current"] is False
+    assert other["is_suspicious"] is False
+    assert other["suspicious_reasons"] == []
 
 
 @pytest.mark.asyncio

@@ -184,6 +184,38 @@ async def test_create_login_session_stores_hashed_token_and_redis_payload() -> N
 
 
 @pytest.mark.asyncio
+async def test_create_login_session_persists_suspicious_flags() -> None:
+    """Login session stores normalized suspicious-session metadata on the row."""
+    redis = _FakeRedis()
+    db_session = _FakeDBSession()
+    service = SessionService(
+        redis_client=redis,
+        refresh_token_ttl_seconds=600,
+        access_token_ttl_seconds=300,
+        refresh_token_hasher=RefreshTokenHasher.from_secret(TEST_REFRESH_TOKEN_HASH_SECRET),
+    )
+    user_id = uuid4()
+
+    await service.create_login_session(
+        db_session=db_session,  # type: ignore[arg-type]
+        user_id=user_id,
+        email="user@example.com",
+        role="user",
+        email_verified=True,
+        email_otp_enabled=False,
+        scopes=["read:all"],
+        raw_access_token=_build_access_token(user_id=str(user_id), jti="risk-jti"),
+        raw_refresh_token="refresh-token-raw-value",
+        is_suspicious=True,
+        suspicious_reasons=["new_ip", "prior_failures", "new_ip", ""],
+    )
+
+    stored = db_session.added[0]
+    assert stored.is_suspicious is True
+    assert stored.suspicious_reasons == ["new_ip", "prior_failures"]
+
+
+@pytest.mark.asyncio
 async def test_rotate_refresh_session_updates_hash_and_ttl() -> None:
     """Refresh rotation updates DB token hash and refreshes Redis TTL."""
     redis = _FakeRedis()
