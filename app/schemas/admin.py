@@ -81,6 +81,13 @@ class AdminSessionItem(BaseModel):
     suspicious_reasons: list[str]
 
 
+class AdminSuspiciousSessionItem(AdminSessionItem):
+    """Admin-facing global suspicious-session row with user context."""
+
+    user_email: str
+    user_role: str
+
+
 class AdminSessionRevokeResponse(BaseModel):
     """Admin response for single-session revocation."""
 

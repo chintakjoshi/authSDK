@@ -127,6 +127,14 @@ class AdminSessionSummary:
 
 
 @dataclass(frozen=True)
+class AdminSuspiciousSessionSummary(AdminSessionSummary):
+    """Global suspicious-session row enriched with user identity details."""
+
+    user_email: str
+    user_role: str
+
+
+@dataclass(frozen=True)
 class AdminSessionDetailSummary(AdminSessionSummary):
     """Admin-facing session detail payload with attributable timeline events."""
 
@@ -509,6 +517,64 @@ class AdminService:
                 suspicious_reasons=list(getattr(row, "suspicious_reasons", []) or []),
             )
             for row in rows
+        ]
+        return build_page(summaries, limit=limit)
+
+    async def list_suspicious_sessions_page(
+        self,
+        db_session: AsyncSession,
+        *,
+        email: str | None = None,
+        role: str | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> CursorPage[AdminSuspiciousSessionSummary]:
+        """Return active suspicious sessions across all non-deleted users."""
+        limit = max(1, min(limit, 200))
+        cursor_position = decode_cursor(cursor) if cursor is not None else None
+        statement = (
+            select(Session, User.email, User.role)
+            .join(User, User.id == Session.user_id)
+            .where(
+                Session.deleted_at.is_(None),
+                Session.is_suspicious.is_(True),
+                Session.revoked_at.is_(None),
+                Session.expires_at > datetime.now(UTC),
+                User.deleted_at.is_(None),
+            )
+            .order_by(Session.created_at.desc(), Session.id.desc())
+        )
+        normalized_role = role.strip() if role is not None else None
+        if normalized_role:
+            statement = statement.where(User.role == normalized_role)
+        normalized_email = email.strip().lower() if email is not None else None
+        if normalized_email:
+            statement = statement.where(func.lower(User.email).like(f"%{normalized_email}%"))
+
+        statement = apply_created_at_cursor(
+            statement,
+            model=Session,
+            cursor=cursor_position,
+        ).limit(limit + 1)
+        rows = list((await db_session.execute(statement)).all())
+        summaries = [
+            AdminSuspiciousSessionSummary(
+                id=session_row.id,
+                session_id=session_row.session_id,
+                user_id=session_row.user_id,
+                created_at=session_row.created_at,
+                last_seen_at=session_row.last_seen_at,
+                expires_at=session_row.expires_at,
+                revoked_at=session_row.revoked_at,
+                revoke_reason=session_row.revoke_reason,
+                ip_address=session_row.ip_address,
+                user_agent=session_row.user_agent,
+                is_suspicious=bool(getattr(session_row, "is_suspicious", False)),
+                suspicious_reasons=list(getattr(session_row, "suspicious_reasons", []) or []),
+                user_email=str(user_email),
+                user_role=str(user_role),
+            )
+            for session_row, user_email, user_role in rows
         ]
         return build_page(summaries, limit=limit)
 

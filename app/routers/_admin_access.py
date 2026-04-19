@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import hmac
+import json
 from typing import Annotated
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.core.browser_sessions import (
+    extract_access_token,
+    require_csrf_for_cookie_authenticated_request,
+)
 from app.dependencies import get_database_session
-from app.services.admin_service import AdminService, get_admin_service
+from app.services.admin_service import AdminService, AdminServiceError, get_admin_service
 
 
 def extract_bearer_token(request: Request) -> str | None:
@@ -38,6 +43,19 @@ async def require_admin_claims(
     admin_service: AdminService,
 ) -> dict[str, object]:
     """Validate caller as an admin via bootstrap key or bearer token."""
+    csrf_error = require_csrf_for_cookie_authenticated_request(request)
+    if csrf_error is not None:
+        try:
+            payload = json.loads(csrf_error.body.decode("utf-8"))
+        except Exception:
+            payload = {}
+        raise AdminServiceError(
+            detail=str(payload.get("detail", "Invalid CSRF token.")),
+            code=str(payload.get("code", "invalid_csrf_token")),
+            status_code=csrf_error.status_code,
+            headers=dict(csrf_error.headers),
+        )
+
     settings = get_settings()
     configured_admin_api_key = settings.admin_api_key
     supplied_admin_api_key = extract_admin_api_key(request)
@@ -60,7 +78,7 @@ async def require_admin_claims(
 
     claims = await admin_service.validate_admin_access_token(
         db_session=db_session,
-        token=extract_bearer_token(request),
+        token=extract_access_token(request)[0],
     )
     request.state.user = {
         "user_id": str(claims.get("sub", "")) or None,
