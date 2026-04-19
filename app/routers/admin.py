@@ -32,6 +32,7 @@ from app.schemas.admin import (
     AdminSessionRevokeRequest,
     AdminSessionRevokeResponse,
     AdminSigningKeyRotateResponse,
+    AdminSuspiciousSessionItem,
     AdminUserDeleteResponse,
     AdminUserDetail,
     AdminUserEraseResponse,
@@ -128,6 +129,24 @@ def _audit_log_item(row) -> AdminAuditLogItem:
         metadata=row.event_metadata,
         created_at=row.created_at,
     )
+
+
+def _session_item_payload(row) -> dict[str, object]:
+    """Serialize shared admin session fields for list and queue responses."""
+    return {
+        "session_id": row.session_id,
+        "user_id": row.user_id,
+        "created_at": row.created_at,
+        "last_seen_at": row.last_seen_at,
+        "expires_at": row.expires_at,
+        "revoked_at": row.revoked_at,
+        "revoke_reason": row.revoke_reason,
+        "ip_address": row.ip_address,
+        "user_agent": row.user_agent,
+        "device_label": parse_device_label(row.user_agent),
+        "is_suspicious": row.is_suspicious,
+        "suspicious_reasons": row.suspicious_reasons,
+    }
 
 
 def _session_filter_metadata(payload: AdminSessionFilterRevokeRequest) -> dict[str, object]:
@@ -434,6 +453,49 @@ async def revoke_user_sessions(
 
 
 @router.get(
+    "/sessions/suspicious",
+    response_model=CursorPageResponse[AdminSuspiciousSessionItem],
+)
+async def list_suspicious_sessions(
+    request: Request,
+    db_session: Annotated[AsyncSession, Depends(get_database_session)],
+    admin_service: Annotated[AdminService, Depends(get_admin_service)],
+    email: Annotated[str | None, Query()] = None,
+    role: Annotated[str | None, Query()] = None,
+    cursor: Annotated[str | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+) -> CursorPageResponse[AdminSuspiciousSessionItem] | JSONResponse:
+    """List active suspicious sessions across all users for security triage."""
+    try:
+        await _require_admin_claims(
+            request,
+            db_session=db_session,
+            admin_service=admin_service,
+        )
+        page = await admin_service.list_suspicious_sessions_page(
+            db_session=db_session,
+            email=email,
+            role=role,
+            cursor=cursor,
+            limit=limit,
+        )
+    except AdminServiceError as exc:
+        return _error_response(exc.status_code, exc.detail, exc.code, headers=exc.headers)
+    return CursorPageResponse(
+        data=[
+            AdminSuspiciousSessionItem(
+                user_email=row.user_email,
+                user_role=row.user_role,
+                **_session_item_payload(row),
+            )
+            for row in page.items
+        ],
+        next_cursor=page.next_cursor,
+        has_more=page.has_more,
+    )
+
+
+@router.get(
     "/users/{user_id}/sessions",
     response_model=CursorPageResponse[AdminSessionItem],
 )
@@ -463,23 +525,7 @@ async def list_user_sessions(
     except AdminServiceError as exc:
         return _error_response(exc.status_code, exc.detail, exc.code, headers=exc.headers)
     return CursorPageResponse(
-        data=[
-            AdminSessionItem(
-                session_id=row.session_id,
-                user_id=row.user_id,
-                created_at=row.created_at,
-                last_seen_at=row.last_seen_at,
-                expires_at=row.expires_at,
-                revoked_at=row.revoked_at,
-                revoke_reason=row.revoke_reason,
-                ip_address=row.ip_address,
-                user_agent=row.user_agent,
-                device_label=parse_device_label(row.user_agent),
-                is_suspicious=row.is_suspicious,
-                suspicious_reasons=row.suspicious_reasons,
-            )
-            for row in page.items
-        ],
+        data=[AdminSessionItem(**_session_item_payload(row)) for row in page.items],
         next_cursor=page.next_cursor,
         has_more=page.has_more,
     )

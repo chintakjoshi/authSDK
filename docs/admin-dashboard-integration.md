@@ -100,11 +100,49 @@ friendly device label using `device_label` (server-derived).
 
 | Method | Path | Purpose | Step-Up |
 |--------|------|---------|---------|
+| GET | `/sessions/suspicious` | Global active suspicious-session queue | No |
 | GET | `/users/{user_id}/sessions` | List sessions for a user | No |
 | GET | `/users/{user_id}/sessions/{session_id}` | Session detail with attributable timeline | No |
 | POST | `/users/{user_id}/sessions/revoke-by-filter` | Preview or revoke sessions matching explicit selectors | Yes |
 | DELETE | `/users/{user_id}/sessions/{session_id}` | Revoke one session | Yes |
 | DELETE | `/users/{user_id}/sessions` | Revoke all sessions for a user | Yes |
+
+`GET /sessions/suspicious` query params:
+
+- `email` â€” optional case-insensitive email substring filter
+- `role` â€” optional exact auth role filter
+- `cursor` â€” opaque pagination cursor
+- `limit` â€” 1â€“200 (default 50)
+
+Suspicious queue item shape:
+
+```json
+{
+  "session_id": "uuid",
+  "user_id": "uuid",
+  "user_email": "person@example.com",
+  "user_role": "user",
+  "created_at": "2026-04-16T09:00:00Z",
+  "last_seen_at": "2026-04-16T10:15:00Z",
+  "expires_at": "2026-04-23T09:00:00Z",
+  "revoked_at": null,
+  "revoke_reason": null,
+  "ip_address": "203.0.113.10",
+  "user_agent": "Mozilla/5.0 ...",
+  "device_label": "Chrome on Windows",
+  "is_suspicious": true,
+  "suspicious_reasons": ["new_ip", "prior_failures"]
+}
+```
+
+Suspicious queue notes:
+
+- The queue only returns active suspicious sessions. Revoked, expired, and
+  soft-deleted-user sessions are excluded.
+- `user_email` and `user_role` let dashboards render a standalone global queue
+  without first hydrating the per-user directory.
+- Use this route for the top-level security triage queue; use the per-user
+  session routes after the operator drills into one account.
 
 `GET /users/{user_id}/sessions` query params:
 
@@ -388,6 +426,14 @@ for supported query parameters.
 3. `GET /admin/users/{user_id}/history?limit=20` — recent activity panel
 4. Action buttons wire to PATCH role, DELETE sessions, DELETE user, and
    PATCH OTP — each must first obtain an action token via the step-up flow.
+
+### Suspicious Queue
+
+1. `GET /admin/sessions/suspicious?limit=50` â€” initial global queue load
+2. Render email, role, device, IP, risk reasons, and last seen
+3. Use `next_cursor` to page through the queue
+4. Open the user workspace with `user_id`, then switch to per-user session
+   endpoints for deeper inspection or revoke actions
 
 ### Session Table Columns
 

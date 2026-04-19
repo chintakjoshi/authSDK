@@ -318,6 +318,65 @@ async def test_list_user_sessions_page_preserves_suspicious_session_fields() -> 
 
 
 @pytest.mark.asyncio
+async def test_list_suspicious_sessions_page_returns_enriched_cursor_results() -> None:
+    """Global suspicious-session listings should carry user context and cursor metadata."""
+    service = _service()
+    now = datetime.now(UTC)
+    first_session = SimpleNamespace(
+        id=uuid4(),
+        session_id=uuid4(),
+        user_id=uuid4(),
+        created_at=now,
+        last_seen_at=now,
+        expires_at=now + timedelta(hours=1),
+        revoked_at=None,
+        revoke_reason=None,
+        ip_address="203.0.113.20",
+        user_agent="Mozilla/5.0 Chrome/120 Windows",
+        is_suspicious=True,
+        suspicious_reasons=["new_ip"],
+    )
+    second_session = SimpleNamespace(
+        id=uuid4(),
+        session_id=uuid4(),
+        user_id=uuid4(),
+        created_at=now - timedelta(minutes=5),
+        last_seen_at=now - timedelta(minutes=1),
+        expires_at=now + timedelta(hours=1),
+        revoked_at=None,
+        revoke_reason=None,
+        ip_address="198.51.100.20",
+        user_agent="Mozilla/5.0 Safari/17 macOS",
+        is_suspicious=True,
+        suspicious_reasons=["prior_failures"],
+    )
+    db_session = _DBSessionStub(
+        [
+            SimpleNamespace(
+                all=lambda: [
+                    (first_session, "first@example.com", "user"),
+                    (second_session, "second@example.com", "admin"),
+                ]
+            )
+        ]
+    )
+
+    page = await service.list_suspicious_sessions_page(
+        db_session=db_session,  # type: ignore[arg-type]
+        limit=1,
+    )
+
+    assert len(page.items) == 1
+    assert page.items[0].session_id == first_session.session_id
+    assert page.items[0].user_email == "first@example.com"
+    assert page.items[0].user_role == "user"
+    assert page.items[0].is_suspicious is True
+    assert page.items[0].suspicious_reasons == ["new_ip"]
+    assert page.has_more is True
+    assert page.next_cursor is not None
+
+
+@pytest.mark.asyncio
 async def test_admin_mutation_and_proxy_helpers_cover_error_mapping() -> None:
     """Admin service covers role updates, delete/session/OTP, webhook proxies, and helper branches."""
     user_service = _UserServiceStub()

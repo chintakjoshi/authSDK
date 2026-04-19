@@ -296,6 +296,51 @@ async def test_admin_routes_accept_local_dev_bootstrap_key(
 
 
 @pytest.mark.asyncio
+async def test_admin_routes_accept_cookie_authenticated_admin_sessions(
+    app_factory, db_session
+) -> None:
+    """Admin routes should accept first-party browser sessions backed by auth cookies."""
+    app: FastAPI = app_factory()
+    await _create_user(
+        db_session,
+        email="admin-cookie@example.com",
+        password="Password123!",
+        role="admin",
+    )
+    await _create_user(db_session, email="listed@example.com", password="Password123!")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        csrf_response = await client.get("/auth/csrf")
+        assert csrf_response.status_code == 200
+        csrf_token = csrf_response.json()["csrf_token"]
+
+        login = await client.post(
+            "/auth/login",
+            json={"email": "admin-cookie@example.com", "password": "Password123!"},
+            headers={
+                "x-auth-session-transport": "cookie",
+                "x-csrf-token": csrf_token,
+            },
+        )
+        assert login.status_code == 200
+        assert login.json() == {
+            "authenticated": True,
+            "session_transport": "cookie",
+        }
+
+        response = await client.get(
+            "/admin/users?limit=12",
+            headers={"x-auth-session-transport": "cookie"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"][0]["email"] == "listed@example.com"
+
+
+@pytest.mark.asyncio
 async def test_admin_users_list_supports_cursor_pagination(app_factory, db_session) -> None:
     """Admin user listing uses the documented cursor page shape."""
     app: FastAPI = app_factory()
@@ -340,6 +385,144 @@ async def test_admin_users_list_supports_cursor_pagination(app_factory, db_sessi
         }
         assert listed_ids == {str(first_user.id), str(second_user.id)}
         assert str(first_payload["data"][0]["id"]) != str(second_payload["data"][0]["id"])
+
+
+@pytest.mark.asyncio
+async def test_admin_suspicious_session_queue_lists_active_sessions_across_users(
+    app_factory,
+    db_session,
+) -> None:
+    """Admins can page through active suspicious sessions across all users."""
+    app: FastAPI = app_factory()
+    security_admin = await _create_user(
+        db_session,
+        email="security-admin@example.com",
+        password="Password123!",
+        role="admin",
+        email_verified=True,
+    )
+    first_target = await _create_user(
+        db_session,
+        email="queue-user@example.com",
+        password="Password123!",
+        role="user",
+        email_verified=True,
+    )
+    second_target = await _create_user(
+        db_session,
+        email="queue-admin@example.com",
+        password="Password123!",
+        role="admin",
+        email_verified=True,
+    )
+    revoked_target = await _create_user(
+        db_session,
+        email="queue-revoked@example.com",
+        password="Password123!",
+        role="user",
+        email_verified=True,
+    )
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://testserver",
+    ) as client:
+        await _login_with_optional_otp(
+            client,
+            email="queue-user@example.com",
+            password="Password123!",
+        )
+        await _login_with_optional_otp(
+            client,
+            email="queue-admin@example.com",
+            password="Password123!",
+        )
+        await _login_with_optional_otp(
+            client,
+            email="queue-revoked@example.com",
+            password="Password123!",
+        )
+        admin_access_token = await _login_with_optional_otp(
+            client,
+            email="security-admin@example.com",
+            password="Password123!",
+        )
+        headers = {"authorization": f"Bearer {admin_access_token}"}
+
+        async with get_session_factory()() as lookup_session:
+            session_rows = list(
+                (
+                    await lookup_session.execute(
+                        select(Session).where(
+                            Session.user_id.in_(
+                                [
+                                    security_admin.id,
+                                    first_target.id,
+                                    second_target.id,
+                                    revoked_target.id,
+                                ]
+                            )
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            admin_session = next(row for row in session_rows if row.user_id == security_admin.id)
+            first_session = next(row for row in session_rows if row.user_id == first_target.id)
+            second_session = next(row for row in session_rows if row.user_id == second_target.id)
+            revoked_session = next(row for row in session_rows if row.user_id == revoked_target.id)
+
+            admin_session.is_suspicious = False
+            admin_session.suspicious_reasons = []
+            first_session.is_suspicious = True
+            first_session.suspicious_reasons = ["new_ip"]
+            second_session.is_suspicious = True
+            second_session.suspicious_reasons = ["prior_failures"]
+            revoked_session.is_suspicious = True
+            revoked_session.suspicious_reasons = ["new_user_agent"]
+            revoked_session.revoked_at = datetime.now(UTC)
+            await lookup_session.commit()
+
+        first_page = await client.get("/admin/sessions/suspicious?limit=1", headers=headers)
+        assert first_page.status_code == 200
+        first_payload = first_page.json()
+        assert len(first_payload["data"]) == 1
+        assert first_payload["has_more"] is True
+        assert first_payload["next_cursor"] is not None
+        assert first_payload["data"][0]["is_suspicious"] is True
+        assert first_payload["data"][0]["revoked_at"] is None
+        assert first_payload["data"][0]["user_email"] in {
+            "queue-user@example.com",
+            "queue-admin@example.com",
+        }
+        assert first_payload["data"][0]["device_label"]
+
+        second_page = await client.get(
+            f"/admin/sessions/suspicious?limit=10&cursor={first_payload['next_cursor']}",
+            headers=headers,
+        )
+        assert second_page.status_code == 200
+        second_payload = second_page.json()
+        listed_session_ids = {
+            item["session_id"] for item in [*first_payload["data"], *second_payload["data"]]
+        }
+        assert listed_session_ids == {
+            str(first_session.session_id),
+            str(second_session.session_id),
+        }
+        assert str(revoked_session.session_id) not in listed_session_ids
+
+        filtered = await client.get(
+            "/admin/sessions/suspicious?role=admin&email=queue-admin",
+            headers=headers,
+        )
+        assert filtered.status_code == 200
+        filtered_payload = filtered.json()
+        assert [item["user_email"] for item in filtered_payload["data"]] == [
+            "queue-admin@example.com"
+        ]
+        assert [item["user_role"] for item in filtered_payload["data"]] == ["admin"]
 
 
 @pytest.mark.asyncio
