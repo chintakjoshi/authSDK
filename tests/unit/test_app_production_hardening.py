@@ -248,6 +248,16 @@ async def test_create_app_serves_swagger_ui_with_docs_csp_when_explicitly_enable
 
     assert docs_response.status_code == 200
     assert "Swagger UI" in docs_response.text
+    assert "window.__TWA_SWAGGER_REQUEST_INTERCEPTOR__" in docs_response.text
+    assert "window.__TWA_SWAGGER_DOCS_CONFIG__" in docs_response.text
+    assert settings.browser_sessions.csrf_cookie_name in docs_response.text
+    assert settings.browser_sessions.csrf_header_name in docs_response.text
+    assert settings.browser_sessions.transport_header_name in docs_response.text
+    assert "/auth/csrf" in docs_response.text
+    assert "/auth/login" in docs_response.text
+    assert "/auth/token" in docs_response.text
+    assert "/auth/logout" in docs_response.text
+    assert '"bootstrapCsrf": true' in docs_response.text
     assert (
         "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net"
         in docs_response.headers["content-security-policy"]

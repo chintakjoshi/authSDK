@@ -153,6 +153,10 @@ Checks:
    `__Host-auth_refresh`.
 5. Call `GET /auth/csrf` and verify the response includes a `Set-Cookie` header
    for the configured CSRF cookie name.
+6. If you are testing through `http://localhost:8000/docs`, remember Swagger UI
+   bootstraps CSRF automatically for cookie-mode auth routes. A remaining
+   `invalid_csrf_token` error there usually means the browser rejected the CSRF
+   cookie or an old cookie/header pair is stale.
 
 Fix:
 
