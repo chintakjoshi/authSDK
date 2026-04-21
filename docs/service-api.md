@@ -280,6 +280,11 @@ Use these for authoritative schemas when `APP__EXPOSE_DOCS=true`:
 - `GET /docs`
 - `GET /openapi.json`
 
+Swagger UI on `GET /docs` supports cookie-session auth flows for same-origin
+browser use. For `POST /auth/login`, `POST /auth/token`, and `POST /auth/logout`
+it bootstraps `GET /auth/csrf` when needed, then propagates the configured CSRF
+header and `X-Auth-Session-Transport: cookie`.
+
 ## Related Docs
 
 - architecture: `architecture.md`

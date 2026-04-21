@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app.config import configure_structlog, get_settings, shutdown_reloadable_singletons
+from app.core.docs import SwaggerDocsConfig, register_swagger_ui_docs
 from app.error_handlers import register_exception_handlers
 from app.middleware.correlation_id import CorrelationIdMiddleware
 from app.middleware.logging import LoggingMiddleware
@@ -45,7 +46,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title=settings.app.service,
-        docs_url="/docs" if docs_enabled else None,
+        docs_url=None,
         redoc_url=None,
         openapi_url="/openapi.json" if docs_enabled else None,
         lifespan=_app_lifespan,
@@ -71,6 +72,24 @@ def create_app() -> FastAPI:
         include_in_schema=False,
         dependencies=metrics_dependencies,
     )
+    if docs_enabled:
+        register_swagger_ui_docs(
+            app,
+            openapi_url=app.openapi_url or "/openapi.json",
+            title=f"{settings.app.service} - Swagger UI",
+            swagger_docs_config=SwaggerDocsConfig(
+                csrf_cookie_name=settings.browser_sessions.csrf_cookie_name,
+                csrf_header_name=settings.browser_sessions.csrf_header_name,
+                bootstrap_csrf=True,
+                csrf_bootstrap_path="/auth/csrf",
+                include_credentials=True,
+                cookie_transport_header_name=settings.browser_sessions.transport_header_name,
+                cookie_transport_header_value="cookie",
+                cookie_transport_paths=("/auth/login", "/auth/token", "/auth/logout"),
+                protected_path_prefixes=tuple(),
+                apply_csrf_to_unsafe_requests=False,
+            ),
+        )
     app.include_router(auth.router)
     app.include_router(self_service.router)
     app.include_router(lifecycle.router)
