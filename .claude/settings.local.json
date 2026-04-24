@@ -15,7 +15,14 @@
       "Bash(.venv/Scripts/python.exe -m ruff format --check app/ sdk/ tests/ loadtests/ migrations/)",
       "Bash(.venv/Scripts/python.exe -m ruff format --check --diff app/routers/auth.py)",
       "Bash(.venv/Scripts/python.exe -m ruff format app/ sdk/ tests/ loadtests/ migrations/)",
-      "Bash(.venv/Scripts/python.exe -m pytest tests/integration/ --no-header -q)"
+      "Bash(.venv/Scripts/python.exe -m pytest tests/integration/ --no-header -q)",
+      "Bash(.venv/Scripts/python.exe -c \"from cryptography.fernet import Fernet; print\\(Fernet.generate_key\\(\\)\\)\")",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/unit/test_mfa_phone_encryption.py tests/unit/test_mfa_codes.py tests/unit/test_mfa_challenge_store.py --collect-only -q)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/unit/test_mfa_phone_encryption.py --no-header)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/unit/test_mfa_codes.py --no-header)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/unit/test_mfa_challenge_store.py --no-header)",
+      "Bash(.venv/Scripts/python.exe -m ruff check app/core/mfa/ tests/unit/test_mfa_phone_encryption.py tests/unit/test_mfa_codes.py tests/unit/test_mfa_challenge_store.py)",
+      "Bash(.venv/Scripts/python.exe -m ruff format --check app/core/mfa/ tests/unit/test_mfa_phone_encryption.py tests/unit/test_mfa_codes.py tests/unit/test_mfa_challenge_store.py)"
     ]
   }
 }
