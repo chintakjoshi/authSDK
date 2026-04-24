@@ -176,6 +176,9 @@ def test_production_settings_accept_hardened_configuration() -> None:
     settings.signing_keys.encryption_key = "signing-secret"
     settings.session_security.refresh_token_hash_key = "session-hash-secret"
     settings.webhook.secret_encryption_key = "webhook-secret"
+    settings.mfa.sms.provider = "twilio"
+    settings.mfa.phone_encryption_key = "phone-encryption-key-32b-minimum!!"
+    settings.mfa.phone_lookup_hash_key = "phone-lookup-hash-key"
 
     validated = settings.validate_production_constraints()
 
