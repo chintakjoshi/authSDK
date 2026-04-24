@@ -21,7 +21,7 @@ class _UserStub:
     password_hash: str | None = "hashed"
     is_active: bool = True
     email_verified: bool = True
-    email_otp_enabled: bool = True
+    mfa_enabled: bool = True
     email_verify_token_hash: str | None = "verify"
     email_verify_token_expires: datetime | None = datetime.now(UTC)
     password_reset_token_hash: str | None = "reset"

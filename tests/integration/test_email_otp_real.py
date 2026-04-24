@@ -87,12 +87,12 @@ async def _set_user_flags(
     user_id: UUID,
     *,
     email_verified: bool,
-    email_otp_enabled: bool,
+    mfa_enabled: bool,
 ) -> User:
     """Update one user's OTP-related verification flags."""
     user = (await db_session.execute(select(User).where(User.id == user_id))).scalar_one()
     user.email_verified = email_verified
-    user.email_otp_enabled = email_otp_enabled
+    user.mfa_enabled = mfa_enabled
     await db_session.commit()
     await db_session.refresh(user)
     return user
@@ -110,7 +110,7 @@ async def test_login_with_email_otp_happy_path(app_factory, user_factory, db_ses
         db_session,
         user.id,
         email_verified=True,
-        email_otp_enabled=True,
+        mfa_enabled=True,
     )
 
     async with AsyncClient(
@@ -158,7 +158,7 @@ async def test_login_otp_enforces_invalid_and_max_attempt_paths(
         db_session,
         user.id,
         email_verified=True,
-        email_otp_enabled=True,
+        mfa_enabled=True,
     )
 
     async with AsyncClient(
@@ -203,7 +203,7 @@ async def test_login_otp_resend_replaces_active_code(app_factory, user_factory, 
         db_session,
         user.id,
         email_verified=True,
-        email_otp_enabled=True,
+        mfa_enabled=True,
     )
 
     async with AsyncClient(
@@ -264,7 +264,7 @@ async def test_action_otp_enables_and_disables_login_otp(
         db_session,
         user.id,
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
     )
 
     async with AsyncClient(
@@ -280,7 +280,7 @@ async def test_action_otp_enables_and_disables_login_otp(
 
         enable = await client.post("/auth/otp/enable", headers=headers)
         assert enable.status_code == 200
-        assert enable.json() == {"email_otp_enabled": True}
+        assert enable.json() == {"mfa_enabled": True}
 
         request_enable = await client.post(
             "/auth/otp/request/action",
@@ -302,7 +302,7 @@ async def test_action_otp_enables_and_disables_login_otp(
             headers={**headers, "x-action-token": enable_action_token},
         )
         assert enable_with_action.status_code == 200
-        assert enable_with_action.json() == {"email_otp_enabled": True}
+        assert enable_with_action.json() == {"mfa_enabled": True}
 
         login_with_otp = await client.post(
             "/auth/login",
@@ -345,7 +345,7 @@ async def test_action_otp_enables_and_disables_login_otp(
             headers={**otp_headers, "x-action-token": verify_disable.json()["action_token"]},
         )
         assert disable.status_code == 200
-        assert disable.json() == {"email_otp_enabled": False}
+        assert disable.json() == {"mfa_enabled": False}
 
         login_after_disable = await client.post(
             "/auth/login",
@@ -373,7 +373,7 @@ async def test_action_otp_request_requires_verified_email(
         db_session,
         user.id,
         email_verified=False,
-        email_otp_enabled=False,
+        mfa_enabled=False,
     )
 
     async with AsyncClient(
@@ -406,7 +406,7 @@ async def test_enable_otp_requires_reauth_when_auth_time_is_stale(
         db_session,
         user.id,
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
     )
     active_key = await get_signing_key_service().get_active_signing_key(db_session)
     await db_session.rollback()
@@ -456,6 +456,6 @@ async def test_enable_otp_requires_reauth_when_auth_time_is_stale(
             headers={"authorization": f"Bearer {fresh_access_token}"},
         )
         assert enable.status_code == 200
-        assert enable.json() == {"email_otp_enabled": True}
+        assert enable.json() == {"mfa_enabled": True}
 
     app.dependency_overrides.clear()

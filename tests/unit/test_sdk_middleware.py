@@ -72,7 +72,7 @@ def _build_token(
     else:
         payload["email"] = email
         payload["email_verified"] = email_verified
-        payload["email_otp_enabled"] = False
+        payload["mfa_enabled"] = False
         payload["scopes"] = [scope]
         payload["auth_time"] = int(now.timestamp())
     if include_jti:

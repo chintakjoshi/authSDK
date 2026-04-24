@@ -122,7 +122,9 @@ class _BruteForceStub:
             attempt_count=1,
         )
 
-    async def record_successful_login(self, user_id: str, ip_address=None, user_agent=None) -> object:  # type: ignore[no-untyped-def]
+    async def record_successful_login(
+        self, user_id: str, ip_address=None, user_agent=None
+    ) -> object:  # type: ignore[no-untyped-def]
         del user_id, ip_address, user_agent
         if self.success_error is not None:
             raise self.success_error
@@ -238,7 +240,7 @@ def test_issue_token_pair_caches_signature_inspection(monkeypatch: pytest.Monkey
             email: str | None = None,
             role: str = "user",
             email_verified: bool = False,
-            email_otp_enabled: bool = False,
+            mfa_enabled: bool = False,
             scopes: list[str] | None = None,
             audience: str | None = None,
             auth_time: datetime | None = None,
@@ -250,7 +252,7 @@ def test_issue_token_pair_caches_signature_inspection(monkeypatch: pytest.Monkey
                     "email": email,
                     "role": role,
                     "email_verified": email_verified,
-                    "email_otp_enabled": email_otp_enabled,
+                    "mfa_enabled": mfa_enabled,
                     "scopes": scopes,
                     "audience": audience,
                     "auth_time": auth_time,
@@ -277,7 +279,7 @@ def test_issue_token_pair_caches_signature_inspection(monkeypatch: pytest.Monkey
         email="user-1@example.com",
         role="admin",
         email_verified=True,
-        email_otp_enabled=True,
+        mfa_enabled=True,
         scopes=["svc:read"],
         audience="orders-api",
         auth_time=first_auth_time,
@@ -289,7 +291,7 @@ def test_issue_token_pair_caches_signature_inspection(monkeypatch: pytest.Monkey
         email="user-2@example.com",
         role="user",
         email_verified=False,
-        email_otp_enabled=False,
+        mfa_enabled=False,
         scopes=["svc:write"],
         audience="billing-api",
         auth_time=second_auth_time,
@@ -334,7 +336,7 @@ async def test_auth_helpers_and_login_fail_closed_branches(monkeypatch) -> None:
         email="user@example.com",
         role="admin",
         email_verified=True,
-        email_otp_enabled=True,
+        mfa_enabled=True,
         scopes=["svc:read"],
         auth_time=datetime.now(UTC),
     )
@@ -367,7 +369,7 @@ async def test_auth_helpers_and_login_fail_closed_branches(monkeypatch) -> None:
         email="user@example.com",
         password_hash="hashed",
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
         role="user",
     )
     brute_force_service.ensure_error = BruteForceProtectionError(
@@ -416,7 +418,7 @@ async def test_login_allows_unverified_user_when_policy_disabled(monkeypatch) ->
         email="user@example.com",
         password_hash="hashed",
         email_verified=False,
-        email_otp_enabled=False,
+        mfa_enabled=False,
         role="user",
     )
     user_service.verify_password_result = True
@@ -449,7 +451,7 @@ async def test_login_queues_success_audit_events_in_background_tasks(monkeypatch
         email="user@example.com",
         password_hash="hashed",
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
         role="user",
     )
     user_service.verify_password_result = True
@@ -498,7 +500,7 @@ async def test_login_passes_suspicious_flags_to_session_creation(monkeypatch) ->
         email="user@example.com",
         password_hash="hashed",
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
         role="user",
     )
     user_service.verify_password_result = True
@@ -542,7 +544,7 @@ async def test_login_prefers_async_password_helper_when_available(monkeypatch) -
         email="user@example.com",
         password_hash="hashed",
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
         role="user",
     )
     user_service.verify_password_result = True

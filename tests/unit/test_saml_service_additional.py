@@ -136,7 +136,7 @@ class _UserStub:
     email: str
     role: str
     email_verified: bool
-    email_otp_enabled: bool = False
+    mfa_enabled: bool = False
     is_active: bool = True
     deleted_at: object | None = None
 
@@ -308,7 +308,7 @@ async def test_complete_callback_preserves_redirect_context_and_requested_audien
             email: str,
             role: str,
             email_verified: bool,
-            email_otp_enabled: bool,
+            mfa_enabled: bool,
             scopes: list[str],
             audience: str | None = None,
         ) -> TokenPair:
@@ -319,7 +319,7 @@ async def test_complete_callback_preserves_redirect_context_and_requested_audien
                     "email": email,
                     "role": role,
                     "email_verified": email_verified,
-                    "email_otp_enabled": email_otp_enabled,
+                    "mfa_enabled": mfa_enabled,
                     "scopes": scopes,
                     "audience": audience,
                 }
@@ -419,7 +419,7 @@ def test_issue_token_pair_caches_signature_inspection(monkeypatch: pytest.Monkey
             email: str,
             role: str,
             email_verified: bool,
-            email_otp_enabled: bool,
+            mfa_enabled: bool,
             scopes: list[str],
         ) -> TokenPair:
             captured_kwargs.append(
@@ -429,7 +429,7 @@ def test_issue_token_pair_caches_signature_inspection(monkeypatch: pytest.Monkey
                     "email": email,
                     "role": role,
                     "email_verified": email_verified,
-                    "email_otp_enabled": email_otp_enabled,
+                    "mfa_enabled": mfa_enabled,
                     "scopes": scopes,
                 }
             )
@@ -455,7 +455,7 @@ def test_issue_token_pair_caches_signature_inspection(monkeypatch: pytest.Monkey
         email="saml@example.com",
         role="admin",
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
         scopes=["orders:read"],
     )
     second = service._issue_token_pair(
@@ -464,7 +464,7 @@ def test_issue_token_pair_caches_signature_inspection(monkeypatch: pytest.Monkey
         email="saml-2@example.com",
         role="user",
         email_verified=False,
-        email_otp_enabled=True,
+        mfa_enabled=True,
         scopes=["orders:write"],
     )
 
@@ -499,7 +499,7 @@ async def test_issue_token_pair_and_identity_upsert_cover_remaining_paths(monkey
         email="saml@example.com",
         role="admin",
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
         scopes=["orders:read"],
     )
     assert issued == TokenPair(access_token="legacy-access", refresh_token="legacy-refresh")
@@ -551,7 +551,7 @@ async def test_issue_token_pair_and_identity_upsert_cover_remaining_paths(monkey
         email="stale@example.com",
         role="user",
         email_verified=False,
-        email_otp_enabled=False,
+        mfa_enabled=False,
     )
     existing_identity = UserIdentity(
         user_id="user-3",  # type: ignore[arg-type]

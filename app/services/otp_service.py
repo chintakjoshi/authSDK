@@ -355,7 +355,7 @@ class OTPService:
             email=user.email,
             role=user.role,
             email_verified=user.email_verified,
-            email_otp_enabled=user.email_otp_enabled,
+            mfa_enabled=user.mfa_enabled,
             scopes=[],
             audience=token_audiences,
         )
@@ -365,7 +365,7 @@ class OTPService:
             email=user.email,
             role=user.role,
             email_verified=user.email_verified,
-            email_otp_enabled=user.email_otp_enabled,
+            mfa_enabled=user.mfa_enabled,
             scopes=[],
             raw_access_token=token_pair.access_token,
             raw_refresh_token=token_pair.refresh_token,
@@ -582,7 +582,7 @@ class OTPService:
         if not user.email_verified:
             raise OTPServiceError("Email is not verified.", "email_not_verified", 400)
 
-        user.email_otp_enabled = True
+        user.mfa_enabled = True
         await db_session.flush()
         await db_session.commit()
         return user
@@ -607,7 +607,7 @@ class OTPService:
                 user_id=user_id,
             )
 
-        user.email_otp_enabled = False
+        user.mfa_enabled = False
         await db_session.flush()
         await self.clear_user_otp_state(user_id)
         await db_session.commit()

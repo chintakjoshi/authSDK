@@ -56,7 +56,7 @@ async def _upsert_user(
     password: str,
     role: str,
     email_verified: bool,
-    email_otp_enabled: bool,
+    mfa_enabled: bool,
 ) -> User:
     """Create or restore a password user for load-testing purposes."""
     user_service = UserService()
@@ -70,8 +70,8 @@ async def _upsert_user(
     user.deleted_at = None
     user.is_active = True
     user.role = role
-    user.email_verified = email_verified or email_otp_enabled
-    user.email_otp_enabled = email_otp_enabled
+    user.email_verified = email_verified or mfa_enabled
+    user.mfa_enabled = mfa_enabled
     user.email_verify_token_hash = None
     user.email_verify_token_expires = None
     user.password_reset_token_hash = None
@@ -163,7 +163,7 @@ async def seed_fixtures(args: argparse.Namespace) -> SeedSummary:
             password=args.password,
             role="user",
             email_verified=True,
-            email_otp_enabled=False,
+            mfa_enabled=False,
         )
         await _upsert_user(
             db_session,
@@ -171,7 +171,7 @@ async def seed_fixtures(args: argparse.Namespace) -> SeedSummary:
             password=args.admin_password,
             role="admin",
             email_verified=True,
-            email_otp_enabled=False,
+            mfa_enabled=False,
         )
         for index in range(1, args.otp_user_count + 1):
             await _upsert_user(
@@ -180,7 +180,7 @@ async def seed_fixtures(args: argparse.Namespace) -> SeedSummary:
                 password=args.otp_password,
                 role="user",
                 email_verified=True,
-                email_otp_enabled=True,
+                mfa_enabled=True,
             )
 
         m2m_client_id: str | None = None

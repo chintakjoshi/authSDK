@@ -52,10 +52,10 @@ class _TokenServiceStub:
         role: str = "user",
         scopes: list[str] | None = None,
         email_verified: bool = False,
-        email_otp_enabled: bool = False,
+        mfa_enabled: bool = False,
         auth_time=None,
     ) -> TokenPair:
-        del db_session, email, role, scopes, email_verified, email_otp_enabled, auth_time
+        del db_session, email, role, scopes, email_verified, mfa_enabled, auth_time
         return TokenPair(
             access_token=f"access-{user_id}",
             refresh_token=f"refresh-{user_id}",

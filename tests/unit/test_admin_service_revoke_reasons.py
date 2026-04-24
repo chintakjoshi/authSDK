@@ -18,7 +18,7 @@ class _ActiveUserStub:
     role: str = "user"
     is_active: bool = True
     email_verified: bool = True
-    email_otp_enabled: bool = False
+    mfa_enabled: bool = False
     created_at: datetime = datetime.now(UTC)
     updated_at: datetime = datetime.now(UTC)
 

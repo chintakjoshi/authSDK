@@ -75,4 +75,4 @@ class VerifyActionOTPResponse(BaseModel):
 class OTPEnrollmentResponse(BaseModel):
     """OTP enrollment toggle response."""
 
-    email_otp_enabled: bool
+    mfa_enabled: bool

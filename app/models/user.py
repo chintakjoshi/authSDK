@@ -12,6 +12,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    LargeBinary,
     String,
     UniqueConstraint,
     text,
@@ -23,6 +24,7 @@ from app.db.base import Base, TimestampTenantMixin
 
 if TYPE_CHECKING:
     from app.models.api_key import APIKey
+    from app.models.recovery_code import UserRecoveryCode
     from app.models.session import Session
 
 
@@ -35,6 +37,10 @@ class User(Base, TimestampTenantMixin):
         CheckConstraint(
             "role IN ('admin', 'user', 'service')",
             name="ck_users_role_allowed",
+        ),
+        CheckConstraint(
+            "mfa_primary_method IS NULL OR mfa_primary_method IN ('sms')",
+            name="ck_users_mfa_primary_method_allowed",
         ),
     )
 
@@ -58,12 +64,26 @@ class User(Base, TimestampTenantMixin):
         DateTime(timezone=True),
         nullable=True,
     )
-    email_otp_enabled: Mapped[bool] = mapped_column(
+    phone_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    phone_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    phone_lookup_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    phone_verified: Mapped[bool] = mapped_column(
         Boolean,
         nullable=False,
         default=False,
         server_default=text("false"),
     )
+    phone_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    mfa_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default=text("false"),
+    )
+    mfa_primary_method: Mapped[str | None] = mapped_column(String(16), nullable=True)
     role: Mapped[str] = mapped_column(
         String(16), nullable=False, default="user", server_default="user"
     )
@@ -71,6 +91,7 @@ class User(Base, TimestampTenantMixin):
     identities: Mapped[list[UserIdentity]] = relationship(back_populates="user")
     sessions: Mapped[list[Session]] = relationship(back_populates="user")
     api_keys: Mapped[list[APIKey]] = relationship(back_populates="user")
+    recovery_codes: Mapped[list[UserRecoveryCode]] = relationship(back_populates="user")
 
 
 class UserIdentity(Base, TimestampTenantMixin):

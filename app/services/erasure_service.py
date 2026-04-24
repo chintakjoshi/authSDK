@@ -79,7 +79,7 @@ class ErasureService:
             user.password_hash = None
             user.is_active = False
             user.email_verified = False
-            user.email_otp_enabled = False
+            user.mfa_enabled = False
             user.email_verify_token_hash = None
             user.email_verify_token_expires = None
             user.password_reset_token_hash = None

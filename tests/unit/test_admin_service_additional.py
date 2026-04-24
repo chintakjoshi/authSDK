@@ -24,7 +24,7 @@ class _UserStub:
     role: str
     is_active: bool
     email_verified: bool
-    email_otp_enabled: bool
+    mfa_enabled: bool
     created_at: datetime
     updated_at: datetime
 
@@ -102,7 +102,7 @@ class _OTPServiceStub:
             role="user",
             is_active=True,
             email_verified=True,
-            email_otp_enabled=True,
+            mfa_enabled=True,
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
@@ -116,7 +116,7 @@ class _OTPServiceStub:
             role="user",
             is_active=True,
             email_verified=True,
-            email_otp_enabled=False,
+            mfa_enabled=False,
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
@@ -135,7 +135,7 @@ class _UserServiceStub:
             role="user",
             is_active=False,
             email_verified=True,
-            email_otp_enabled=False,
+            mfa_enabled=False,
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
@@ -298,7 +298,7 @@ async def test_sensitive_action_gate_supports_dual_gate_contract() -> None:
     otp_service.action_valid = True
     await service.enforce_sensitive_action_gate(
         db_session=_DBSessionStub(),  # type: ignore[arg-type]
-        claims={"sub": "admin-1", "email_otp_enabled": True},
+        claims={"sub": "admin-1", "mfa_enabled": True},
         action="role_change",
         action_token="action-token",
     )
@@ -307,7 +307,7 @@ async def test_sensitive_action_gate_supports_dual_gate_contract() -> None:
     with pytest.raises(AdminServiceError) as exc_info:
         await service.enforce_sensitive_action_gate(
             db_session=_DBSessionStub(),  # type: ignore[arg-type]
-            claims={"sub": "admin-1", "email_otp_enabled": True},
+            claims={"sub": "admin-1", "mfa_enabled": True},
             action="role_change",
             action_token=None,
         )
@@ -315,7 +315,7 @@ async def test_sensitive_action_gate_supports_dual_gate_contract() -> None:
 
     stale_claims = {
         "sub": "admin-1",
-        "email_otp_enabled": False,
+        "mfa_enabled": False,
         "auth_time": int((datetime.now(UTC) - timedelta(minutes=10)).timestamp()),
     }
     with pytest.raises(AdminServiceError) as exc_info:
@@ -364,7 +364,7 @@ async def test_proxy_and_mutation_paths_map_errors() -> None:
             role="user",
             is_active=True,
             email_verified=True,
-            email_otp_enabled=False,
+            mfa_enabled=False,
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
@@ -386,7 +386,7 @@ async def test_proxy_and_mutation_paths_map_errors() -> None:
             role="user",
             is_active=True,
             email_verified=True,
-            email_otp_enabled=False,
+            mfa_enabled=False,
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         )
@@ -397,7 +397,7 @@ async def test_proxy_and_mutation_paths_map_errors() -> None:
         user_id=uuid4(),
         enabled=True,
     )
-    assert enabled.email_otp_enabled is True
+    assert enabled.mfa_enabled is True
 
     otp_service.disable_error = OTPServiceError("missing", "invalid_token", 401)
     with pytest.raises(AdminServiceError) as exc_info:

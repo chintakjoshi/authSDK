@@ -495,7 +495,7 @@ class LifecycleService:
         access_jti = str(claims.get("jti", "")).strip()
         if not user_id or not access_jti:
             raise LifecycleServiceError("Invalid token.", "invalid_token", 401)
-        if bool(claims.get("email_otp_enabled", False)):
+        if bool(claims.get("mfa_enabled", False)):
             raise LifecycleServiceError("OTP required.", "otp_required", 403)
         if self._token_service is None or self._brute_force_service is None:
             raise RuntimeError("LifecycleService requires reauth dependencies.")
@@ -545,7 +545,7 @@ class LifecycleService:
             email=user.email,
             role=user.role,
             email_verified=user.email_verified,
-            email_otp_enabled=user.email_otp_enabled,
+            mfa_enabled=user.mfa_enabled,
             scopes=(
                 [str(scope) for scope in claims.get("scopes", [])]
                 if isinstance(claims.get("scopes", []), list)

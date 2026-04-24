@@ -97,7 +97,7 @@ return value
         email: str,
         role: str,
         email_verified: bool,
-        email_otp_enabled: bool,
+        mfa_enabled: bool,
         scopes: list[str],
         audience: str | None = None,
     ):
@@ -122,8 +122,8 @@ return value
         add_supported_kwarg(
             kwargs,
             supported_parameters=supported_parameters,
-            name="email_otp_enabled",
-            value=email_otp_enabled,
+            name="mfa_enabled",
+            value=mfa_enabled,
         )
         add_supported_kwarg(
             kwargs,
@@ -197,7 +197,7 @@ return value
             email=user.email,
             role=user.role,
             email_verified=user.email_verified,
-            email_otp_enabled=user.email_otp_enabled,
+            mfa_enabled=user.mfa_enabled,
             scopes=[],
             audience=state_record.audience,
         )
@@ -208,7 +208,7 @@ return value
             email=user.email,
             role=user.role,
             email_verified=user.email_verified,
-            email_otp_enabled=user.email_otp_enabled,
+            mfa_enabled=user.mfa_enabled,
             scopes=[],
             raw_access_token=token_pair.access_token,
             raw_refresh_token=token_pair.refresh_token,

@@ -339,7 +339,7 @@ async def user_factory(
         *,
         role: str = "user",
         email_verified: bool = False,
-        email_otp_enabled: bool = False,
+        mfa_enabled: bool = False,
     ) -> User:
         user = User(
             email=email,
@@ -347,7 +347,7 @@ async def user_factory(
             is_active=True,
             role=role,
             email_verified=email_verified,
-            email_otp_enabled=email_otp_enabled,
+            mfa_enabled=mfa_enabled,
         )
         db_session.add(user)
         await db_session.commit()

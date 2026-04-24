@@ -21,7 +21,7 @@ Scope: `app/`, `sdk/`, `loadtests/`, and `tests/`
 3. Action tokens carry a specific action claim and fail closed on mismatch
    Status: `PASS`
 
-4. `email_otp_enabled` cannot be enabled unless the user is email-verified
+4. `mfa_enabled` cannot be enabled unless the user is email-verified
    Status: `PASS`
 
 5. OTP challenge isolation prevents user A from using user B's code

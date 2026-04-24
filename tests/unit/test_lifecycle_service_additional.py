@@ -21,7 +21,7 @@ class _UserRecord:
     password_hash: str | None = "hashed::password"
     role: str = "user"
     email_verified: bool = False
-    email_otp_enabled: bool = False
+    mfa_enabled: bool = False
     is_active: bool = True
     email_verify_token_hash: str | None = None
     email_verify_token_expires: datetime | None = None

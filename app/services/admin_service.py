@@ -86,7 +86,7 @@ class AdminUserSummary:
     role: str
     is_active: bool
     email_verified: bool
-    email_otp_enabled: bool
+    mfa_enabled: bool
     locked: bool
     lock_retry_after: int | None
     created_at: datetime
@@ -262,7 +262,7 @@ class AdminService:
         if action_token_valid:
             return
 
-        if bool(claims.get("email_otp_enabled", False)):
+        if bool(claims.get("mfa_enabled", False)):
             raise AdminServiceError(
                 "OTP required.",
                 "otp_required",
@@ -363,7 +363,7 @@ class AdminService:
             role=user.role,
             is_active=user.is_active,
             email_verified=user.email_verified,
-            email_otp_enabled=user.email_otp_enabled,
+            mfa_enabled=user.mfa_enabled,
             locked=locked,
             lock_retry_after=retry_after,
             created_at=user.created_at,
@@ -1111,7 +1111,7 @@ class AdminService:
             role=user.role,
             is_active=user.is_active,
             email_verified=user.email_verified,
-            email_otp_enabled=user.email_otp_enabled,
+            mfa_enabled=user.mfa_enabled,
             locked=locked,
             lock_retry_after=retry_after,
             created_at=user.created_at,

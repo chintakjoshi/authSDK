@@ -380,7 +380,7 @@ async def enable_email_otp(
             user_id=user_id,
         )
         if not action_token_valid:
-            if bool(claims.get("email_otp_enabled", False)):
+            if bool(claims.get("mfa_enabled", False)):
                 return _error_response(
                     status_code=403,
                     detail="OTP required.",
@@ -416,7 +416,7 @@ async def enable_email_otp(
         request=request,
         actor_id=str(user.id),
     )
-    return OTPEnrollmentResponse(email_otp_enabled=user.email_otp_enabled)
+    return OTPEnrollmentResponse(mfa_enabled=user.mfa_enabled)
 
 
 @router.post("/auth/otp/disable", response_model=OTPEnrollmentResponse)
@@ -448,7 +448,7 @@ async def disable_email_otp(
             user_id=user_id,
         )
         if not action_token_valid:
-            if bool(claims.get("email_otp_enabled", False)):
+            if bool(claims.get("mfa_enabled", False)):
                 return _error_response(
                     status_code=403,
                     detail="OTP required.",
@@ -484,4 +484,4 @@ async def disable_email_otp(
         request=request,
         actor_id=str(user.id),
     )
-    return OTPEnrollmentResponse(email_otp_enabled=user.email_otp_enabled)
+    return OTPEnrollmentResponse(mfa_enabled=user.mfa_enabled)

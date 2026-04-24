@@ -8,7 +8,14 @@
       "Bash(.venv/Scripts/python.exe -m pytest tests/unit/ --no-header -q)",
       "Bash(.venv/Scripts/python.exe -m ruff check app/config.py tests/unit/test_config_mfa_production_guard.py tests/unit/test_config_production_hardening.py tests/unit/test_app_production_hardening.py)",
       "Bash(.venv/Scripts/python.exe -m ruff format --check app/config.py tests/unit/test_config_mfa_production_guard.py)",
-      "Bash(.venv/Scripts/python.exe -m pytest tests/integration/ --collect-only -q)"
+      "Bash(.venv/Scripts/python.exe -m pytest tests/integration/ --collect-only -q)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/integration/test_mfa_schema_real.py tests/integration/test_session_schema_real.py -v --no-header)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/integration/test_auth_router_real.py tests/integration/test_email_otp_real.py tests/integration/test_admin_router_real.py tests/integration/test_gdpr_erasure_real.py --no-header -q)",
+      "Bash(.venv/Scripts/python.exe -m ruff check app/ sdk/ tests/ loadtests/ migrations/)",
+      "Bash(.venv/Scripts/python.exe -m ruff format --check app/ sdk/ tests/ loadtests/ migrations/)",
+      "Bash(.venv/Scripts/python.exe -m ruff format --check --diff app/routers/auth.py)",
+      "Bash(.venv/Scripts/python.exe -m ruff format app/ sdk/ tests/ loadtests/ migrations/)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/integration/ --no-header -q)"
     ]
   }
 }

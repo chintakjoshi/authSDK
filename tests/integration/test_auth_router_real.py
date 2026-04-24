@@ -43,7 +43,7 @@ async def test_auth_login_refresh_logout_happy_path(
         )
         assert login_access_claims["email"] == "alice@example.com"
         assert login_access_claims["email_verified"] is True
-        assert login_access_claims["email_otp_enabled"] is False
+        assert login_access_claims["mfa_enabled"] is False
         assert login_access_claims["role"] == "user"
         assert login_access_claims["scopes"] == []
         assert isinstance(login_access_claims["auth_time"], int)
@@ -61,7 +61,7 @@ async def test_auth_login_refresh_logout_happy_path(
         )
         assert refresh_access_claims["email"] == "alice@example.com"
         assert refresh_access_claims["email_verified"] is True
-        assert refresh_access_claims["email_otp_enabled"] is False
+        assert refresh_access_claims["mfa_enabled"] is False
         assert refresh_access_claims["role"] == "user"
         assert refresh_access_claims["scopes"] == []
         assert refresh_access_claims["auth_time"] == login_access_claims["auth_time"]

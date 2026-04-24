@@ -167,13 +167,13 @@ async def _set_user_flags(
     user_id: UUID,
     *,
     email_verified: bool,
-    email_otp_enabled: bool,
+    mfa_enabled: bool,
     role: str | None = None,
 ) -> User:
     """Update one user's verification, OTP, and optional role flags."""
     user = (await db_session.execute(select(User).where(User.id == user_id))).scalar_one()
     user.email_verified = email_verified
-    user.email_otp_enabled = email_otp_enabled
+    user.mfa_enabled = mfa_enabled
     if role is not None:
         user.role = role
     await db_session.commit()
@@ -226,7 +226,7 @@ async def test_self_service_erasure_revokes_sessions_cleans_otp_and_scrubs_pii(
         db_session,
         user_id,
         email_verified=True,
-        email_otp_enabled=True,
+        mfa_enabled=True,
     )
     identity = UserIdentity(
         user_id=user_id,
@@ -314,7 +314,7 @@ async def test_self_service_erasure_revokes_sessions_cleans_otp_and_scrubs_pii(
     assert erased_user.password_hash is None
     assert erased_user.is_active is False
     assert erased_user.email_verified is False
-    assert erased_user.email_otp_enabled is False
+    assert erased_user.mfa_enabled is False
     assert erased_user.email_verify_token_hash is None
     assert erased_user.email_verify_token_expires is None
     assert erased_user.password_reset_token_hash is None
@@ -437,7 +437,7 @@ async def test_admin_erasure_requires_action_token_and_is_idempotent(
         db_session,
         admin.id,
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
         role="admin",
     )
     target = await user_factory("target-erased@example.com", "Password123!")
@@ -445,7 +445,7 @@ async def test_admin_erasure_requires_action_token_and_is_idempotent(
         db_session,
         target.id,
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
     )
 
     async with AsyncClient(

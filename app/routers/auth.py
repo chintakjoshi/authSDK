@@ -110,7 +110,7 @@ def _issue_token_pair(
     email: str | None = None,
     role: str | None = None,
     email_verified: bool | None = None,
-    email_otp_enabled: bool | None = None,
+    mfa_enabled: bool | None = None,
     scopes: list[str] | None = None,
     audience=None,
     auth_time=None,
@@ -137,8 +137,8 @@ def _issue_token_pair(
     add_supported_kwarg(
         kwargs,
         supported_parameters=supported_parameters,
-        name="email_otp_enabled",
-        value=email_otp_enabled,
+        name="mfa_enabled",
+        value=mfa_enabled,
     )
     add_supported_kwarg(
         kwargs,
@@ -334,9 +334,7 @@ async def login(
             code="email_not_verified",
         )
 
-    if bool(getattr(user, "email_verified", False)) and bool(
-        getattr(user, "email_otp_enabled", False)
-    ):
+    if bool(getattr(user, "email_verified", False)) and bool(getattr(user, "mfa_enabled", False)):
         try:
             challenge = await otp_service.start_login_challenge(
                 db_session=db_session,
@@ -406,7 +404,7 @@ async def login(
         email=user.email,
         role=getattr(user, "role", "user"),
         email_verified=bool(getattr(user, "email_verified", False)),
-        email_otp_enabled=bool(getattr(user, "email_otp_enabled", False)),
+        mfa_enabled=bool(getattr(user, "mfa_enabled", False)),
         scopes=[],
         audience=payload.audience,
     )
@@ -418,7 +416,7 @@ async def login(
             email=user.email,
             role=getattr(user, "role", "user"),
             email_verified=bool(getattr(user, "email_verified", False)),
-            email_otp_enabled=bool(getattr(user, "email_otp_enabled", False)),
+            mfa_enabled=bool(getattr(user, "mfa_enabled", False)),
             scopes=[],
             raw_access_token=token_pair.access_token,
             raw_refresh_token=token_pair.refresh_token,
@@ -621,7 +619,7 @@ async def token_endpoint(
             email: str | None = None,
             role: str | None = None,
             email_verified: bool | None = None,
-            email_otp_enabled: bool | None = None,
+            mfa_enabled: bool | None = None,
             scopes: list[str] | None = None,
             audiences=None,
             auth_time=None,
@@ -633,7 +631,7 @@ async def token_endpoint(
                 email=email,
                 role=role,
                 email_verified=email_verified,
-                email_otp_enabled=email_otp_enabled,
+                mfa_enabled=mfa_enabled,
                 scopes=scopes,
                 audience=audiences,
                 auth_time=auth_time,

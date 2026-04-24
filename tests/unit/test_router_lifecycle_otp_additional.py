@@ -135,10 +135,10 @@ class _OTPStub:
         return self.action_valid
 
     async def enable_email_otp(self, **kwargs: object) -> object:
-        return SimpleNamespace(id=uuid4(), email_otp_enabled=True)
+        return SimpleNamespace(id=uuid4(), mfa_enabled=True)
 
     async def disable_email_otp(self, **kwargs: object) -> object:
-        return SimpleNamespace(id=uuid4(), email_otp_enabled=False)
+        return SimpleNamespace(id=uuid4(), mfa_enabled=False)
 
 
 class _LoginOTPVerifyStub:
@@ -484,7 +484,7 @@ async def test_otp_routes_cover_request_verify_and_dual_gate_branches() -> None:
         audit_service=audit_service,  # type: ignore[arg-type]
     )
     assert blank_enable.status_code == 401
-    otp_service.validate_claims = {"sub": "user-1", "email_otp_enabled": True}
+    otp_service.validate_claims = {"sub": "user-1", "mfa_enabled": True}
     otp_required = await otp_router.enable_email_otp(
         request=_request(
             path="/auth/otp/enable",
@@ -497,7 +497,7 @@ async def test_otp_routes_cover_request_verify_and_dual_gate_branches() -> None:
     assert otp_required.status_code == 403
     otp_service.validate_claims = {
         "sub": "user-1",
-        "email_otp_enabled": False,
+        "mfa_enabled": False,
         "auth_time": int((datetime.now(UTC) - timedelta(minutes=10)).timestamp()),
     }
     reauth_required = await otp_router.disable_email_otp(
@@ -510,7 +510,7 @@ async def test_otp_routes_cover_request_verify_and_dual_gate_branches() -> None:
         audit_service=audit_service,  # type: ignore[arg-type]
     )
     assert reauth_required.status_code == 403
-    otp_service.validate_claims = {"sub": "user-1", "email_otp_enabled": False}
+    otp_service.validate_claims = {"sub": "user-1", "mfa_enabled": False}
     otp_service.action_valid = True
     enabled = await otp_router.enable_email_otp(
         request=_request(
@@ -524,7 +524,7 @@ async def test_otp_routes_cover_request_verify_and_dual_gate_branches() -> None:
         otp_service=otp_service,  # type: ignore[arg-type]
         audit_service=audit_service,  # type: ignore[arg-type]
     )
-    assert enabled.email_otp_enabled is True
+    assert enabled.mfa_enabled is True
     disabled = await otp_router.disable_email_otp(
         request=_request(
             path="/auth/otp/disable",
@@ -537,7 +537,7 @@ async def test_otp_routes_cover_request_verify_and_dual_gate_branches() -> None:
         otp_service=otp_service,  # type: ignore[arg-type]
         audit_service=audit_service,  # type: ignore[arg-type]
     )
-    assert disabled.email_otp_enabled is False
+    assert disabled.mfa_enabled is False
 
 
 @pytest.mark.asyncio

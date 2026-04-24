@@ -107,7 +107,7 @@ async def test_get_session_payload_applies_defaults_and_handles_backend_failures
         email="user@example.com",
         role="user",
         email_verified=False,
-        email_otp_enabled=False,
+        mfa_enabled=False,
         scopes=[],
         audiences=[],
         issued_at="2025-01-01T00:00:00+00:00",
@@ -158,7 +158,7 @@ async def test_binding_lookup_and_redis_write_helpers_fail_closed() -> None:
                 email="user@example.com",
                 role="user",
                 email_verified=False,
-                email_otp_enabled=False,
+                mfa_enabled=False,
                 scopes=[],
                 audiences=[],
                 issued_at="now",
@@ -221,14 +221,14 @@ def test_invoke_token_issuer_caches_signature_inspection(
         email: str | None = None,
         role: str | None = None,
         email_verified: bool | None = None,
-        email_otp_enabled: bool | None = None,
+        mfa_enabled: bool | None = None,
         scopes: list[str] | None = None,
         audiences: list[str] | None = None,
         auth_time: datetime | None = None,
     ) -> TokenPair:
         return TokenPair(
             access_token=(
-                f"{user_id}:{email}:{role}:{email_verified}:{email_otp_enabled}:"
+                f"{user_id}:{email}:{role}:{email_verified}:{mfa_enabled}:"
                 f"{scopes}:{audiences}:{auth_time}"
             ),
             refresh_token="refresh-token",
@@ -332,7 +332,7 @@ async def test_rotate_refresh_session_rejects_missing_user_and_expired_session()
             email="user@example.com",
             role="user",
             email_verified=False,
-            email_otp_enabled=False,
+            mfa_enabled=False,
             scopes=[],
             audiences=[],
             issued_at="now",

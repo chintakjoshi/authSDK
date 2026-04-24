@@ -21,7 +21,7 @@ class _UserStub:
     email: str
     role: str
     email_verified: bool
-    email_otp_enabled: bool = False
+    mfa_enabled: bool = False
 
 
 class _SamlCoreStub:
@@ -85,7 +85,7 @@ class _SessionServiceStub:
         email: str,
         role: str,
         email_verified: bool,
-        email_otp_enabled: bool,
+        mfa_enabled: bool,
         scopes: list[str],
         raw_access_token: str,
         raw_refresh_token: str,
@@ -98,7 +98,7 @@ class _SessionServiceStub:
             user_id,
             email,
             role,
-            email_otp_enabled,
+            mfa_enabled,
             scopes,
             raw_access_token,
             raw_refresh_token,

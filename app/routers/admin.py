@@ -87,7 +87,7 @@ def _user_list_item(item) -> AdminUserListItem:
         role=item.role,
         is_active=item.is_active,
         email_verified=item.email_verified,
-        email_otp_enabled=item.email_otp_enabled,
+        mfa_enabled=item.mfa_enabled,
         locked=item.locked,
         lock_retry_after=item.lock_retry_after,
         created_at=item.created_at,
@@ -103,7 +103,7 @@ def _user_detail_item(item) -> AdminUserDetail:
         role=item.role,
         is_active=item.is_active,
         email_verified=item.email_verified,
-        email_otp_enabled=item.email_otp_enabled,
+        mfa_enabled=item.mfa_enabled,
         locked=item.locked,
         lock_retry_after=item.lock_retry_after,
         created_at=item.created_at,
@@ -775,7 +775,7 @@ async def update_user_otp(
         user = await admin_service.set_user_email_otp(
             db_session=db_session,
             user_id=user_id,
-            enabled=payload.email_otp_enabled,
+            enabled=payload.mfa_enabled,
         )
     except AdminServiceError as exc:
         return _error_response(exc.status_code, exc.detail, exc.code, headers=exc.headers)
@@ -789,9 +789,9 @@ async def update_user_otp(
         actor_id=str(claims.get("sub", "")),
         target_id=str(user.id),
         target_type="user",
-        metadata={"email_otp_enabled": user.email_otp_enabled},
+        metadata={"mfa_enabled": user.mfa_enabled},
     )
-    return OTPEnrollmentResponse(email_otp_enabled=user.email_otp_enabled)
+    return OTPEnrollmentResponse(mfa_enabled=user.mfa_enabled)
 
 
 @router.get("/api-keys", response_model=CursorPageResponse[AdminAPIKeyListItem])

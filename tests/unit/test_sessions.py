@@ -27,7 +27,7 @@ class _FakeUser:
     email: str
     role: str
     email_verified: bool
-    email_otp_enabled: bool = False
+    mfa_enabled: bool = False
 
 
 class _FakeRedis:
@@ -118,7 +118,7 @@ def _build_access_token(
     user_id: str = "u1",
     email: str = "user@example.com",
     email_verified: bool = False,
-    email_otp_enabled: bool = False,
+    mfa_enabled: bool = False,
     role: str = "user",
     scopes: list[str] | None = None,
     auth_time: int | None = None,
@@ -134,7 +134,7 @@ def _build_access_token(
         "type": "access",
         "email": email,
         "email_verified": email_verified,
-        "email_otp_enabled": email_otp_enabled,
+        "mfa_enabled": mfa_enabled,
         "role": role,
         "scopes": scopes or [],
         "auth_time": auth_time if auth_time is not None else int(now.timestamp()),
@@ -161,7 +161,7 @@ async def test_create_login_session_stores_hashed_token_and_redis_payload() -> N
         email="user@example.com",
         role="user",
         email_verified=False,
-        email_otp_enabled=False,
+        mfa_enabled=False,
         scopes=["read:all"],
         raw_access_token=_build_access_token(user_id=str(user_id), jti="login-jti"),
         raw_refresh_token="refresh-token-raw-value",
@@ -202,7 +202,7 @@ async def test_create_login_session_persists_suspicious_flags() -> None:
         email="user@example.com",
         role="user",
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
         scopes=["read:all"],
         raw_access_token=_build_access_token(user_id=str(user_id), jti="risk-jti"),
         raw_refresh_token="refresh-token-raw-value",
@@ -228,7 +228,7 @@ async def test_rotate_refresh_session_updates_hash_and_ttl() -> None:
     )
     row = _session_row(raw_refresh_token="old-refresh-token")
     redis.values[f"session:{row.session_id}"] = (
-        '{"user_id":"u1","email":"user@example.com","role":"admin","email_verified":false,"email_otp_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
+        '{"user_id":"u1","email":"user@example.com","role":"admin","email_verified":false,"mfa_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
     )
     redis.ttls[f"session:{row.session_id}"] = 30
 
@@ -304,7 +304,7 @@ async def test_rotate_refresh_session_accepts_legacy_sha256_rows_during_hash_mig
     )
     row = _session_row(raw_refresh_token="old-refresh-token", use_legacy_hash=True)
     redis.values[f"session:{row.session_id}"] = (
-        '{"user_id":"u1","email":"user@example.com","role":"admin","email_verified":false,"email_otp_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
+        '{"user_id":"u1","email":"user@example.com","role":"admin","email_verified":false,"mfa_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
     )
 
     async def _fake_user_lookup(
@@ -438,7 +438,7 @@ async def test_revoke_session_deletes_redis_key_and_blocklists_jti() -> None:
     )
     row = _session_row(raw_refresh_token="logout-refresh-token")
     redis.values[f"session:{row.session_id}"] = (
-        '{"user_id":"u1","email":"user@example.com","role":"user","email_verified":false,"email_otp_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
+        '{"user_id":"u1","email":"user@example.com","role":"user","email_verified":false,"mfa_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
     )
     redis.ttls[f"session:{row.session_id}"] = 300
 
@@ -517,10 +517,10 @@ async def test_revoke_user_sessions_marks_all_sessions_revoked_without_committin
     first = _session_row(raw_refresh_token="refresh-token-1")
     second = _session_row(raw_refresh_token="refresh-token-2")
     redis.values[f"session:{first.session_id}"] = (
-        '{"user_id":"u1","email":"a@example.com","role":"user","email_verified":false,"email_otp_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
+        '{"user_id":"u1","email":"a@example.com","role":"user","email_verified":false,"mfa_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
     )
     redis.values[f"session:{second.session_id}"] = (
-        '{"user_id":"u1","email":"a@example.com","role":"user","email_verified":false,"email_otp_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
+        '{"user_id":"u1","email":"a@example.com","role":"user","email_verified":false,"mfa_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
     )
 
     async def _fake_fetch_for_user(
@@ -603,7 +603,7 @@ async def test_validate_access_token_session_accepts_active_bound_session() -> N
     row = _session_row(raw_refresh_token="refresh-token-1")
     redis.values["session_access:jti-123"] = str(row.session_id)
     redis.values[f"session:{row.session_id}"] = (
-        '{"user_id":"u1","email":"a@example.com","role":"user","email_verified":false,"email_otp_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
+        '{"user_id":"u1","email":"a@example.com","role":"user","email_verified":false,"mfa_enabled":false,"scopes":[],"issued_at":"now","auth_time":"now"}'
     )
 
     async def _fake_fetch_by_session_id(

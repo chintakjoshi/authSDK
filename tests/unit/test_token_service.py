@@ -95,7 +95,7 @@ async def test_issue_token_pair_includes_expected_claims() -> None:
         email="user@example.com",
         role="admin",
         email_verified=True,
-        email_otp_enabled=True,
+        mfa_enabled=True,
         scopes=["orders:read"],
         audience="orders-api",
         auth_time=auth_time,
@@ -110,7 +110,7 @@ async def test_issue_token_pair_includes_expected_claims() -> None:
     assert access_call["additional_claims"] == {
         "role": "admin",
         "email_verified": True,
-        "email_otp_enabled": True,
+        "mfa_enabled": True,
         "auth_time": int(auth_time.timestamp()),
         "email": "user@example.com",
         "scopes": ["orders:read"],
@@ -141,7 +141,7 @@ async def test_issue_access_token_omits_optional_claims_when_absent() -> None:
     assert jwt_service.calls[0]["additional_claims"] == {
         "role": "user",
         "email_verified": False,
-        "email_otp_enabled": False,
+        "mfa_enabled": False,
         "auth_time": pytest.approx(int(datetime.now(UTC).timestamp()), abs=3),
     }
     assert jwt_service.calls[0]["audience"] == ["auth-service"]
