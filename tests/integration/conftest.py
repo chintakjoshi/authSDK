@@ -389,3 +389,21 @@ async def api_key_row_factory(
         return row
 
     return _create
+
+
+@pytest.fixture(scope="function")
+def local_sms_reader() -> Callable[[str], Any]:
+    """Return the most recent local-dev SMS payload stored for a phone number.
+
+    Integration tests that exercise MFA flows read SMS content via this helper
+    rather than hitting any HTTP surface, matching the Release 3 rule that the
+    local SMS adapter never exposes a debug endpoint.
+    """
+    from app.core.sessions import get_redis_client
+    from app.services.sms.local import LocalSmsSender
+
+    async def _read(phone_e164: str) -> dict[str, Any] | None:
+        sender = LocalSmsSender(redis_client=get_redis_client(), ttl_seconds=600)
+        return await sender.latest_message(to_phone_e164=phone_e164)
+
+    return _read
