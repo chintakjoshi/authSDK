@@ -17,6 +17,7 @@ from __future__ import annotations
 import hmac
 import json
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from typing import Final, Literal
 
@@ -27,6 +28,7 @@ MfaMethod = Literal["sms"]
 MfaChallengePurpose = Literal["login", "action", "phone_verify"]
 
 _AUDIENCE_FIELD: Final[str] = "audience_json"
+_EXTRA_FIELD: Final[str] = "extra_json"
 
 
 class MfaChallengeStoreError(Exception):
@@ -57,6 +59,7 @@ class ChallengeState:
     jti: str
     audience: str | list[str] | None
     created_at: datetime
+    extra: dict[str, str] = dataclass_field(default_factory=dict)
 
 
 class MfaChallengeStore:
@@ -75,8 +78,18 @@ class MfaChallengeStore:
         jti: str,
         ttl_seconds: int,
         audience: str | list[str] | None = None,
+        extra: dict[str, str] | None = None,
     ) -> None:
-        """Persist a fresh challenge, overwriting any prior row for (user, purpose)."""
+        """Persist a fresh challenge, overwriting any prior row for (user, purpose).
+
+        ``extra`` lets callers attach purpose-specific metadata (for example the
+        pending phone ciphertext during a phone-verify flow, or the action name
+        on an action challenge) that survives the round trip through Redis.
+        Reserved field names (``user_id``, ``purpose``, ``method``,
+        ``code_hash``, ``attempt_count``, ``jti``, ``created_at``,
+        ``audience_json``, ``extra_json``) are silently overwritten by the
+        canonical payload to prevent shadow data.
+        """
         if not user_id.strip():
             raise ValueError("user_id must be non-empty.")
         if not jti.strip():
@@ -94,6 +107,7 @@ class MfaChallengeStore:
             "jti": jti,
             "created_at": datetime.now(UTC).isoformat(),
             _AUDIENCE_FIELD: json.dumps(audience) if audience is not None else "",
+            _EXTRA_FIELD: json.dumps(extra) if extra else "",
         }
 
         try:
@@ -105,6 +119,46 @@ class MfaChallengeStore:
                 "Session backend unavailable.",
                 "session_backend_unavailable",
             ) from exc
+
+    async def store_safely(
+        self,
+        *,
+        user_id: str,
+        purpose: MfaChallengePurpose,
+        method: MfaMethod,
+        code_hash: str,
+        jti: str,
+        ttl_seconds: int,
+        audience: str | list[str] | None = None,
+        pending_phone_ciphertext: bytes | None = None,
+        pending_phone_lookup_hash: str | None = None,
+    ) -> None:
+        """Phone-verify-flavored ``store`` that bundles pending phone state.
+
+        The ciphertext is hex-encoded for safe round-tripping through Redis.
+        Callers can read it back via :meth:`read_extra` using the
+        ``pending_phone_ciphertext_hex`` and ``pending_phone_lookup_hash`` keys.
+        """
+        extra: dict[str, str] = {}
+        if pending_phone_ciphertext is not None:
+            extra["pending_phone_ciphertext_hex"] = pending_phone_ciphertext.hex()
+        if pending_phone_lookup_hash is not None:
+            extra["pending_phone_lookup_hash"] = pending_phone_lookup_hash
+        await self.store(
+            user_id=user_id,
+            purpose=purpose,
+            method=method,
+            code_hash=code_hash,
+            jti=jti,
+            ttl_seconds=ttl_seconds,
+            audience=audience,
+            extra=extra or None,
+        )
+
+    @staticmethod
+    def read_extra(*, challenge: ChallengeState, key: str) -> str | None:
+        """Return one extra field by name from a loaded :class:`ChallengeState`."""
+        return challenge.extra.get(key) if challenge.extra else None
 
     async def load(
         self,
@@ -189,6 +243,14 @@ class MfaChallengeStore:
         except (KeyError, ValueError):
             created_at = datetime.now(UTC)
 
+        extra_raw = raw.get(_EXTRA_FIELD, "")
+        try:
+            extra: dict[str, str] = (
+                {str(k): str(v) for k, v in json.loads(extra_raw).items()} if extra_raw else {}
+            )
+        except (json.JSONDecodeError, AttributeError):
+            extra = {}
+
         return ChallengeState(
             user_id=raw.get("user_id", ""),
             purpose=raw.get("purpose", "login"),  # type: ignore[arg-type]
@@ -198,4 +260,5 @@ class MfaChallengeStore:
             jti=raw.get("jti", ""),
             audience=audience,
             created_at=created_at,
+            extra=extra,
         )
