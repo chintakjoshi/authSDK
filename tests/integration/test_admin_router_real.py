@@ -146,14 +146,15 @@ def _build_webhook_service() -> WebhookService:
 
 def _build_admin_service(
     *,
-    otp_service: OTPService | None = None,
     webhook_service: WebhookService | None = None,
 ) -> AdminService:
     """Build admin service with optional overridden collaborators."""
+    from app.services.mfa_service import get_mfa_service
+
     return AdminService(
         user_service=UserService(),
         session_service=get_session_service(),
-        otp_service=otp_service or get_otp_service(),
+        mfa_service=get_mfa_service(),
         brute_force_service=get_brute_force_service(),
         api_key_service=get_api_key_service(),
         m2m_service=get_m2m_service(),
@@ -174,7 +175,7 @@ async def _create_user(
     password: str,
     role: str = "user",
     email_verified: bool = True,
-    email_otp_enabled: bool = False,
+    mfa_enabled: bool = False,
 ) -> User:
     """Create a user with explicit role and OTP flags."""
     user_service = UserService()
@@ -184,7 +185,7 @@ async def _create_user(
         is_active=True,
         role=role,
         email_verified=email_verified,
-        email_otp_enabled=email_otp_enabled,
+        mfa_enabled=mfa_enabled,
     )
     db_session.add(user)
     await db_session.commit()
@@ -787,9 +788,7 @@ async def test_admin_sensitive_role_change_requires_otp_for_otp_enabled_admin(
     sender = _CapturingOTPEmailSender()
     otp_service = _build_otp_service(sender)
     app.dependency_overrides[get_otp_service] = lambda: otp_service
-    app.dependency_overrides[get_admin_service] = lambda: _build_admin_service(
-        otp_service=otp_service
-    )
+    app.dependency_overrides[get_admin_service] = lambda: _build_admin_service()
 
     await _create_user(
         db_session,
@@ -797,7 +796,7 @@ async def test_admin_sensitive_role_change_requires_otp_for_otp_enabled_admin(
         password="Password123!",
         role="admin",
         email_verified=True,
-        email_otp_enabled=True,
+        mfa_enabled=True,
     )
     target = await _create_user(db_session, email="target@example.com", password="Password123!")
 
@@ -837,7 +836,7 @@ async def test_admin_sensitive_role_change_requires_reauth_for_stale_auth(
         password="Password123!",
         role="admin",
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
     )
     target = await _create_user(db_session, email="member-two@example.com", password="Password123!")
     target_id = target.id
@@ -879,14 +878,14 @@ async def test_admin_last_admin_protection_and_otp_toggle(app_factory, db_sessio
         email="otp-user@example.com",
         password="Password123!",
         email_verified=True,
-        email_otp_enabled=True,
+        mfa_enabled=True,
     )
     unverified = await _create_user(
         db_session,
         email="unverified@example.com",
         password="Password123!",
         email_verified=False,
-        email_otp_enabled=False,
+        mfa_enabled=False,
     )
 
     async with AsyncClient(
@@ -906,19 +905,21 @@ async def test_admin_last_admin_protection_and_otp_toggle(app_factory, db_sessio
 
         disable_otp = await client.patch(
             f"/admin/users/{otp_user.id}/otp",
-            json={"email_otp_enabled": False},
+            json={"mfa_enabled": False},
             headers=headers,
         )
         assert disable_otp.status_code == 200
-        assert disable_otp.json() == {"email_otp_enabled": False}
+        assert disable_otp.json() == {"mfa_enabled": False}
 
         enable_unverified = await client.patch(
             f"/admin/users/{unverified.id}/otp",
-            json={"email_otp_enabled": True},
+            json={"mfa_enabled": True},
             headers=headers,
         )
+        # SDK-managed MFA gates enable on a verified phone (not just verified
+        # email). The legacy email-OTP enable flow used "email_not_verified".
         assert enable_unverified.status_code == 400
-        assert enable_unverified.json()["code"] == "email_not_verified"
+        assert enable_unverified.json()["code"] == "phone_not_verified"
 
 
 @pytest.mark.asyncio
@@ -1181,7 +1182,7 @@ async def test_admin_can_rotate_signing_key_with_fresh_auth(app_factory, db_sess
         password="Password123!",
         role="admin",
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
     )
     current_active = await get_signing_key_service().get_active_signing_key(db_session)
     await db_session.rollback()

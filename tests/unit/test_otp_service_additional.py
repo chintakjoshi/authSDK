@@ -174,7 +174,7 @@ class _UserStub:
     email: str
     role: str = "user"
     email_verified: bool = True
-    email_otp_enabled: bool = False
+    mfa_enabled: bool = False
     is_active: bool = True
     deleted_at: datetime | None = None
 
@@ -276,7 +276,7 @@ async def test_enable_disable_and_issuance_helpers_fail_closed() -> None:
         action_token=None,
         require_action_token=False,
     )
-    assert enabled.email_otp_enabled is True
+    assert enabled.mfa_enabled is True
     assert db_session.commit_count == 1
 
     redis_client.hashes[service._login_otp_key(str(user.id))] = {"code_hash": "hash"}
@@ -286,7 +286,7 @@ async def test_enable_disable_and_issuance_helpers_fail_closed() -> None:
         action_token=None,
         require_action_token=False,
     )
-    assert disabled.email_otp_enabled is False
+    assert disabled.mfa_enabled is False
     assert service._login_otp_key(str(user.id)) not in redis_client.hashes
 
     redis_client.values[service._issuance_block_key("user-1")] = "1"

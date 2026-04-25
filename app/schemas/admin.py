@@ -28,7 +28,7 @@ class AdminUserListItem(BaseModel):
     role: str
     is_active: bool
     email_verified: bool
-    email_otp_enabled: bool
+    mfa_enabled: bool
     locked: bool
     lock_retry_after: int | None
     created_at: datetime
@@ -197,7 +197,7 @@ class AdminUserEraseResponse(BaseModel):
 class AdminUserOTPUpdateRequest(BaseModel):
     """Admin user OTP-toggle payload."""
 
-    email_otp_enabled: bool
+    mfa_enabled: bool
 
 
 class AdminAPIKeyCreateRequest(BaseModel):

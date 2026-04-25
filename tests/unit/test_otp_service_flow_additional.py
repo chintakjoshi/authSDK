@@ -155,7 +155,7 @@ class _UserStub:
     email: str
     role: str = "user"
     email_verified: bool = True
-    email_otp_enabled: bool = True
+    mfa_enabled: bool = True
 
 
 def _service(

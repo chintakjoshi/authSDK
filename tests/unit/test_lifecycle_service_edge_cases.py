@@ -355,7 +355,7 @@ async def test_password_reset_and_reauth_cover_runtime_and_mapped_errors() -> No
         password_hash="hashed::password",
         role="user",
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
         password_reset_token_hash="hash",
         password_reset_token_expires=datetime.now(UTC) + timedelta(minutes=5),
     )
@@ -406,7 +406,7 @@ async def test_password_reset_and_reauth_cover_runtime_and_mapped_errors() -> No
         return {
             "sub": str(user.id),
             "jti": "access-jti",
-            "email_otp_enabled": True,
+            "mfa_enabled": True,
             "scopes": [],
         }
 
@@ -426,7 +426,7 @@ async def test_password_reset_and_reauth_cover_runtime_and_mapped_errors() -> No
         return {
             "sub": str(user.id),
             "jti": "access-jti",
-            "email_otp_enabled": False,
+            "mfa_enabled": False,
             "scopes": [],
         }
 

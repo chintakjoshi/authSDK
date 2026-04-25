@@ -63,7 +63,7 @@ class SessionPayload:
     email: str
     role: str
     email_verified: bool
-    email_otp_enabled: bool
+    mfa_enabled: bool
     scopes: list[str]
     audiences: list[str]
     issued_at: str
@@ -132,7 +132,7 @@ class TokenIssuer(Protocol):
         email: str | None = None,
         role: str | None = None,
         email_verified: bool | None = None,
-        email_otp_enabled: bool | None = None,
+        mfa_enabled: bool | None = None,
         scopes: list[str] | None = None,
         audiences: list[str] | None = None,
         auth_time: datetime | None = None,
@@ -161,7 +161,7 @@ class SessionService:
         email: str,
         role: str,
         email_verified: bool,
-        email_otp_enabled: bool,
+        mfa_enabled: bool,
         scopes: list[str],
         raw_access_token: str,
         raw_refresh_token: str,
@@ -194,7 +194,7 @@ class SessionService:
             email=email,
             role=role,
             email_verified=email_verified,
-            email_otp_enabled=email_otp_enabled,
+            mfa_enabled=mfa_enabled,
             scopes=scopes,
             audiences=audiences,
             issued_at=now.isoformat(),
@@ -245,7 +245,7 @@ class SessionService:
                 email=user.email,
                 role=user.role,
                 email_verified=user.email_verified,
-                email_otp_enabled=user.email_otp_enabled,
+                mfa_enabled=user.mfa_enabled,
                 scopes=payload.scopes,
                 audiences=payload.audiences,
                 issued_at=payload.issued_at,
@@ -257,7 +257,7 @@ class SessionService:
                 email=payload.email,
                 role=payload.role,
                 email_verified=payload.email_verified,
-                email_otp_enabled=payload.email_otp_enabled,
+                mfa_enabled=payload.mfa_enabled,
                 scopes=payload.scopes,
                 audiences=payload.audiences,
                 auth_time=session_row.auth_time,
@@ -312,7 +312,7 @@ class SessionService:
                 email=payload.email,
                 role=payload.role,
                 email_verified=payload.email_verified,
-                email_otp_enabled=payload.email_otp_enabled,
+                mfa_enabled=payload.mfa_enabled,
                 scopes=payload.scopes,
                 audiences=payload.audiences,
                 issued_at=payload.issued_at,
@@ -805,7 +805,7 @@ class SessionService:
             raise SessionStateError("Session expired.", "session_expired", 401) from exc
         payload_dict.setdefault("role", "user")
         payload_dict.setdefault("email_verified", False)
-        payload_dict.setdefault("email_otp_enabled", False)
+        payload_dict.setdefault("mfa_enabled", False)
         payload_dict["audiences"] = normalize_audiences(payload_dict.get("audiences"))
         payload_dict.setdefault(
             "auth_time", payload_dict.get("issued_at", datetime.now(UTC).isoformat())
@@ -831,7 +831,7 @@ class SessionService:
                         "email": payload.email,
                         "role": payload.role,
                         "email_verified": payload.email_verified,
-                        "email_otp_enabled": payload.email_otp_enabled,
+                        "mfa_enabled": payload.mfa_enabled,
                         "scopes": payload.scopes,
                         "audiences": payload.audiences,
                         "issued_at": payload.issued_at,
@@ -895,7 +895,7 @@ class SessionService:
         email: str,
         role: str,
         email_verified: bool,
-        email_otp_enabled: bool,
+        mfa_enabled: bool,
         scopes: list[str],
         audiences: list[str],
         auth_time: datetime,
@@ -912,8 +912,8 @@ class SessionService:
         add_supported_kwarg(
             kwargs,
             supported_parameters=supported_parameters,
-            name="email_otp_enabled",
-            value=email_otp_enabled,
+            name="mfa_enabled",
+            value=mfa_enabled,
         )
         if supported_parameters is not None and "audiences" in supported_parameters:
             kwargs["audiences"] = audiences

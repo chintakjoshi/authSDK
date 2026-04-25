@@ -43,6 +43,7 @@ def import_model_modules() -> None:
         api_key,
         audit_event,
         oauth_client,
+        recovery_code,
         session,
         signing_key,
         user,

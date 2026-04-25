@@ -19,7 +19,7 @@ class _UserRecord:
     password_hash: str | None = "hashed::password"
     role: str = "user"
     email_verified: bool = True
-    email_otp_enabled: bool = False
+    mfa_enabled: bool = False
     is_active: bool = True
     password_reset_token_hash: str | None = None
     password_reset_token_expires: datetime | None = None
@@ -279,7 +279,7 @@ async def test_reauthenticate_rejects_invalid_states_and_succeeds() -> None:
     assert exc_info.value.code == "invalid_token"
 
     async def _claims(**kwargs: object) -> dict[str, object]:
-        return {"sub": str(user.id), "jti": "access-jti", "email_otp_enabled": False, "scopes": []}
+        return {"sub": str(user.id), "jti": "access-jti", "mfa_enabled": False, "scopes": []}
 
     async def _missing_user(**kwargs: object) -> None:
         return None
@@ -335,7 +335,7 @@ async def test_reauthenticate_prefers_async_password_helper_when_available() -> 
     service = _service(user_service=user_service)
 
     async def _claims(**kwargs: object) -> dict[str, object]:
-        return {"sub": str(user.id), "jti": "access-jti", "email_otp_enabled": False, "scopes": []}
+        return {"sub": str(user.id), "jti": "access-jti", "mfa_enabled": False, "scopes": []}
 
     async def _found_user(**kwargs: object) -> _UserRecord:
         return user

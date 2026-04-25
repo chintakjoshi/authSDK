@@ -144,11 +144,19 @@ def _build_webhook_service() -> WebhookService:
 
 
 def _build_admin_service(*, otp_service: OTPService) -> AdminService:
-    """Build admin service using the overridden OTP dependency for action-token checks."""
+    """Build admin service using the overridden OTP dependency for action-token checks.
+
+    The legacy ``otp_service`` is still accepted by callers because Phase 5a
+    keeps both services alive. Internally, ``AdminService`` now requires the
+    new :class:`MfaService`; the fixture passes through ``get_mfa_service()``.
+    """
+    from app.services.mfa_service import get_mfa_service
+
+    del otp_service  # unused; admin's action-token validation lives on MfaService now.
     return AdminService(
         user_service=UserService(),
         session_service=get_session_service(),
-        otp_service=otp_service,
+        mfa_service=get_mfa_service(),
         brute_force_service=get_brute_force_service(),
         api_key_service=get_api_key_service(),
         m2m_service=get_m2m_service(),
@@ -167,13 +175,13 @@ async def _set_user_flags(
     user_id: UUID,
     *,
     email_verified: bool,
-    email_otp_enabled: bool,
+    mfa_enabled: bool,
     role: str | None = None,
 ) -> User:
     """Update one user's verification, OTP, and optional role flags."""
     user = (await db_session.execute(select(User).where(User.id == user_id))).scalar_one()
     user.email_verified = email_verified
-    user.email_otp_enabled = email_otp_enabled
+    user.mfa_enabled = mfa_enabled
     if role is not None:
         user.role = role
     await db_session.commit()
@@ -226,7 +234,7 @@ async def test_self_service_erasure_revokes_sessions_cleans_otp_and_scrubs_pii(
         db_session,
         user_id,
         email_verified=True,
-        email_otp_enabled=True,
+        mfa_enabled=True,
     )
     identity = UserIdentity(
         user_id=user_id,
@@ -314,7 +322,7 @@ async def test_self_service_erasure_revokes_sessions_cleans_otp_and_scrubs_pii(
     assert erased_user.password_hash is None
     assert erased_user.is_active is False
     assert erased_user.email_verified is False
-    assert erased_user.email_otp_enabled is False
+    assert erased_user.mfa_enabled is False
     assert erased_user.email_verify_token_hash is None
     assert erased_user.email_verify_token_expires is None
     assert erased_user.password_reset_token_hash is None
@@ -437,7 +445,7 @@ async def test_admin_erasure_requires_action_token_and_is_idempotent(
         db_session,
         admin.id,
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
         role="admin",
     )
     target = await user_factory("target-erased@example.com", "Password123!")
@@ -445,7 +453,7 @@ async def test_admin_erasure_requires_action_token_and_is_idempotent(
         db_session,
         target.id,
         email_verified=True,
-        email_otp_enabled=False,
+        mfa_enabled=False,
     )
 
     async with AsyncClient(
@@ -464,8 +472,9 @@ async def test_admin_erasure_requires_action_token_and_is_idempotent(
         missing_token = await client.delete(f"/admin/users/{target.id}/erase", headers=headers)
         assert missing_token.status_code == 403
         assert missing_token.json()["code"] == "action_token_invalid"
-        assert missing_token.headers["x-otp-required"] == "true"
-        assert missing_token.headers["x-otp-action"] == "admin_erase_user"
+        # SDK-managed MFA emits X-MFA-Required (replacing legacy X-OTP-Required).
+        assert missing_token.headers["x-mfa-required"] == "true"
+        assert missing_token.headers["x-mfa-action"] == "admin_erase_user"
 
         request_action = await client.post(
             "/auth/otp/request/action",

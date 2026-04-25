@@ -43,7 +43,7 @@ class UserIdentity(TypedDict):
     user_id: str
     email: str
     email_verified: bool
-    email_otp_enabled: bool
+    mfa_enabled: bool
     role: Literal["admin", "user", "service"]
     scopes: list[str]
     auth_time: int

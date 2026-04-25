@@ -17,7 +17,7 @@ from app.core.sessions import (
 from app.dependencies import get_database_session
 from app.routers.self_service import router
 from app.services.audit_service import get_audit_service
-from app.services.otp_service import AccessTokenValidationResult, OTPServiceError, get_otp_service
+from app.services.mfa_service import AccessTokenValidationResult, MfaServiceError, get_mfa_service
 from app.services.pagination import CursorPage
 from app.services.webhook_service import get_webhook_service
 
@@ -148,11 +148,11 @@ class _SessionServiceStub:
         return [_OTHER_SESSION_ID]
 
 
-class _OTPServiceStub:
+class _MfaServiceStub:
     """OTP stub providing session-aware access-token validation."""
 
     def __init__(self) -> None:
-        self.validation_error: OTPServiceError | None = None
+        self.validation_error: MfaServiceError | None = None
 
     async def validate_access_token_with_session(
         self,
@@ -233,20 +233,20 @@ def _build_app() -> tuple[
     _SessionServiceStub,
     _AuditServiceStub,
     _WebhookServiceStub,
-    _OTPServiceStub,
+    _MfaServiceStub,
 ]:
     app = FastAPI()
     app.include_router(router)
     session_service = _SessionServiceStub()
     audit_service = _AuditServiceStub()
     webhook_service = _WebhookServiceStub()
-    otp_service = _OTPServiceStub()
+    mfa_service = _MfaServiceStub()
     app.dependency_overrides[get_database_session] = _fake_db_dependency
     app.dependency_overrides[get_session_service] = lambda: session_service
-    app.dependency_overrides[get_otp_service] = lambda: otp_service
+    app.dependency_overrides[get_mfa_service] = lambda: mfa_service
     app.dependency_overrides[get_audit_service] = lambda: audit_service
     app.dependency_overrides[get_webhook_service] = lambda: webhook_service
-    return app, session_service, audit_service, webhook_service, otp_service
+    return app, session_service, audit_service, webhook_service, mfa_service
 
 
 @pytest.mark.asyncio
@@ -369,8 +369,8 @@ async def test_self_service_rejects_missing_bearer() -> None:
 @pytest.mark.asyncio
 async def test_self_service_rejects_stale_access_token_before_listing_sessions() -> None:
     """Self-service session inventory should reject tokens without a valid backing session."""
-    app, session_service, _audit, _webhook, otp_service = _build_app()
-    otp_service.validation_error = OTPServiceError(
+    app, session_service, _audit, _webhook, mfa_service = _build_app()
+    mfa_service.validation_error = MfaServiceError(
         "Session expired.",
         "session_expired",
         401,

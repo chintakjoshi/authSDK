@@ -80,6 +80,11 @@ def _production_settings() -> Settings:
         },
         email={"public_base_url": "https://auth.example.com"},
         signing_keys={"rotation_overlap_seconds": 900, "encryption_key": "signing-secret"},
+        mfa={
+            "sms": {"provider": "twilio"},
+            "phone_encryption_key": "phone-encryption-key-32b-minimum!!",
+            "phone_lookup_hash_key": "phone-lookup-hash-key",
+        },
         webhook={
             "queue_name": "webhooks",
             "request_timeout_seconds": 10,
@@ -133,6 +138,9 @@ def _seed_production_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SIGNING_KEYS__ENCRYPTION_KEY", "signing-secret")
     monkeypatch.setenv("SESSION_SECURITY__REFRESH_TOKEN_HASH_KEY", "session-hash-secret")
     monkeypatch.setenv("WEBHOOK__SECRET_ENCRYPTION_KEY", "webhook-secret")
+    monkeypatch.setenv("MFA__SMS__PROVIDER", "twilio")
+    monkeypatch.setenv("MFA__PHONE_ENCRYPTION_KEY", "phone-encryption-key-32b-minimum!!")
+    monkeypatch.setenv("MFA__PHONE_LOOKUP_HASH_KEY", "phone-lookup-hash-key")
 
 
 @pytest.mark.asyncio

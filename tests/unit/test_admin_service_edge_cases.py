@@ -47,7 +47,7 @@ class _DBSessionStub:
         return []
 
 
-class _OTPStub:
+class _MfaStub:
     async def validate_access_token(self, **kwargs: object) -> dict[str, object]:
         return {"sub": "admin-1", "role": "admin"}
 
@@ -57,11 +57,9 @@ class _OTPStub:
     async def require_action_token_for_user(self, **kwargs: object) -> None:
         return None
 
-    async def enable_email_otp(self, **kwargs: object) -> object:
-        return SimpleNamespace(id=kwargs["user_id"], email_otp_enabled=True)
-
-    async def disable_email_otp(self, **kwargs: object) -> object:
-        return SimpleNamespace(id=kwargs["user_id"], email_otp_enabled=False)
+    async def set_user_mfa_state(self, *, db_session, user_id, enabled):  # type: ignore[no-untyped-def]
+        del db_session
+        return SimpleNamespace(id=user_id, mfa_enabled=enabled)
 
 
 class _UserServiceStub:
@@ -175,7 +173,7 @@ def _service(
     return AdminService(
         user_service=user_service or _UserServiceStub(),  # type: ignore[arg-type]
         session_service=session_service or _SessionStub(),  # type: ignore[arg-type]
-        otp_service=_OTPStub(),  # type: ignore[arg-type]
+        mfa_service=_MfaStub(),  # type: ignore[arg-type]
         brute_force_service=brute_force_service or _BruteForceStub(),  # type: ignore[arg-type]
         api_key_service=_APIKeyStub(),  # type: ignore[arg-type]
         m2m_service=_M2MStub(),  # type: ignore[arg-type]
@@ -215,7 +213,7 @@ async def test_admin_helpers_cover_invalid_claims_pagination_and_detail_paths() 
             role="admin",
             is_active=True,
             email_verified=True,
-            email_otp_enabled=False,
+            mfa_enabled=False,
             created_at=datetime.now(UTC),
             updated_at=datetime.now(UTC),
         ),
@@ -225,12 +223,14 @@ async def test_admin_helpers_cover_invalid_claims_pagination_and_detail_paths() 
             role="user",
             is_active=True,
             email_verified=True,
-            email_otp_enabled=False,
+            mfa_enabled=False,
             created_at=datetime.now(UTC) - timedelta(seconds=1),
             updated_at=datetime.now(UTC),
         ),
     ]
-    db_session = _DBSessionStub([SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: users))])  # type: ignore[arg-type]
+    db_session = _DBSessionStub(
+        [SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: users))]
+    )  # type: ignore[arg-type]
 
     async def _summary(user):  # type: ignore[no-untyped-def]
         return SimpleNamespace(
@@ -239,7 +239,7 @@ async def test_admin_helpers_cover_invalid_claims_pagination_and_detail_paths() 
             role=user.role,
             is_active=user.is_active,
             email_verified=user.email_verified,
-            email_otp_enabled=user.email_otp_enabled,
+            mfa_enabled=user.mfa_enabled,
             locked=user.email == "locked@example.com",
             lock_retry_after=60,
             created_at=user.created_at,
@@ -432,12 +432,14 @@ async def test_admin_mutation_and_proxy_helpers_cover_error_mapping() -> None:
     assert _service()._build_user_list_statement(role="admin", email="user@example.com") is not None
     assert _service()._build_user_list_statement(role=None, email="   ") is not None
 
-    user = await _service().set_user_email_otp(
-        db_session=_DBSessionStub([SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(id=uuid4()))]),  # type: ignore[arg-type]
+    user = await _service().set_user_mfa(
+        db_session=_DBSessionStub(
+            [SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(id=uuid4()))]
+        ),  # type: ignore[arg-type]
         user_id=uuid4(),
         enabled=True,
     )
-    assert user.email_otp_enabled is True
+    assert user.mfa_enabled is True
 
     active_user_db = _DBSessionStub([SimpleNamespace(scalar_one_or_none=lambda: None)])
     with pytest.raises(AdminServiceError):

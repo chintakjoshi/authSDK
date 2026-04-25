@@ -170,7 +170,7 @@ User token:
   "user_id": "uuid",
   "email": "user@example.com",
   "email_verified": true,
-  "email_otp_enabled": false,
+  "mfa_enabled": false,
   "role": "user",
   "scopes": [],
   "auth_time": 1710000000

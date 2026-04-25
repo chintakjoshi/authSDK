@@ -77,7 +77,7 @@ class _UserServiceStub:
             email="user@example.com",
             password_hash="hashed",
             email_verified=True,
-            email_otp_enabled=False,
+            mfa_enabled=False,
             role="user",
         )
 
@@ -106,7 +106,9 @@ class _BruteForceStub:
             attempt_count=0,
         )
 
-    async def record_successful_login(self, user_id: str, ip_address=None, user_agent=None) -> object:  # type: ignore[no-untyped-def]
+    async def record_successful_login(
+        self, user_id: str, ip_address=None, user_agent=None
+    ) -> object:  # type: ignore[no-untyped-def]
         del user_id, ip_address, user_agent
         return SimpleNamespace(suspicious=False, metadata={})
 

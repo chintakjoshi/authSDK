@@ -42,7 +42,7 @@ async def test_run_retention_purge_noops_when_disabled() -> None:
     service = AdminService(
         user_service=_UnusedDependency(),  # type: ignore[arg-type]
         session_service=_UnusedDependency(),  # type: ignore[arg-type]
-        otp_service=_UnusedDependency(),  # type: ignore[arg-type]
+        mfa_service=_UnusedDependency(),  # type: ignore[arg-type]
         brute_force_service=_UnusedDependency(),  # type: ignore[arg-type]
         api_key_service=_UnusedDependency(),  # type: ignore[arg-type]
         m2m_service=_UnusedDependency(),  # type: ignore[arg-type]
@@ -70,7 +70,7 @@ async def test_run_retention_purge_deletes_audit_and_session_rows() -> None:
     service = AdminService(
         user_service=_UnusedDependency(),  # type: ignore[arg-type]
         session_service=_UnusedDependency(),  # type: ignore[arg-type]
-        otp_service=_UnusedDependency(),  # type: ignore[arg-type]
+        mfa_service=_UnusedDependency(),  # type: ignore[arg-type]
         brute_force_service=_UnusedDependency(),  # type: ignore[arg-type]
         api_key_service=_UnusedDependency(),  # type: ignore[arg-type]
         m2m_service=_UnusedDependency(),  # type: ignore[arg-type]

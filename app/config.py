@@ -255,6 +255,39 @@ class EmailSettings(BaseModel):
     action_token_ttl_seconds: int = Field(default=300, ge=1)
 
 
+class SmsSettings(BaseModel):
+    """SMS delivery provider selection and local-provider tuning."""
+
+    provider: Literal["local", "twilio", "sns"] = "local"
+    local_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+
+
+class MfaRateLimits(BaseModel):
+    """Configurable rate-limit thresholds applied to MFA flows."""
+
+    sms_request_per_hour_per_user: int = Field(default=3, ge=1)
+    sms_request_per_hour_per_ip: int = Field(default=5, ge=1)
+    sms_resend_per_challenge: int = Field(default=3, ge=1)
+    sms_verify_attempts_per_challenge: int = Field(default=5, ge=1)
+    recovery_code_attempts_per_15min: int = Field(default=5, ge=1)
+
+
+class MfaSettings(BaseModel):
+    """SDK-managed MFA configuration for SMS + recovery-code flows."""
+
+    sms: SmsSettings = SmsSettings()
+    rate_limits: MfaRateLimits = MfaRateLimits()
+    sms_code_length: int = Field(default=6, ge=4, le=12)
+    sms_code_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+    sms_max_attempts: int = Field(default=5, ge=1)
+    challenge_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+    action_token_ttl_seconds: int = Field(default=300, ge=60, le=3600)
+    recovery_code_count: int = Field(default=10, ge=6, le=20)
+    recovery_code_length: int = Field(default=10, ge=8, le=16)
+    phone_encryption_key: SecretStr | None = None
+    phone_lookup_hash_key: SecretStr | None = None
+
+
 class WebhookSettings(BaseModel):
     """Webhook delivery, signing, and worker settings."""
 
@@ -306,6 +339,7 @@ class Settings(BaseSettings):
     browser_sessions: BrowserSessionSettings = BrowserSessionSettings()
     signing_keys: SigningKeySettings = SigningKeySettings()
     email: EmailSettings = EmailSettings()
+    mfa: MfaSettings = MfaSettings()
     webhook: WebhookSettings = WebhookSettings()
     retention: RetentionSettings = RetentionSettings()
     admin_api_key: SecretStr | None = None
@@ -340,6 +374,12 @@ class Settings(BaseSettings):
             raise ValueError("email.public_base_url must use https in production.")
         if self.browser_sessions.enabled and not self.browser_sessions.secure_only:
             raise ValueError("browser_sessions.secure_only must be true in production.")
+        if self.mfa.sms.provider == "local":
+            raise ValueError("mfa.sms.provider cannot be 'local' in production.")
+        if self.mfa.phone_encryption_key is None:
+            raise ValueError("mfa.phone_encryption_key is required in production.")
+        if self.mfa.phone_lookup_hash_key is None:
+            raise ValueError("mfa.phone_lookup_hash_key is required in production.")
 
         return self
 

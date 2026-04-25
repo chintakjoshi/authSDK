@@ -11,7 +11,7 @@ import pytest
 from app.core.sessions import SessionStateError
 from app.services.api_key_service import APIKeyServiceError
 from app.services.erasure_service import ErasureService, ErasureServiceError
-from app.services.otp_service import OTPServiceError
+from app.services.mfa_service import MfaServiceError
 
 
 @dataclass
@@ -21,7 +21,7 @@ class _UserStub:
     password_hash: str | None = "hashed"
     is_active: bool = True
     email_verified: bool = True
-    email_otp_enabled: bool = True
+    mfa_enabled: bool = True
     email_verify_token_hash: str | None = "verify"
     email_verify_token_expires: datetime | None = datetime.now(UTC)
     password_reset_token_hash: str | None = "reset"
@@ -74,12 +74,12 @@ class _SessionServiceStub:
         return [uuid4()]
 
 
-class _OTPServiceStub:
+class _MfaServiceStub:
     def __init__(self) -> None:
-        self.raise_error: OTPServiceError | None = None
+        self.raise_error: MfaServiceError | None = None
         self.cleared: list[str] = []
 
-    async def clear_user_otp_state(self, user_id: str) -> None:
+    async def clear_user_mfa_state(self, *, user_id: str) -> None:
         if self.raise_error is not None:
             raise self.raise_error
         self.cleared.append(user_id)
@@ -100,13 +100,13 @@ def _service(
     *,
     user_service: _UserServiceStub | None = None,
     session_service: _SessionServiceStub | None = None,
-    otp_service: _OTPServiceStub | None = None,
+    mfa_service: _MfaServiceStub | None = None,
     api_key_service: _APIKeyServiceStub | None = None,
 ) -> ErasureService:
     return ErasureService(
         user_service=user_service or _UserServiceStub(),  # type: ignore[arg-type]
         session_service=session_service or _SessionServiceStub(),  # type: ignore[arg-type]
-        otp_service=otp_service or _OTPServiceStub(),  # type: ignore[arg-type]
+        mfa_service=mfa_service or _MfaServiceStub(),  # type: ignore[arg-type]
         api_key_service=api_key_service or _APIKeyServiceStub(),  # type: ignore[arg-type]
     )
 
@@ -143,8 +143,8 @@ async def test_erase_user_successfully_scrubs_and_revokes_all_paths() -> None:
     user_id = uuid4()
     user = _UserStub(id=user_id, email="erase@example.com")
     db_session = _DBSessionStub()
-    otp_service = _OTPServiceStub()
-    service = _service(otp_service=otp_service)
+    mfa_service = _MfaServiceStub()
+    service = _service(mfa_service=mfa_service)
 
     async def _found(**kwargs: object) -> _UserStub:
         return user
@@ -159,7 +159,7 @@ async def test_erase_user_successfully_scrubs_and_revokes_all_paths() -> None:
     assert user.password_hash is None
     assert user.is_active is False
     assert user.deleted_at is not None
-    assert otp_service.cleared == [str(user_id)]
+    assert mfa_service.cleared == [str(user_id)]
     assert db_session.commit_count == 1
 
 

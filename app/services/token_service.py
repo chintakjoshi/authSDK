@@ -57,7 +57,7 @@ class TokenService:
         email: str | None = None,
         role: str = "user",
         email_verified: bool = False,
-        email_otp_enabled: bool = False,
+        mfa_enabled: bool = False,
         scopes: list[str] | None = None,
         auth_time: datetime | None = None,
         audience: Audience | None = None,
@@ -69,7 +69,7 @@ class TokenService:
         access_claims: dict[str, object] = {
             "role": role,
             "email_verified": email_verified,
-            "email_otp_enabled": email_otp_enabled,
+            "mfa_enabled": mfa_enabled,
             "auth_time": int(resolved_auth_time.timestamp()),
         }
         if email is not None:
@@ -104,7 +104,7 @@ class TokenService:
         email: str | None = None,
         role: str = "user",
         email_verified: bool = False,
-        email_otp_enabled: bool = False,
+        mfa_enabled: bool = False,
         scopes: list[str] | None = None,
         auth_time: datetime | None = None,
         audience: Audience | None = None,
@@ -116,7 +116,7 @@ class TokenService:
         access_claims: dict[str, object] = {
             "role": role,
             "email_verified": email_verified,
-            "email_otp_enabled": email_otp_enabled,
+            "mfa_enabled": mfa_enabled,
             "auth_time": int(resolved_auth_time.timestamp()),
         }
         if email is not None:

@@ -13,7 +13,7 @@ from app.config import reloadable_singleton
 from app.core.sessions import SessionService, SessionStateError, get_session_service
 from app.models.user import User
 from app.services.api_key_service import APIKeyService, APIKeyServiceError, get_api_key_service
-from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
+from app.services.mfa_service import MfaService, MfaServiceError, get_mfa_service
 from app.services.user_service import UserService, get_user_service
 
 
@@ -46,12 +46,12 @@ class ErasureService:
         *,
         user_service: UserService,
         session_service: SessionService,
-        otp_service: OTPService,
+        mfa_service: MfaService,
         api_key_service: APIKeyService,
     ) -> None:
         self._user_service = user_service
         self._session_service = session_service
-        self._otp_service = otp_service
+        self._mfa_service = mfa_service
         self._api_key_service = api_key_service
 
     async def erase_user(
@@ -79,7 +79,7 @@ class ErasureService:
             user.password_hash = None
             user.is_active = False
             user.email_verified = False
-            user.email_otp_enabled = False
+            user.mfa_enabled = False
             user.email_verify_token_hash = None
             user.email_verify_token_expires = None
             user.password_reset_token_hash = None
@@ -102,11 +102,11 @@ class ErasureService:
                 user_id=user.id,
                 commit=False,
             )
-            await self._otp_service.clear_user_otp_state(str(user.id))
+            await self._mfa_service.clear_user_mfa_state(user_id=str(user.id))
             await db_session.commit()
         except (
             APIKeyServiceError,
-            OTPServiceError,
+            MfaServiceError,
             SessionStateError,
         ) as exc:
             await db_session.rollback()
@@ -150,6 +150,6 @@ def get_erasure_service() -> ErasureService:
     return ErasureService(
         user_service=get_user_service(),
         session_service=get_session_service(),
-        otp_service=get_otp_service(),
+        mfa_service=get_mfa_service(),
         api_key_service=get_api_key_service(),
     )

@@ -67,7 +67,7 @@ def _build_token(
         "aud": list(audience) if not isinstance(audience, str) else audience,
         "email": f"{subject}@example.com",
         "email_verified": True,
-        "email_otp_enabled": False,
+        "mfa_enabled": False,
         "scopes": ["svc:read"],
         "auth_time": int(now.timestamp()),
         "jti": str(uuid4()),

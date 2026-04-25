@@ -18,7 +18,7 @@ class _ActiveUserStub:
     role: str = "user"
     is_active: bool = True
     email_verified: bool = True
-    email_otp_enabled: bool = False
+    mfa_enabled: bool = False
     created_at: datetime = datetime.now(UTC)
     updated_at: datetime = datetime.now(UTC)
 
@@ -57,7 +57,7 @@ def _admin_service(session_service: _CapturingSessionServiceStub) -> AdminServic
     service = AdminService(
         user_service=_UnusedDependency(),  # type: ignore[arg-type]
         session_service=session_service,  # type: ignore[arg-type]
-        otp_service=_UnusedDependency(),  # type: ignore[arg-type]
+        mfa_service=_UnusedDependency(),  # type: ignore[arg-type]
         brute_force_service=_UnusedDependency(),  # type: ignore[arg-type]
         api_key_service=_UnusedDependency(),  # type: ignore[arg-type]
         m2m_service=_UnusedDependency(),  # type: ignore[arg-type]

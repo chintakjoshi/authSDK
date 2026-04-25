@@ -42,7 +42,7 @@ from app.services.lifecycle_service import (
     LifecycleServiceError,
     get_lifecycle_service,
 )
-from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
+from app.services.mfa_service import MfaService, MfaServiceError, get_mfa_service
 from app.services.webhook_service import WebhookService, get_webhook_service
 
 router = APIRouter(tags=["lifecycle"])
@@ -513,7 +513,7 @@ async def erase_my_account(
     request: Request,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
     lifecycle_service: Annotated[LifecycleService, Depends(get_lifecycle_service)],
-    otp_service: Annotated[OTPService, Depends(get_otp_service)],
+    mfa_service: Annotated[MfaService, Depends(get_mfa_service)],
     erasure_service: Annotated[ErasureService, Depends(get_erasure_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
@@ -535,7 +535,7 @@ async def erase_my_account(
         user_id = str(claims.get("sub", "")).strip()
         if not user_id:
             return _error_response(status_code=401, detail="Invalid token.", code="invalid_token")
-        await otp_service.require_action_token_for_user(
+        await mfa_service.require_action_token_for_user(
             db_session=db_session,
             token=_extract_action_token(request),
             expected_action="erase_account",
@@ -552,7 +552,7 @@ async def erase_my_account(
             code=exc.code,
             headers=exc.headers,
         )
-    except OTPServiceError as exc:
+    except MfaServiceError as exc:
         return _error_response(
             status_code=exc.status_code,
             detail=exc.detail,
