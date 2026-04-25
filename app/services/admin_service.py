@@ -35,7 +35,7 @@ from app.services.erasure_service import (
     get_erasure_service,
 )
 from app.services.m2m_service import M2MService, get_m2m_service
-from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
+from app.services.mfa_service import MfaService, MfaServiceError, get_mfa_service
 from app.services.pagination import (
     CursorPage,
     CursorPosition,
@@ -189,7 +189,7 @@ class AdminService:
         *,
         user_service: UserService,
         session_service: SessionService,
-        otp_service: OTPService,
+        mfa_service: MfaService,
         brute_force_service: BruteForceProtectionService,
         api_key_service: APIKeyService,
         m2m_service: M2MService,
@@ -203,7 +203,7 @@ class AdminService:
     ) -> None:
         self._user_service = user_service
         self._session_service = session_service
-        self._otp_service = otp_service
+        self._mfa_service = mfa_service
         self._brute_force_service = brute_force_service
         self._api_key_service = api_key_service
         self._m2m_service = m2m_service
@@ -225,11 +225,11 @@ class AdminService:
         if token is None or not token.strip():
             raise AdminServiceError("Invalid token.", "invalid_token", 401)
         try:
-            claims = await self._otp_service.validate_access_token(
+            claims = await self._mfa_service.validate_access_token(
                 db_session=db_session,
                 token=token.strip(),
             )
-        except OTPServiceError as exc:
+        except MfaServiceError as exc:
             raise AdminServiceError(
                 exc.detail,
                 exc.code,
@@ -253,7 +253,7 @@ class AdminService:
         if not user_id:
             raise AdminServiceError("Invalid token.", "invalid_token", 401)
 
-        action_token_valid = await self._otp_service.validate_action_token_for_user(
+        action_token_valid = await self._mfa_service.validate_action_token_for_user(
             db_session=db_session,
             token=action_token,
             expected_action=action,
@@ -290,13 +290,13 @@ class AdminService:
         if not user_id:
             raise AdminServiceError("Invalid token.", "invalid_token", 401)
         try:
-            await self._otp_service.require_action_token_for_user(
+            await self._mfa_service.require_action_token_for_user(
                 db_session=db_session,
                 token=action_token,
                 expected_action=action,
                 user_id=user_id,
             )
-        except OTPServiceError as exc:
+        except MfaServiceError as exc:
             raise AdminServiceError(
                 exc.detail,
                 exc.code,
@@ -820,32 +820,24 @@ class AdminService:
         )
         return result.scalar_one_or_none()
 
-    async def set_user_email_otp(
+    async def set_user_mfa(
         self,
         db_session: AsyncSession,
         *,
         user_id: UUID,
         enabled: bool,
     ) -> User:
-        """Admin-toggle email OTP for a target user."""
+        """Admin-toggle SDK-managed MFA for a target user."""
         user = await self._get_active_user(db_session=db_session, user_id=user_id, for_update=False)
         if user is None:
             raise AdminServiceError("User not found.", "invalid_user", 404)
         try:
-            if enabled:
-                return await self._otp_service.enable_email_otp(
-                    db_session=db_session,
-                    user_id=str(user_id),
-                    action_token=None,
-                    require_action_token=False,
-                )
-            return await self._otp_service.disable_email_otp(
+            return await self._mfa_service.set_user_mfa_state(
                 db_session=db_session,
                 user_id=str(user_id),
-                action_token=None,
-                require_action_token=False,
+                enabled=enabled,
             )
-        except OTPServiceError as exc:
+        except MfaServiceError as exc:
             if exc.code == "invalid_token":
                 raise AdminServiceError("User not found.", "invalid_user", 404) from exc
             raise AdminServiceError(
@@ -1198,7 +1190,7 @@ def get_admin_service() -> AdminService:
     return AdminService(
         user_service=get_user_service(),
         session_service=get_session_service(),
-        otp_service=get_otp_service(),
+        mfa_service=get_mfa_service(),
         brute_force_service=get_brute_force_service(),
         api_key_service=get_api_key_service(),
         m2m_service=get_m2m_service(),

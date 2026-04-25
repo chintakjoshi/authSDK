@@ -242,6 +242,7 @@ class FakeSessionService:
     """Records create_login_session calls; returns a deterministic UUID."""
 
     calls: list[dict[str, Any]] = field(default_factory=list)
+    bound_sessions: dict[str, UUID] = field(default_factory=dict)
 
     async def create_login_session(
         self,
@@ -272,6 +273,20 @@ class FakeSessionService:
                 "suspicious_reasons": suspicious_reasons or [],
             }
         )
+        return session_id
+
+    async def validate_access_token_session(
+        self,
+        *,
+        db_session: Any,
+        access_jti: str,
+    ) -> UUID:
+        """Resolve the session bound to ``access_jti`` or raise ``session_expired``."""
+        from app.core.sessions import SessionStateError
+
+        session_id = self.bound_sessions.get(access_jti)
+        if session_id is None:
+            raise SessionStateError("Session expired.", "session_expired", 401)
         return session_id
 
 
@@ -321,6 +336,40 @@ class MfaServiceTestEnvironment:
             audience=self.settings.app.service,
             signing_private_key_pem=self.signing_keys.material.private_key_pem,
             signing_kid=self.signing_keys.material.kid,
+        )
+
+    async def mint_access_token(
+        self,
+        *,
+        user_id: str,
+        role: str = "user",
+        mfa_enabled: bool = False,
+    ) -> str:
+        """Sign an access JWT for tests exercising the MfaService access-token surface."""
+        return self.jwt_service.issue_token(
+            subject=user_id,
+            token_type="access",
+            expires_in_seconds=900,
+            additional_claims={
+                "role": role,
+                "email_verified": True,
+                "mfa_enabled": mfa_enabled,
+                "auth_time": 0,
+            },
+            audience=self.settings.app.service,
+            signing_private_key_pem=self.signing_keys.material.private_key_pem,
+            signing_kid=self.signing_keys.material.kid,
+        )
+
+    def decode_access_token(self, token: str) -> dict[str, Any]:
+        """Verify and decode an access JWT issued by the test environment."""
+        return self.jwt_service.verify_token(
+            token,
+            expected_type="access",
+            public_keys_by_kid={
+                self.signing_keys.material.kid: self.signing_keys.material.public_key_pem
+            },
+            expected_audience=self.settings.app.service,
         )
 
     def decode_action_token(self, token: str) -> dict[str, Any]:

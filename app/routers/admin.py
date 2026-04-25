@@ -772,7 +772,7 @@ async def update_user_otp(
             db_session=db_session,
             admin_service=admin_service,
         )
-        user = await admin_service.set_user_email_otp(
+        user = await admin_service.set_user_mfa(
             db_session=db_session,
             user_id=user_id,
             enabled=payload.mfa_enabled,

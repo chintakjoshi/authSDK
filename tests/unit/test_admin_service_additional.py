@@ -12,7 +12,7 @@ from app.core.sessions import SessionStateError
 from app.core.signing_keys import SigningKeyRotationResult
 from app.services.admin_service import AdminService, AdminServiceError
 from app.services.erasure_service import ErasedUserResult, ErasureServiceError
-from app.services.otp_service import OTPServiceError
+from app.services.mfa_service import MfaServiceError
 from app.services.user_service import UserServiceError
 from app.services.webhook_service import DeletedWebhookEndpoint, WebhookServiceError
 
@@ -51,18 +51,18 @@ class _DBSessionStub:
         return 3
 
 
-class _OTPServiceStub:
+class _MfaServiceStub:
     def __init__(self) -> None:
         self.claims: dict[str, object] = {
             "sub": "admin-1",
             "role": "admin",
             "auth_time": int(datetime.now(UTC).timestamp()),
         }
-        self.validate_error: OTPServiceError | None = None
+        self.validate_error: MfaServiceError | None = None
         self.action_valid = False
-        self.require_error: OTPServiceError | None = None
-        self.enable_error: OTPServiceError | None = None
-        self.disable_error: OTPServiceError | None = None
+        self.require_error: MfaServiceError | None = None
+        self.enable_error: MfaServiceError | None = None
+        self.disable_error: MfaServiceError | None = None
 
     async def validate_access_token(self, *, db_session, token):  # type: ignore[no-untyped-def]
         del db_session, token
@@ -93,21 +93,21 @@ class _OTPServiceStub:
         if self.require_error is not None:
             raise self.require_error
 
-    async def enable_email_otp(self, **kwargs):  # type: ignore[no-untyped-def]
-        if self.enable_error is not None:
-            raise self.enable_error
-        return _UserStub(
-            id=uuid4(),
-            email="user@example.com",
-            role="user",
-            is_active=True,
-            email_verified=True,
-            mfa_enabled=True,
-            created_at=datetime.now(UTC),
-            updated_at=datetime.now(UTC),
-        )
-
-    async def disable_email_otp(self, **kwargs):  # type: ignore[no-untyped-def]
+    async def set_user_mfa_state(self, *, db_session, user_id, enabled):  # type: ignore[no-untyped-def]
+        del db_session, user_id
+        if enabled:
+            if self.enable_error is not None:
+                raise self.enable_error
+            return _UserStub(
+                id=uuid4(),
+                email="user@example.com",
+                role="user",
+                is_active=True,
+                email_verified=True,
+                mfa_enabled=True,
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
         if self.disable_error is not None:
             raise self.disable_error
         return _UserStub(
@@ -244,7 +244,7 @@ def _service(
     *,
     user_service: _UserServiceStub | None = None,
     session_service: _SessionServiceStub | None = None,
-    otp_service: _OTPServiceStub | None = None,
+    mfa_service: _MfaServiceStub | None = None,
     api_key_service: _APIKeyServiceStub | None = None,
     webhook_service: _WebhookServiceStub | None = None,
     erasure_service: _ErasureServiceStub | None = None,
@@ -252,7 +252,7 @@ def _service(
     return AdminService(
         user_service=user_service or _UserServiceStub(),  # type: ignore[arg-type]
         session_service=session_service or _SessionServiceStub(),  # type: ignore[arg-type]
-        otp_service=otp_service or _OTPServiceStub(),  # type: ignore[arg-type]
+        mfa_service=mfa_service or _MfaServiceStub(),  # type: ignore[arg-type]
         brute_force_service=_BruteForceServiceStub(),  # type: ignore[arg-type]
         api_key_service=api_key_service or _APIKeyServiceStub(),  # type: ignore[arg-type]
         m2m_service=_M2MServiceStub(),  # type: ignore[arg-type]
@@ -274,14 +274,14 @@ async def test_validate_admin_access_token_enforces_presence_role_and_error_mapp
         await service.validate_admin_access_token(db_session=_DBSessionStub(), token="   ")  # type: ignore[arg-type]
     assert exc_info.value.code == "invalid_token"
 
-    otp_service = _OTPServiceStub()
-    otp_service.claims = {"sub": "user-1", "role": "user"}
-    service = _service(otp_service=otp_service)
+    mfa_service = _MfaServiceStub()
+    mfa_service.claims = {"sub": "user-1", "role": "user"}
+    service = _service(mfa_service=mfa_service)
     with pytest.raises(AdminServiceError) as exc_info:
         await service.validate_admin_access_token(db_session=_DBSessionStub(), token="access")  # type: ignore[arg-type]
     assert exc_info.value.code == "insufficient_role"
 
-    otp_service.validate_error = OTPServiceError(
+    mfa_service.validate_error = MfaServiceError(
         "expired", "session_expired", 401, headers={"Retry-After": "1"}
     )
     with pytest.raises(AdminServiceError) as exc_info:
@@ -292,10 +292,10 @@ async def test_validate_admin_access_token_enforces_presence_role_and_error_mapp
 @pytest.mark.asyncio
 async def test_sensitive_action_gate_supports_dual_gate_contract() -> None:
     """Sensitive admin operations accept valid action tokens or require OTP/reauth fallbacks."""
-    otp_service = _OTPServiceStub()
-    service = _service(otp_service=otp_service)
+    mfa_service = _MfaServiceStub()
+    service = _service(mfa_service=mfa_service)
 
-    otp_service.action_valid = True
+    mfa_service.action_valid = True
     await service.enforce_sensitive_action_gate(
         db_session=_DBSessionStub(),  # type: ignore[arg-type]
         claims={"sub": "admin-1", "mfa_enabled": True},
@@ -303,7 +303,7 @@ async def test_sensitive_action_gate_supports_dual_gate_contract() -> None:
         action_token="action-token",
     )
 
-    otp_service.action_valid = False
+    mfa_service.action_valid = False
     with pytest.raises(AdminServiceError) as exc_info:
         await service.enforce_sensitive_action_gate(
             db_session=_DBSessionStub(),  # type: ignore[arg-type]
@@ -331,11 +331,11 @@ async def test_sensitive_action_gate_supports_dual_gate_contract() -> None:
 @pytest.mark.asyncio
 async def test_proxy_and_mutation_paths_map_errors() -> None:
     """Delete/session/OTP/webhook/erasure flows preserve stable admin error contracts."""
-    otp_service = _OTPServiceStub()
-    otp_service.require_error = OTPServiceError(
+    mfa_service = _MfaServiceStub()
+    mfa_service.require_error = MfaServiceError(
         "invalid", "action_token_invalid", 403, headers={"X-OTP-Required": "true"}
     )
-    service = _service(otp_service=otp_service)
+    service = _service(mfa_service=mfa_service)
     with pytest.raises(AdminServiceError) as exc_info:
         await service.require_action_token(
             db_session=_DBSessionStub(),  # type: ignore[arg-type]
@@ -376,8 +376,8 @@ async def test_proxy_and_mutation_paths_map_errors() -> None:
             user_id=uuid4(),
         )
 
-    otp_service = _OTPServiceStub()
-    service = _service(otp_service=otp_service)
+    mfa_service = _MfaServiceStub()
+    service = _service(mfa_service=mfa_service)
 
     async def _active_user(**kwargs: object) -> _UserStub:
         return _UserStub(
@@ -392,16 +392,16 @@ async def test_proxy_and_mutation_paths_map_errors() -> None:
         )
 
     service._get_active_user = _active_user  # type: ignore[assignment]
-    enabled = await service.set_user_email_otp(
+    enabled = await service.set_user_mfa(
         db_session=_DBSessionStub(),  # type: ignore[arg-type]
         user_id=uuid4(),
         enabled=True,
     )
     assert enabled.mfa_enabled is True
 
-    otp_service.disable_error = OTPServiceError("missing", "invalid_token", 401)
+    mfa_service.disable_error = MfaServiceError("missing", "invalid_token", 401)
     with pytest.raises(AdminServiceError) as exc_info:
-        await service.set_user_email_otp(
+        await service.set_user_mfa(
             db_session=_DBSessionStub(),  # type: ignore[arg-type]
             user_id=uuid4(),
             enabled=False,

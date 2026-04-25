@@ -22,7 +22,7 @@ from app.schemas.self_service import (
     SelfSessionsRevokedResponse,
 )
 from app.services.audit_service import AuditService, get_audit_service
-from app.services.otp_service import OTPService, OTPServiceError, get_otp_service
+from app.services.mfa_service import MfaService, MfaServiceError, get_mfa_service
 from app.services.webhook_service import WebhookService, get_webhook_service
 
 router = APIRouter(tags=["self-service"])
@@ -54,18 +54,18 @@ async def _resolve_caller(
     request: Request,
     *,
     db_session: AsyncSession,
-    otp_service: OTPService,
+    mfa_service: MfaService,
 ) -> tuple[UUID, UUID | None] | JSONResponse:
     """Verify bearer token and return (user_id, current_session_id)."""
     access_token = extract_bearer_token(request)
     if not access_token:
         return _error_response(401, "Invalid token.", "invalid_token")
     try:
-        validated = await otp_service.validate_access_token_with_session(
+        validated = await mfa_service.validate_access_token_with_session(
             db_session=db_session,
             token=access_token,
         )
-    except OTPServiceError as exc:
+    except MfaServiceError as exc:
         return _error_response(exc.status_code, exc.detail, exc.code)
     claims = validated.claims
     try:
@@ -79,7 +79,7 @@ async def _resolve_caller(
 async def list_my_sessions(
     request: Request,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
-    otp_service: Annotated[OTPService, Depends(get_otp_service)],
+    mfa_service: Annotated[MfaService, Depends(get_mfa_service)],
     session_service: Annotated[SessionService, Depends(get_session_service)],
     status: Annotated[str, Query(pattern="^(active|revoked|all)$")] = "active",
     cursor: Annotated[str | None, Query()] = None,
@@ -89,7 +89,7 @@ async def list_my_sessions(
     resolved = await _resolve_caller(
         request,
         db_session=db_session,
-        otp_service=otp_service,
+        mfa_service=mfa_service,
     )
     if isinstance(resolved, JSONResponse):
         return resolved
@@ -133,7 +133,7 @@ async def revoke_my_session(
     session_id: UUID,
     request: Request,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
-    otp_service: Annotated[OTPService, Depends(get_otp_service)],
+    mfa_service: Annotated[MfaService, Depends(get_mfa_service)],
     session_service: Annotated[SessionService, Depends(get_session_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
@@ -143,7 +143,7 @@ async def revoke_my_session(
     resolved = await _resolve_caller(
         request,
         db_session=db_session,
-        otp_service=otp_service,
+        mfa_service=mfa_service,
     )
     if isinstance(resolved, JSONResponse):
         return resolved
@@ -191,7 +191,7 @@ async def revoke_my_session(
 async def revoke_my_other_sessions(
     request: Request,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
-    otp_service: Annotated[OTPService, Depends(get_otp_service)],
+    mfa_service: Annotated[MfaService, Depends(get_mfa_service)],
     session_service: Annotated[SessionService, Depends(get_session_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
     webhook_service: Annotated[WebhookService, Depends(get_webhook_service)],
@@ -201,7 +201,7 @@ async def revoke_my_other_sessions(
     resolved = await _resolve_caller(
         request,
         db_session=db_session,
-        otp_service=otp_service,
+        mfa_service=mfa_service,
     )
     if isinstance(resolved, JSONResponse):
         return resolved
@@ -251,7 +251,7 @@ async def revoke_my_other_sessions(
 async def list_my_history(
     request: Request,
     db_session: Annotated[AsyncSession, Depends(get_database_session)],
-    otp_service: Annotated[OTPService, Depends(get_otp_service)],
+    mfa_service: Annotated[MfaService, Depends(get_mfa_service)],
     audit_service: Annotated[AuditService, Depends(get_audit_service)],
     cursor: Annotated[str | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
@@ -260,7 +260,7 @@ async def list_my_history(
     resolved = await _resolve_caller(
         request,
         db_session=db_session,
-        otp_service=otp_service,
+        mfa_service=mfa_service,
     )
     if isinstance(resolved, JSONResponse):
         return resolved

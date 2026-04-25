@@ -144,11 +144,19 @@ def _build_webhook_service() -> WebhookService:
 
 
 def _build_admin_service(*, otp_service: OTPService) -> AdminService:
-    """Build admin service using the overridden OTP dependency for action-token checks."""
+    """Build admin service using the overridden OTP dependency for action-token checks.
+
+    The legacy ``otp_service`` is still accepted by callers because Phase 5a
+    keeps both services alive. Internally, ``AdminService`` now requires the
+    new :class:`MfaService`; the fixture passes through ``get_mfa_service()``.
+    """
+    from app.services.mfa_service import get_mfa_service
+
+    del otp_service  # unused; admin's action-token validation lives on MfaService now.
     return AdminService(
         user_service=UserService(),
         session_service=get_session_service(),
-        otp_service=otp_service,
+        mfa_service=get_mfa_service(),
         brute_force_service=get_brute_force_service(),
         api_key_service=get_api_key_service(),
         m2m_service=get_m2m_service(),
@@ -464,8 +472,9 @@ async def test_admin_erasure_requires_action_token_and_is_idempotent(
         missing_token = await client.delete(f"/admin/users/{target.id}/erase", headers=headers)
         assert missing_token.status_code == 403
         assert missing_token.json()["code"] == "action_token_invalid"
-        assert missing_token.headers["x-otp-required"] == "true"
-        assert missing_token.headers["x-otp-action"] == "admin_erase_user"
+        # SDK-managed MFA emits X-MFA-Required (replacing legacy X-OTP-Required).
+        assert missing_token.headers["x-mfa-required"] == "true"
+        assert missing_token.headers["x-mfa-action"] == "admin_erase_user"
 
         request_action = await client.post(
             "/auth/otp/request/action",

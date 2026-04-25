@@ -74,6 +74,7 @@ from app.core.mfa.phone import (
 )
 from app.core.sessions import (
     SessionService,
+    SessionStateError,
     get_redis_client,
     get_session_service,
 )
@@ -138,6 +139,14 @@ class MfaServiceError(Exception):
 # ---------------------------------------------------------------------------
 # Result dataclasses
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AccessTokenValidationResult:
+    """Validated access-token claims plus the backing session identifier."""
+
+    claims: dict[str, object]
+    session_id: UUID
 
 
 @dataclass(frozen=True)
@@ -790,6 +799,157 @@ class MfaService:
         except MfaServiceError:
             return False
         return True
+
+    async def require_action_token_for_user(
+        self,
+        *,
+        db_session: AsyncSession,
+        token: str | None,
+        expected_action: MfaAction,
+        user_id: str,
+    ) -> None:
+        """Validate an action token or raise ``action_token_invalid``.
+
+        Public alias for the internal ``_validate_action_token`` helper, used by
+        non-MFA flows (admin step-up, lifecycle erasure) that previously called
+        ``OTPService.require_action_token_for_user``.
+        """
+        await self._validate_action_token(
+            db_session=db_session,
+            token=token,
+            expected_action=expected_action,
+            user_id=user_id,
+        )
+
+    # ------------------------------------------------------------------
+    # Access-token validation (formerly on OTPService)
+    # ------------------------------------------------------------------
+
+    async def validate_access_token(
+        self,
+        *,
+        db_session: AsyncSession,
+        token: str,
+    ) -> dict[str, Any]:
+        """Validate an access token for MFA-protected and admin endpoints."""
+        validated = await self.validate_access_token_with_session(
+            db_session=db_session,
+            token=token,
+        )
+        return validated.claims
+
+    async def validate_access_token_with_session(
+        self,
+        *,
+        db_session: AsyncSession,
+        token: str,
+    ) -> AccessTokenValidationResult:
+        """Validate an access token and return the active backing session id."""
+        verification_keys = await self._signing_key_service.get_verification_public_keys(db_session)
+        try:
+            claims = self._jwt_service.verify_token(
+                token,
+                expected_type="access",
+                public_keys_by_kid=verification_keys,
+                expected_audience=self._auth_service_audience,
+            )
+        except TokenValidationError as exc:
+            raise MfaServiceError("Invalid token.", "invalid_token", 401) from exc
+        await self._ensure_access_token_not_revoked(claims)
+        try:
+            session_id = await self._session_service.validate_access_token_session(
+                db_session=db_session,
+                access_jti=str(claims.get("jti", "")).strip(),
+            )
+        except SessionStateError as exc:
+            raise MfaServiceError(exc.detail, exc.code, exc.status_code) from exc
+        return AccessTokenValidationResult(claims=claims, session_id=session_id)
+
+    async def _ensure_access_token_not_revoked(self, claims: dict[str, Any]) -> None:
+        """Reject access tokens whose JTI has been blocklisted on logout/revoke."""
+        jti = str(claims.get("jti", "")).strip()
+        if not jti:
+            raise MfaServiceError("Invalid token.", "invalid_token", 401)
+        try:
+            blocklisted = await self._redis.get(f"blocklist:jti:{jti}")
+        except RedisError as exc:
+            raise MfaServiceError(
+                "Session backend unavailable.",
+                "session_expired",
+                503,
+            ) from exc
+        if blocklisted is not None:
+            raise MfaServiceError("Invalid token.", "invalid_token", 401)
+
+    # ------------------------------------------------------------------
+    # Admin / erasure helpers
+    # ------------------------------------------------------------------
+
+    async def clear_user_mfa_state(self, *, user_id: str) -> None:
+        """Delete every MFA-related Redis key bound to one user.
+
+        Called from :class:`app.services.erasure_service.ErasureService` during
+        GDPR erasure to ensure no live challenge or rate-limit state lingers
+        after the user is hard-deleted.
+
+        While the legacy email-OTP service still coexists during Phase 5a, this
+        helper also clears the legacy ``otp:login:*``, ``otp:action:*``,
+        ``otp_failed:*``, ``otp_issuance_blocked:*``, and ``otp_resend_login:*``
+        keys so the erasure contract remains complete. The legacy clearing is
+        removed in Phase 5b when the OTP service is deleted.
+        """
+        await self._clear_user_challenge_state(user_id=user_id)
+        try:
+            await self._redis.delete(
+                f"mfa:resend:login:{user_id}",
+                f"otp:login:{user_id}",
+                f"otp:action:{user_id}",
+                f"otp_failed:{user_id}",
+                f"otp_issuance_blocked:{user_id}",
+                f"otp_resend_login:{user_id}",
+            )
+        except RedisError as exc:
+            raise MfaServiceError(
+                "Session backend unavailable.",
+                "session_expired",
+                503,
+                user_id=user_id,
+            ) from exc
+
+    async def set_user_mfa_state(
+        self,
+        *,
+        db_session: AsyncSession,
+        user_id: str,
+        enabled: bool,
+    ) -> User:
+        """Admin-toggle MFA on/off without requiring a step-up action token.
+
+        Enabling requires a verified phone (the database-level invariant for
+        MFA being usable). Disabling clears recovery codes and challenge state
+        in the same transaction.
+        """
+        user = await self._require_user(db_session=db_session, user_id=user_id, for_update=True)
+
+        if enabled:
+            if not user.phone_verified:
+                raise MfaServiceError(
+                    "Phone is not verified.",
+                    "phone_not_verified",
+                    400,
+                    user_id=user_id,
+                )
+            user.mfa_enabled = True
+            user.mfa_primary_method = "sms"
+        else:
+            user.mfa_enabled = False
+            user.mfa_primary_method = None
+            await self._invalidate_recovery_codes(db_session=db_session, user_id=user.id)
+            await self._clear_user_challenge_state(user_id=user_id)
+
+        await db_session.flush()
+        await db_session.commit()
+        return user
 
     # ------------------------------------------------------------------
     # Internal helpers

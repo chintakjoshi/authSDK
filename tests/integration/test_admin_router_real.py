@@ -146,14 +146,15 @@ def _build_webhook_service() -> WebhookService:
 
 def _build_admin_service(
     *,
-    otp_service: OTPService | None = None,
     webhook_service: WebhookService | None = None,
 ) -> AdminService:
     """Build admin service with optional overridden collaborators."""
+    from app.services.mfa_service import get_mfa_service
+
     return AdminService(
         user_service=UserService(),
         session_service=get_session_service(),
-        otp_service=otp_service or get_otp_service(),
+        mfa_service=get_mfa_service(),
         brute_force_service=get_brute_force_service(),
         api_key_service=get_api_key_service(),
         m2m_service=get_m2m_service(),
@@ -787,9 +788,7 @@ async def test_admin_sensitive_role_change_requires_otp_for_otp_enabled_admin(
     sender = _CapturingOTPEmailSender()
     otp_service = _build_otp_service(sender)
     app.dependency_overrides[get_otp_service] = lambda: otp_service
-    app.dependency_overrides[get_admin_service] = lambda: _build_admin_service(
-        otp_service=otp_service
-    )
+    app.dependency_overrides[get_admin_service] = lambda: _build_admin_service()
 
     await _create_user(
         db_session,
@@ -917,8 +916,10 @@ async def test_admin_last_admin_protection_and_otp_toggle(app_factory, db_sessio
             json={"mfa_enabled": True},
             headers=headers,
         )
+        # SDK-managed MFA gates enable on a verified phone (not just verified
+        # email). The legacy email-OTP enable flow used "email_not_verified".
         assert enable_unverified.status_code == 400
-        assert enable_unverified.json()["code"] == "email_not_verified"
+        assert enable_unverified.json()["code"] == "phone_not_verified"
 
 
 @pytest.mark.asyncio

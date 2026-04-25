@@ -47,7 +47,7 @@ class _DBSessionStub:
         return []
 
 
-class _OTPStub:
+class _MfaStub:
     async def validate_access_token(self, **kwargs: object) -> dict[str, object]:
         return {"sub": "admin-1", "role": "admin"}
 
@@ -57,11 +57,9 @@ class _OTPStub:
     async def require_action_token_for_user(self, **kwargs: object) -> None:
         return None
 
-    async def enable_email_otp(self, **kwargs: object) -> object:
-        return SimpleNamespace(id=kwargs["user_id"], mfa_enabled=True)
-
-    async def disable_email_otp(self, **kwargs: object) -> object:
-        return SimpleNamespace(id=kwargs["user_id"], mfa_enabled=False)
+    async def set_user_mfa_state(self, *, db_session, user_id, enabled):  # type: ignore[no-untyped-def]
+        del db_session
+        return SimpleNamespace(id=user_id, mfa_enabled=enabled)
 
 
 class _UserServiceStub:
@@ -175,7 +173,7 @@ def _service(
     return AdminService(
         user_service=user_service or _UserServiceStub(),  # type: ignore[arg-type]
         session_service=session_service or _SessionStub(),  # type: ignore[arg-type]
-        otp_service=_OTPStub(),  # type: ignore[arg-type]
+        mfa_service=_MfaStub(),  # type: ignore[arg-type]
         brute_force_service=brute_force_service or _BruteForceStub(),  # type: ignore[arg-type]
         api_key_service=_APIKeyStub(),  # type: ignore[arg-type]
         m2m_service=_M2MStub(),  # type: ignore[arg-type]
@@ -434,7 +432,7 @@ async def test_admin_mutation_and_proxy_helpers_cover_error_mapping() -> None:
     assert _service()._build_user_list_statement(role="admin", email="user@example.com") is not None
     assert _service()._build_user_list_statement(role=None, email="   ") is not None
 
-    user = await _service().set_user_email_otp(
+    user = await _service().set_user_mfa(
         db_session=_DBSessionStub(
             [SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(id=uuid4()))]
         ),  # type: ignore[arg-type]
